@@ -117,6 +117,7 @@ def draw_prep_report(rows):
                counters['sampled wall ns']==stage_sum and not counters['invalid wall clocks'] and
                counters['wall clock reads']>=samples*2 and
                counters['CPU clock reads'] in (0,samples*2) and
+               counters['CPU queries outside wall'] in (0,counters['CPU clock reads']) and
                (samples>0 or (stage_sum==0 and counters['wall clock reads']==0)) and
                (counters['CPU samples']>0 or counters['sampled CPU ns']==0) and
                (counters['CPU clock reads']>0 or counters['CPU samples']==0) and
@@ -145,6 +146,15 @@ def draw_prep_report(rows):
                          f'({cpu_samples} / {samples} samples available).')
         else:
             lines.append('- Per-thread CPU timing unavailable for these sampled draws.')
+        if totals['CPU clock reads'] and totals['CPU queries outside wall']!=totals['CPU clock reads']:
+            lines.append('CPU-query observer bias in build 00.39: its two per-draw CPU queries are inside '
+                         'the wall interval. Merged primitives stay in vertex/index preparation, so both '
+                         'query costs are charged there. Treat these raw shares as instrumented observations, '
+                         'not a production hotspot ranking. Full decoder-batch CPU and GPU-query measurements '
+                         'are independent of this attribution bias.')
+        elif totals['CPU clock reads']:
+            lines.append('Opt-in CPU interval surrounds the sampled wall interval and includes additional '
+                         'observer work. CPU queries are excluded from the wall-stage partition.')
     else:
         lines.append('- No complete valid sampled draw measurements in the selected windows.')
     if rejected:

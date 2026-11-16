@@ -23,7 +23,7 @@ class GxDrawPreparationTests(unittest.TestCase):
         commands=json.loads((BUILD/'compile_commands.json').read_text())
         recipe=next(c for c in commands if c['file'].endswith('/gx_uniform_limit_test.cpp'))
         args=shlex.split(recipe['command']);obj=out/'test.o'
-        args[args.index('-o')+1]=str(obj);args[args.index('-c')+1]=str(ROOT/'tests/gx_draw_preparation.cpp')
+        args[args.index('-o')+1]=str(obj);args[args.index('-c')+1]=os.environ.get('GX_DRAW_FIXTURE_SOURCE',str(ROOT/'tests/gx_draw_preparation.cpp'))
         args+=['-I'+str(ROOT/'game/MetroidPrimePort/extern/aurora/tests'),'-I'+str(out)]
         candidate = os.environ.get('GX_DRAW_PROCESSOR_SOURCE', str(ROOT/'game/MetroidPrimePort/extern/aurora/lib/gx/command_processor.cpp'))
         processor = Path(candidate) if candidate else ROOT/'game/MetroidPrimePort/extern/aurora/lib/gx/command_processor.cpp'
@@ -65,6 +65,17 @@ class GxDrawPreparationTests(unittest.TestCase):
                 args+=['-O1','-g','-DNDEBUG_SANITIZER','-isystem',str(headers),'-fsanitize=address,undefined','-fno-sanitize-link-runtime','-fno-omit-frame-pointer']
             subprocess.run(args,cwd=recipe['directory'],check=True,capture_output=True,text=True)
             extra.append(str(shader_obj))
+        # Match the freshly compiled decoder's recorder interface instead of
+        # silently linking a stale archive after a recording API change.
+        recipe=next(c for c in commands if c['file'].endswith('/gfx/recording.cpp'))
+        args=shlex.split(recipe['command']);recording_obj=out/'actual_recording.o'
+        args[args.index('-o')+1]=str(recording_obj)
+        args[args.index('-c')+1]=os.environ.get('GX_DRAW_RECORDING_SOURCE',str(ROOT/'game/MetroidPrimePort/extern/aurora/lib/gfx/recording.cpp'))
+        args+=['-I'+str(ROOT/'game/MetroidPrimePort/extern/aurora/lib/gfx')]
+        if sanitized:
+            args+=['-O1','-g','-DNDEBUG_SANITIZER','-isystem',str(headers),'-fsanitize=address,undefined','-fno-sanitize-link-runtime','-fno-omit-frame-pointer']
+        subprocess.run(args,cwd=recipe['directory'],check=True,capture_output=True,text=True)
+        extra.append(str(recording_obj))
         line=subprocess.check_output(['ninja','-C',str(BUILD),'-t','commands','gfx_recording_tests'],text=True).splitlines()[-1]
         args=shlex.split(line)[2:-2]
         args=[a for a in args if not ('gfx_recording_tests.dir/' in a and a.endswith('.o'))]
@@ -82,7 +93,8 @@ class GxDrawPreparationTests(unittest.TestCase):
                        UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
         result=subprocess.run([exe],env=env,capture_output=True,text=True,timeout=45)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertEqual(result.stdout.count('verified_arrays=3600'),6)
+        expected_arrays=os.environ.get('GX_DRAW_VERIFIED_ARRAYS','3600')
+        self.assertEqual(result.stdout.count('verified_arrays='+expected_arrays),6)
         print(result.stdout,end='')
 
 if __name__=='__main__':unittest.main()

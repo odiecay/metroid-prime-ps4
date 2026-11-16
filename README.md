@@ -23,7 +23,7 @@ roughly **80 MB**; you add your own game image separately.
 
 ## Download — development build
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.39.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.40.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
 This build is still in development. The aim is a smooth 1080p60

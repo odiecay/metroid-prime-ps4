@@ -1339,7 +1339,7 @@ index 00000000..fc523f89
 +};
 +} // namespace aurora::gfx
 diff --git a/extern/aurora/lib/gfx/recording.cpp b/extern/aurora/lib/gfx/recording.cpp
-index 06ce09d1..ff121eaf 100644
+index 06ce09d1..e8cc25db 100644
 --- a/extern/aurora/lib/gfx/recording.cpp
 +++ b/extern/aurora/lib/gfx/recording.cpp
 @@ -1,4 +1,6 @@
@@ -1493,8 +1493,34 @@ index 06ce09d1..ff121eaf 100644
    current_render_passes().emplace_back(std::move(newPass));
    ++g_recorder.currentRenderPass;
  
+@@ -1673,6 +1737,25 @@ void finish() {
+   }
+ }
+ 
++// Pure decoder-side preflight: batch only wholly inside this frame slot's
++// mapped staging bytes and already committed device extent. It cannot grow,
++// spill, reserve, synchronize, or observe a replaceable WebGPU buffer handle.
++bool inline_geometry_headroom(uint64_t vertexEnd, uint64_t indexEnd, size_t& vertex, size_t& index) noexcept {
++  vertex = index = 0;
++  if (!g_recorder.active()) return false;
++  auto& frame = current_frame_packet();
++  const auto& sizes = frame_buffer_sizes();
++  const auto available = [&](const ByteBuffer& target, const detail::SpillBuffer& spill, StagingKind kind, uint64_t expected) -> size_t {
++    const uint64_t used = target.size();
++    if (spill.length || sizes.base(kind) + used != expected) return 0;
++    const uint64_t cap = std::min({uint64_t(target.capacity()), sizes.limit(kind), sizes.device(kind)});
++    return used <= cap ? size_t(cap - used) : 0;
++  };
++  vertex = available(frame.verts, frame.spillVerts, StagingKind::Vertex, vertexEnd);
++  index = available(frame.indices, frame.spillIndices, StagingKind::Index, indexEnd);
++  return vertex != 0 && index != 0;
++}
++
+ Range push_verts(const uint8_t* data, size_t length, size_t alignment) {
+   ZoneScoped;
+   if (!check_recording("push_verts")) {
 diff --git a/extern/aurora/lib/gfx/recording.hpp b/extern/aurora/lib/gfx/recording.hpp
-index 1c162a55..cff4a32c 100644
+index 1c162a55..a1a05a7a 100644
 --- a/extern/aurora/lib/gfx/recording.hpp
 +++ b/extern/aurora/lib/gfx/recording.hpp
 @@ -22,6 +22,11 @@ struct RecordedFrame {
@@ -1509,6 +1535,19 @@ index 1c162a55..cff4a32c 100644
  void increment_merged_draw_count() noexcept;
  
  namespace testing {
+@@ -91,6 +96,12 @@ inline constexpr Range OverflowRange{UINT32_MAX, 0};
+ constexpr bool overflowed(const Range& range) noexcept { return range.offset == OverflowRange.offset; }
+ 
+ Range push_verts(const uint8_t* data, size_t length, size_t alignment);
++// Decoder-side preflight at the previous draw's exact tails. Reports only
++// current frame-slot staging space already backed by the device buffers.
++// A spill, changed cursor or exhausted bound returns no usable joint span.
++// Does not reserve, grow, synchronize, or inspect replaceable GPU handles.
++bool inline_geometry_headroom(uint64_t vertexEnd, uint64_t indexEnd,
++                              size_t& vertexBytes, size_t& indexBytes) noexcept;
+ template <typename T>
+ Range push_verts(ArrayRef<T> data, size_t alignment) {
+   return push_verts(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(T), alignment);
 diff --git a/extern/aurora/lib/gfx/render_worker.cpp b/extern/aurora/lib/gfx/render_worker.cpp
 index 85783b60..ddced7c2 100644
 --- a/extern/aurora/lib/gfx/render_worker.cpp
@@ -1660,7 +1699,7 @@ index 99029c05..f6644981 100644
  }
  
 diff --git a/extern/aurora/lib/gx/command_processor.cpp b/extern/aurora/lib/gx/command_processor.cpp
-index 7609e30e..8583cb85 100644
+index 7609e30e..64c21d3b 100644
 --- a/extern/aurora/lib/gx/command_processor.cpp
 +++ b/extern/aurora/lib/gx/command_processor.cpp
 @@ -1,4 +1,5 @@
@@ -1683,12 +1722,13 @@ index 7609e30e..8583cb85 100644
  #include <bit>
  #include <cmath>
  #include <cstdint>
-@@ -171,6 +174,63 @@ struct DrawCache {
+@@ -171,6 +174,67 @@ struct DrawCache {
    GXVtxFmt lastDrawFmt = GX_MAX_VTXFMT;
  };
  DrawCache sDrawCache;
 +uint64_t sRasterUniformReuses = 0, sRasterConfigReuses = 0, sFullPipelineConfigs = 0;
 +draw_profile::Metrics sDrawPrepMetrics;
++uint64_t sPrimitiveBatchGroups = 0, sPrimitiveBatchPrimitives = 0;
 +
 +bool draw_prep_profile_enabled() noexcept {
 +  static const bool enabled = env_flag("MP_GX_DRAW_PREP_PROFILE", false);
@@ -1700,7 +1740,10 @@ index 7609e30e..8583cb85 100644
 +}
 +draw_profile::Clock draw_prep_cpu_clock() noexcept {
 +#if defined(__ORBIS__) || defined(PRIME_TRACE_TEST)
-+  return trace::cpu_clock;
++  // Whole FIFO batches already measure worker CPU. Opt in separately to avoid
++  // perturbing tiny merged preparations with per-draw kernel clock queries.
++  static const bool enabled = env_flag("MP_GX_DRAW_PREP_CPU", false);
++  return enabled ? trace::cpu_clock : nullptr;
 +#else
 +  return nullptr;
 +#endif
@@ -1747,7 +1790,7 @@ index 7609e30e..8583cb85 100644
  
  // Port (from MP2 653e85a27): a vertex array is copied into a frame's storage once, not once per
  // slot and bind. The game sets a model's arrays again for each of its draws that follows another
-@@ -191,6 +251,10 @@ struct FrameArrayKey {
+@@ -191,6 +255,10 @@ struct FrameArrayKey {
    }
  };
  absl::flat_hash_map<FrameArrayKey, gfx::Range> sFrameArrays;
@@ -1758,7 +1801,7 @@ index 7609e30e..8583cb85 100644
  // Per attribute: cleared since its last array, so the next one set there is copied afresh.
  bool sArrayFresh[GX_VA_MAX_ATTR] = {};
  
-@@ -203,14 +267,23 @@ bool frame_array_reuse() noexcept {
+@@ -203,14 +271,23 @@ bool frame_array_reuse() noexcept {
  }
  
  // The frame's copy of the array, made now if this frame has none; an overflowed range is not kept.
@@ -1783,7 +1826,7 @@ index 7609e30e..8583cb85 100644
    if (reuse && range.size != 0 && !gfx::overflowed(range)) {
      sFrameArrays.emplace(FrameArrayKey{data, size}, range);
    }
-@@ -356,6 +429,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
+@@ -356,6 +433,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
      }
  
      case CP_CMD_INVAL_VTX: {
@@ -1792,7 +1835,7 @@ index 7609e30e..8583cb85 100644
        for (auto& array : g_gxState.arrays) {
          array.cachedRange = {};
        }
-@@ -700,7 +775,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
+@@ -700,7 +779,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
  }
  
  static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange, gfx::Range idxRange,
@@ -1802,7 +1845,7 @@ index 7609e30e..8583cb85 100644
    auto& state = g_gxState;
    auto& cache = sDrawCache;
    if (drop_overflowed_draw(vertRange, "vertex") || drop_overflowed_draw(idxRange, "index")) {
-@@ -716,7 +792,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -716,7 +796,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
      auto& array = state.arrays[i];
      if (array.cachedRange.size == 0 && !resident::array_range(array.data, array.size, array.cachedRange)) {
@@ -1811,7 +1854,7 @@ index 7609e30e..8583cb85 100644
        if (drop_overflowed_draw(array.cachedRange, "storage")) {
          array.cachedRange = {};
          return;
-@@ -725,8 +801,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -725,8 +805,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      immediates.arrayStart[i - GX_VA_POS] = array.cachedRange.offset + array.baseIndex * array.stride;
    }
  
@@ -1822,7 +1865,7 @@ index 7609e30e..8583cb85 100644
                               cache.lineMode == lineMode && cache.config.msaaSamples == gfx::get_sample_count() &&
                               // The pass's target, not only the FIFO's switch: a new frame (reset to LDR),
                               // an offscreen pass or a colour pass must not keep an HDR pipeline, or back.
-@@ -738,8 +815,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -738,8 +819,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
                               (cache.config.shaderConfig.pbr == 0 ||
                                (cache.config.shaderConfig.pbrPlain | cache.config.shaderConfig.pbrNoDebug << 1) ==
                                    pbr_static_flags());
@@ -1844,7 +1887,7 @@ index 7609e30e..8583cb85 100644
      const auto prevSampledTextures = cache.shaderInfo.sampledTextures;
      const auto prevSampledIndTextures = cache.shaderInfo.sampledIndTextures;
      const bool prevUsesVolFog = cache.shaderInfo.usesVolFog;
-@@ -747,7 +837,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -747,7 +841,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool prevActorDecal = cache.shaderInfo.actorDecal;
      const bool prevUsesShell = cache.shaderInfo.usesShell;
      const bool prevUsesLightmap = cache.shaderInfo.usesLightmap;
@@ -1867,7 +1910,7 @@ index 7609e30e..8583cb85 100644
      // GX_AURORA_PORT_DEPTH_PREPASS: pass 2 shades an eligible draw where the depth is equal without
      // writing it, yet it casts as the draw it stands for (LEQUAL, writing). Its config can equal a
      // plain EQUAL draw's, which doesn't cast, so it bypasses the memo.
-@@ -761,9 +865,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -761,9 +869,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool blocking = blocking_pipelines();
      const gfx::PipelineRef ref = xxh3_hash(cache.config, static_cast<HashType>(gfx::ShaderType::GX));
      auto memoIt = blocking || prepassShade ? sPipelineMemo.end() : sPipelineMemo.find(ref);
@@ -1879,7 +1922,7 @@ index 7609e30e..8583cb85 100644
        const auto& memo = memoIt->second;
        cache.shaderInfo = memo.shaderInfo;
        cache.pipelineRef = ref;
-@@ -772,9 +878,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -772,9 +882,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
        cache.cutPipelineRef = memo.cutPipelineRef;
        cache.cutCaster = memo.cutCaster;
      } else {
@@ -1892,7 +1935,7 @@ index 7609e30e..8583cb85 100644
        // Only an opaque surface that writes depth casts: the shadow map's vertex-only pass can't
        // alpha-test or blend. The game draws most opaque surfaces as a ONE/ZERO blend.
        const auto& sc = cache.config.shaderConfig;
-@@ -796,12 +905,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -796,12 +909,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          return config;
        };
        if (cache.shadowCaster) {
@@ -1909,7 +1952,7 @@ index 7609e30e..8583cb85 100644
        }
        if (!prepassShade) {
          sPipelineMemo.insert_or_assign(cache.pipelineRef, PipelineMemo{
-@@ -816,9 +929,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -816,9 +933,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      cache.fmt = fmt;
      cache.lineMode = lineMode;
      cache.hasPipeline = true;
@@ -1927,7 +1970,7 @@ index 7609e30e..8583cb85 100644
      if (!hadPipeline || prevSampledTextures != cache.shaderInfo.sampledTextures ||
          prevSampledIndTextures != cache.shaderInfo.sampledIndTextures ||
          prevUsesVolFog != cache.shaderInfo.usesVolFog || prevUsesLightmap != cache.shaderInfo.usesLightmap ||
-@@ -828,19 +946,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -828,19 +950,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
@@ -1951,7 +1994,7 @@ index 7609e30e..8583cb85 100644
      cache.bindGeneration = texture::current_bind_generation();
      state.dirty &= ~DirtyTextures;
      // For texture_size_bias uniform
-@@ -849,7 +971,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -849,7 +975,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
@@ -1963,7 +2006,7 @@ index 7609e30e..8583cb85 100644
    if (!uniformValid) {
      cache.uniformRange = build_uniform(cache.shaderInfo);
      if (drop_overflowed_draw(cache.uniformRange, "uniform")) {
-@@ -872,6 +998,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -872,6 +1002,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
    }
    immediates.fogRangeBase = cache.fogRange.offset / sizeof(u32);
  
@@ -1971,7 +2014,7 @@ index 7609e30e..8583cb85 100644
    state.dirty &= ~DirtyImmediates;
  
    uint32_t instanceCount = 1;
-@@ -923,15 +1050,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -923,15 +1054,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          actorConfig.cullMode = GX_CULL_BACK;
        }
        actorConfig.msaaSamples = 1;
@@ -1992,12 +2035,82 @@ index 7609e30e..8583cb85 100644
    ZoneScoped;
    u32 numIndices = 0;
    gfx::Range idxRange;
-@@ -944,11 +1075,12 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
+@@ -944,11 +1079,82 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
      idxBuf.clear();
    }
  
 -  push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices);
 +  push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices, profile);
++}
++
++// Keep the non-strip draw path's instruction footprint and register pressure
++// unchanged; only strips already eligible for the original merge enter here.
++[[gnu::noinline]] static bool try_batch_strips(GXVtxFmt fmt, u16 vtxCount, u32 vtxSize, ByteReader& reader, DrawData* lastDraw) noexcept {
++  constexpr GXPrimitive prim = GX_TRIANGLESTRIP;
++  // Stay inside already allocated inline/device bytes; use the original path at
++  // any capacity boundary, diagnostic array checking, state change or non-strip.
++  static const bool primitiveBatch = env_flag("MP_GX_PRIMITIVE_BATCH", true);
++  if (primitiveBatch && !testing::vertexArrayCheck.load(std::memory_order_relaxed)) {
++    constexpr size_t VertexScratchBytes = 64 * 1024;
++    constexpr size_t IndexScratchBytes = 256 * 1024;
++    const uint64_t vertexEnd = uint64_t(lastDraw->vertRange.offset) + lastDraw->vertRange.size;
++    const uint64_t indexEnd = uint64_t(lastDraw->idxRange.offset) + lastDraw->idxRange.size;
++    size_t vertexHeadroom = 0, indexHeadroom = 0;
++    gfx::inline_geometry_headroom(vertexEnd, indexEnd, vertexHeadroom, indexHeadroom);
++    size_t pos = reader.offset();
++    uint32_t batchPrims = 0, batchVertices = 0, batchVertexBytes = 0, batchIndexBytes = 0;
++    uint16_t count = vtxCount;
++    const uint8_t opcode = uint8_t(prim) | uint8_t(fmt);
++    while (count >= 3) {
++      const uint32_t vertexBytes = uint32_t(count) * vtxSize;
++      const uint32_t indexBytes = (uint32_t(count) - 2) * 3 * sizeof(uint16_t);
++      if (indexBytes / sizeof(uint16_t) > UINT16_MAX ||
++          vertexBytes > reader.size() - pos ||
++          batchVertexBytes + vertexBytes > VertexScratchBytes ||
++          batchIndexBytes + indexBytes > IndexScratchBytes ||
++          uint64_t(lastDraw->vtxCount) + batchVertices + count > UINT16_MAX ||
++          batchVertexBytes + vertexBytes > vertexHeadroom ||
++          batchIndexBytes + indexBytes > indexHeadroom) break;
++      batchVertexBytes += vertexBytes; batchIndexBytes += indexBytes;
++      batchVertices += count; ++batchPrims; pos += vertexBytes;
++      if (reader.size() - pos < 3 || reader.data()[pos] != opcode) break;
++      count = (uint16_t(reader.data()[pos + 1]) << 8) | reader.data()[pos + 2];
++      pos += 3;
++    }
++    if (batchPrims > 1) {
++      static std::array<uint8_t, VertexScratchBytes> vertices;
++      alignas(uint16_t) static std::array<uint8_t, IndexScratchBytes> indices;
++      ByteBuffer idx{indices.data(), indices.size()};
++      size_t at = reader.offset(), written = 0;
++      uint32_t precedingVertices = lastDraw->vtxCount;
++      count = vtxCount;
++      for (uint32_t i = 0; i < batchPrims; ++i) {
++        const size_t bytes = size_t(count) * vtxSize;
++        std::memcpy(vertices.data() + written, reader.data() + at, bytes);
++        prepare_idx_buffer(idx, prim, uint16_t(precedingVertices), count);
++        precedingVertices += count; written += bytes; at += bytes;
++        if (i + 1 != batchPrims) {
++          count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2];
++          at += 3;
++        }
++      }
++      const auto batchedVerts = gfx::push_verts(vertices.data(), batchVertexBytes, 0);
++      const auto batchedIndices = gfx::push_indices(indices.data(), batchIndexBytes, 0);
++      CHECK(!gfx::overflowed(batchedVerts) && !gfx::overflowed(batchedIndices), "inline batch reservation failed");
++      CHECK(vertexEnd == batchedVerts.offset && indexEnd == batchedIndices.offset, "non-contiguous inline batch");
++      lastDraw->vertRange.size += batchVertexBytes;
++      lastDraw->idxRange.size += batchIndexBytes;
++      lastDraw->vtxCount += batchVertices;
++      lastDraw->indexCount += batchIndexBytes / sizeof(uint16_t);
++      for (uint32_t i = 0; i < batchPrims; ++i) gfx::detail::increment_merged_draw_count();
++      ++sPrimitiveBatchGroups;
++      sPrimitiveBatchPrimitives += batchPrims;
++      reader.skip(at - reader.offset());
++      return true;
++    }
++  }
++
++  return false;
  }
  
  static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& reader) noexcept {
@@ -2006,7 +2119,20 @@ index 7609e30e..8583cb85 100644
    u32 vtxSize;
    if (g_gxState.lastVtxFmt == fmt)
      LIKELY { vtxSize = g_gxState.lastVtxSize; }
-@@ -1026,10 +1158,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -982,6 +1188,12 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+   auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
+   const bool canMerge = lastDraw != nullptr && lastDraw->instanceCount == 1;
+ 
++  if (prim == GX_TRIANGLESTRIP && canMerge && lastDraw->indexCount != 0 &&
++      try_batch_strips(fmt, vtxCount, vtxSize, reader, lastDraw)) {
++    profile.complete();
++    return;
++  }
++
+   // Push raw vertex data to buffer. Merged draws must remain contiguous with the previous range.
+   const auto vertexData = reader.take(totalVtxBytes);
+   gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), canMerge ? 0 : 4);
+@@ -1026,10 +1238,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
      lastDraw->vtxCount += vtxCount;
      lastDraw->indexCount += numIndices;
      gfx::detail::increment_merged_draw_count();
@@ -2019,7 +2145,7 @@ index 7609e30e..8583cb85 100644
  }
  
  // How many indices prepare_idx_buffer makes of a draw, or 0 for one it cannot make into
-@@ -1151,6 +1284,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1151,6 +1364,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      return;
    }
    for (const resident::Chunk& chunk : entry->chunks) {
@@ -2027,7 +2153,7 @@ index 7609e30e..8583cb85 100644
      const gfx::Range vertRange{entry->vert.offset + chunk.vertOffset, chunk.vertSize};
      const gfx::Range idxRange{entry->idx.offset + chunk.idxOffset, chunk.idxCount * u32(sizeof(u16))};
      // The same vertices as they are in the list's bytes, which is what the array check reads.
-@@ -1158,7 +1292,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1158,7 +1372,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      if (check_indexed_arrays(vtxData, chunk.fmt, GX_TRIANGLES, chunk.vtxCount, current_vtx_size(chunk.fmt))) UNLIKELY {
        continue;
      }
@@ -2036,7 +2162,7 @@ index 7609e30e..8583cb85 100644
    }
    // The next draw must not merge into these: its vertices are not after them.
    sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
-@@ -1209,12 +1343,28 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1209,12 +1423,28 @@ void handle_aurora(ByteReader& reader) noexcept {
      g_gxState.dirty |= DirtyUniform;
    } else if (subCmd >= GX_AURORA_LOAD_ARRAYBASE && subCmd <= (GX_AURORA_LOAD_ARRAYBASE | 0x0f)) {
      const u32 attrIdx = subCmd - GX_AURORA_LOAD_ARRAYBASE + GX_VA_POS;
@@ -2068,7 +2194,7 @@ index 7609e30e..8583cb85 100644
      if (array.data != newData || array.size != arraySize || array.le != le) {
        // Only an indexed attribute's array, or TEX7's under pbr (bind_pos_active), is in the
        // pipeline config (a VCD or pbr change dirties it anyway).
-@@ -1226,15 +1376,6 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1226,15 +1456,6 @@ void handle_aurora(ByteReader& reader) noexcept {
          // Endianness is baked into the shader
          g_gxState.dirty |= DirtyPipeline;
        }
@@ -2084,7 +2210,7 @@ index 7609e30e..8583cb85 100644
        array.data = newData;
        array.size = arraySize;
        array.le = le;
-@@ -1242,23 +1383,25 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1242,23 +1463,25 @@ void handle_aurora(ByteReader& reader) noexcept {
        g_gxState.dirty |= DirtyImmediates;
      }
    } else if (subCmd == GX_AURORA_LOAD_TEXOBJ) {
@@ -2120,7 +2246,7 @@ index 7609e30e..8583cb85 100644
      if (slot.data != newData || slot.userData != newUserData || slot.mWidth != newWidth || slot.mHeight != newHeight ||
          slot.mFormat != static_cast<u32>(newFormat) || slot.tlut != newTlut || slot.flags != newFlags ||
          slot.texObjId != newTexObjId || slot.texDataVersion != newTexDataVersion) {
-@@ -1376,6 +1519,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1376,6 +1599,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      call_resident_dl(key, size);
    } else if (subCmd == GX_AURORA_DRAW_INDEXED) {
      ZoneScopedN("DRAW_INDEXED");
@@ -2128,7 +2254,7 @@ index 7609e30e..8583cb85 100644
      const u8 cmd = reader.read<u8>();
      const u16 vtxCount = reader.read<u16>();
      const u32 indexCount = reader.read<u32>();
-@@ -1400,7 +1544,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1400,7 +1624,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      } else {
        const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
        if (indexCount != 0) {
@@ -2137,7 +2263,7 @@ index 7609e30e..8583cb85 100644
        }
      }
    } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
-@@ -2056,9 +2200,54 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -2056,9 +2280,60 @@ void handle_aurora(ByteReader& reader) noexcept {
    }
  }
  
@@ -2166,6 +2292,11 @@ index 7609e30e..8583cb85 100644
 +}
  
  void clear_draw_cache() noexcept {
++  if (sPrimitiveBatchGroups) {
++    trace::count("GX primitive batch groups", sPrimitiveBatchGroups, trace::Main);
++    trace::count("GX primitive batched primitives", sPrimitiveBatchPrimitives, trace::Main);
++    sPrimitiveBatchGroups = sPrimitiveBatchPrimitives = 0;
++  }
 +  const auto prep = sDrawPrepMetrics.take_frame();
 +  if (prep.draws) {
 +    // No events in draw preparation: publish only after the decoder is drained.
@@ -2175,6 +2306,7 @@ index 7609e30e..8583cb85 100644
 +    trace::count("GX prep sampled wall ns", prep.wallNs, trace::Main);
 +    trace::count("GX prep wall clock reads", prep.wallClockReads, trace::Main);
 +    trace::count("GX prep CPU clock reads", prep.cpuClockReads, trace::Main);
++    trace::count("GX prep CPU queries outside wall", prep.cpuClockReads, trace::Main);
 +    if (prep.cpuSamples) {
 +      trace::count("GX prep CPU samples", prep.cpuSamples, trace::Main);
 +      trace::count("GX prep sampled CPU ns", prep.cpuNs, trace::Main);
@@ -2195,10 +2327,10 @@ index 7609e30e..8583cb85 100644
    sDrawCache.fogRange = {};
 diff --git a/extern/aurora/lib/gx/draw_profile.hpp b/extern/aurora/lib/gx/draw_profile.hpp
 new file mode 100644
-index 00000000..32cd4255
+index 00000000..4417ab32
 --- /dev/null
 +++ b/extern/aurora/lib/gx/draw_profile.hpp
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,77 @@
 +#pragma once
 +#include <array>
 +#include <cstdint>
@@ -2248,14 +2380,18 @@ index 00000000..32cd4255
 +    if (!metrics.select(enabled)) return;
 +    frame_=&metrics.frame;wall_=wall;cpu_=cpu;
 +    ++frame_->samples;
-+    start_=since_=wall_now();
++    // Optional per-draw CPU queries are outside the wall-stage partition. The
++    // CPU interval surrounds wall time and includes additional observer work;
++    // whole FIFO batches provide the less intrusive worker CPU measurement.
 +    if (cpu_) {++frame_->cpuClockReads;cpuStart_=cpu_();}
++    start_=since_=wall_now();
 +  }
 +  ~Draw() {
 +    if (!frame_) return;
++    const auto now=wall_now();
 +    uint64_t cpuEnd=Unavailable;
 +    if (cpu_) {++frame_->cpuClockReads;cpuEnd=cpu_();}
-+    const auto now=wall_now();close_stage(now);
++    close_stage(now);
 +    if (now>=start_) frame_->wallNs+=now-start_;
 +    else ++frame_->invalidWall;
 +    if (!complete_) ++frame_->earlyReturns;
@@ -3814,7 +3950,7 @@ index 00000000..c7e89192
 +extern std::vector<ArrayStorageCopy> arrayStorageCopies;
 +}
 diff --git a/extern/aurora/tests/gx_test_stubs.cpp b/extern/aurora/tests/gx_test_stubs.cpp
-index b9c98f00..65259574 100644
+index b9c98f00..0d4df314 100644
 --- a/extern/aurora/tests/gx_test_stubs.cpp
 +++ b/extern/aurora/tests/gx_test_stubs.cpp
 @@ -19,6 +19,7 @@
@@ -3825,7 +3961,22 @@ index b9c98f00..65259574 100644
  #include "webgpu/gpu.hpp"
  
  #include <atomic>
-@@ -188,7 +189,19 @@ Range push_indices(const uint8_t* data, size_t length, size_t alignment) { retur
+@@ -53,6 +54,14 @@ Resources& resources() noexcept {
+ void increment_merged_draw_count() noexcept {}
+ } // namespace aurora::gfx::detail
+ 
++namespace aurora::gfx {
++bool inline_geometry_headroom(uint64_t, uint64_t, size_t& vertex, size_t& index) noexcept {
++  // The FIFO-only fixture has no mapped frame staging and cannot batch it.
++  vertex = index = 0;
++  return false;
++}
++}
++
+ namespace aurora::webgpu {
+ GraphicsConfig g_graphicsConfig{};
+ bool g_dualSourceBlendingSupported = false;
+@@ -188,7 +197,19 @@ Range push_indices(const uint8_t* data, size_t length, size_t alignment) { retur
  Range push_uniform(const uint8_t* data, size_t length) { return {}; }
  // Tests set it to see draws dropped for want of storage room.
  bool g_testStorageFull = false;
@@ -3846,7 +3997,7 @@ index b9c98f00..65259574 100644
  
  // The resident regions: tests set them, and see the uploads.
  Range g_testResidentRegions[3]{};
-@@ -259,7 +272,13 @@ template <>
+@@ -259,7 +280,13 @@ template <>
  PipelineRef pipeline_ref<gx::PipelineConfig>(const gx::PipelineConfig& config) {
    return 0;
  }

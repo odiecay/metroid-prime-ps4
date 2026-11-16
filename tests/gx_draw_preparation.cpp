@@ -111,6 +111,7 @@ static void state(){
  s.logicalViewport={0,0,1917,1080,0,1};s.logicalScissor={0,0,1917,1080};
  s.renderViewport=s.logicalViewport;s.renderScissor=s.logicalScissor;
 }
+#ifndef GX_DRAW_PREPARATION_HELPERS_ONLY
 int main(){
  webgpu::g_graphicsConfig.surfaceConfiguration.format=wgpu::TextureFormat::RGBA8Unorm;
  webgpu::g_graphicsConfig.depthFormat=wgpu::TextureFormat::Depth24Plus;
@@ -194,3 +195,4 @@ int main(){
  }
  gfx::detail::shutdown_recording();gx::g_gxState={};
 }
+#endif

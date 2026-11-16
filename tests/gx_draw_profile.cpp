@@ -8,6 +8,7 @@ using namespace aurora::gx::fifo::draw_profile;
 static uint64_t wall=0,cpu=0,wallReads=0,cpuReads=0;
 static uint64_t Wall() noexcept {++wallReads;return wall;}
 static uint64_t Cpu() noexcept {++cpuReads;return cpu;}
+static uint64_t CostlyCpu() noexcept {++cpuReads;wall+=1100;cpu+=1100;return cpu;}
 static void reset(){wall=cpu=wallReads=cpuReads=0;}
 static uint64_t RealWall() noexcept {return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 int main(){
@@ -33,6 +34,16 @@ int main(){
  f=unavailable.take_frame();assert(f.samples==1&&f.cpuClockReads==2&&!f.cpuSamples&&!f.cpuNs);
  Metrics missing;reset();{Draw d(missing,true,Wall);wall=10;d.complete();}
  f=missing.take_frame();assert(f.wallNs==10&&!f.cpuClockReads&&!f.cpuSamples);
+ // Per-draw CPU is optional. Expensive callbacks must not pollute any wall
+ // stage; their surrounding CPU interval deliberately includes observer work.
+ Metrics costly;reset();
+ {Draw d(costly,true,Wall,CostlyCpu);wall+=100;cpu+=100;d.stage(Arrays);
+  wall+=200;cpu+=200;d.stage(Recording);wall+=300;cpu+=300;d.complete();}
+ f=costly.take_frame();assert(f.wallNs==600&&f.cpuNs==1700&&cpuReads==2);
+ assert(f.stages[VertexIndex]==100&&f.stages[Arrays]==200&&f.stages[Recording]==300);
+ assert(f.cpuClockReads==2&&f.cpuSamples==1);
+ Metrics wallOnly;reset();{Draw d(wallOnly,true,Wall);wall+=500;cpu+=500;d.complete();}
+ f=wallOnly.take_frame();assert(f.wallNs==500&&f.stages[VertexIndex]==500&&!cpuReads&&!f.cpuClockReads);
  Metrics backward;reset();wall=100;cpu=50;{Draw d(backward,true,Wall,Cpu);wall=90;cpu=40;d.stage(Config);wall=80;d.complete();}
  f=backward.take_frame();assert(f.invalidWall&&f.cpuSamples==0&&f.cpuNs==0&&f.wallNs==0);
  // Boundary count: no clock call is made on any of the63 unsampled draws.

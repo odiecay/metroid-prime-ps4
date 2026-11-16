@@ -37,6 +37,13 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn('Per-thread CPU timing unavailable',text)
         self.assertNotIn('CPU mean:',text)
 
+    def test_cpu_query_boundary_versions_remain_distinct(self):
+        old='\n'.join(m.draw_prep_report([self.draw_window()]))
+        new='\n'.join(m.draw_prep_report([self.draw_window(**{'CPU queries outside wall':20})]))
+        self.assertIn('CPU-query observer bias in build 00.39',old)
+        self.assertIn('CPU queries are excluded',new)
+        self.assertNotIn('CPU-query observer bias',new)
+
     def test_draw_invalid_clocks_and_dropped_events_are_not_timings(self):
         damaged=self.draw_window(end=2);damaged['dropped_events']=1
         rows=[self.draw_window(**{'invalid wall clocks':1}),damaged,
