@@ -42,6 +42,19 @@ def instrument_triangle_scan(source):
              '{ return try_batch_triangles(fmt,count,size,reader,draw); }\n')
     return source.replace('} // namespace aurora::gx::fifo',wrapper+'} // namespace aurora::gx::fifo',1)
 
+def instrument_indexed_scan(source):
+    original=source_body(source,'[[gnu::noinline]] static bool try_batch_indexed(')
+    measured=original.replace('while (count >= (prim == GX_QUADS ? 4 : 3)) {',
+        'while (count >= (prim == GX_QUADS ? 4 : 3)) {\n    ++testIndexedVisits;',1)
+    measured=measured.replace('  if (!gfx::map_inline_geometry','  ++testIndexedMaps;\n  if (!gfx::map_inline_geometry',1)
+    if '++testIndexedVisits' not in measured or '++testIndexedMaps' not in measured:
+        raise ValueError('indexed helper no longer matches operation-count seam')
+    source=source.replace(original,measured,1).replace('namespace aurora::gx::fifo {',
+        'namespace aurora::gx::fifo {\nuint64_t testIndexedVisits=0,testIndexedMaps=0;',1)
+    wrapper=('bool test_try_batch_indexed(GXPrimitive p,GXVtxFmt f,u16 c,u32 s,ByteReader& r,DrawData* d) noexcept '
+             '{ return try_batch_indexed(p,f,c,s,r,d); }\n')
+    return source.replace('} // namespace aurora::gx::fifo',wrapper+'} // namespace aurora::gx::fifo',1)
+
 class GxPrimitiveBatchTests(unittest.TestCase):
     def test_actual_strip_writer_matches_reference_bytes(self):
         aurora=ROOT/'game/MetroidPrimePort/extern/aurora'
@@ -122,7 +135,7 @@ class GxPrimitiveBatchTests(unittest.TestCase):
                     'failures':'10' if on else '15','maps':'5' if on else '0','bounded_fallback':'1'})
                 self.assertGreaterEqual(int(scan[0]['zero_scan_cases']),8 if on else 15)
                 self.assertLessEqual(int(scan[0]['loop_visits']),18 if on else 0)
-            for prefix,expected in [('DRAW_PREP',6),('ADVERSARIAL',25)]:
+            for prefix,expected in [('DRAW_PREP',6),('ADVERSARIAL',29)]:
                 baseline=data_rows(captures['disabled'],prefix)
                 for row in baseline:
                     for key in ('median_ms','min_ms','max_ms'):row.pop(key,None)
@@ -160,8 +173,56 @@ class GxPrimitiveBatchTests(unittest.TestCase):
                         self.assertNotIn('ERROR: AddressSanitizer',run.stdout+run.stderr)
                         self.assertNotIn('runtime error:',run.stdout+run.stderr)
         print('Primitive batching: 40 joint-map, 28 vertex-map, 15 bounded-lookahead cases; '
-              'six 16,200-primitive workloads and 25 triangle/25 strip adversarial cases match '
+              'six 16,200-primitive workloads and 29 triangle/29 strip adversarial cases match '
               'exact commands, geometry/uniform bytes and merged counts under all three configurations; '
               '36 malformed next records preserve decoder failures.')
+
+
+    @unittest.skipUnless((BUILD/'compile_commands.json').exists(),'existing renderer dependencies required')
+    def test_indexed_quads_fans_triangles_and_preflight(self):
+        spec=importlib.util.spec_from_file_location('gx_fixture',ROOT/'tests/test_gx_draw_preparation.py')
+        fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
+        out=Path(os.environ.get('GX_PRIMITIVE_BATCH_TEST_BUILD',str(ROOT/'build/gx-primitive-batch'))).resolve()/'indexed'
+        out.mkdir(parents=True,exist_ok=True)
+        processor=Path(os.environ.get('GX_DRAW_PROCESSOR_SOURCE',str(ROOT/'game/MetroidPrimePort/extern/aurora/lib/gx/command_processor.cpp')))
+        measured=out/'measured_processor.cpp';measured.write_text(instrument_indexed_scan(processor.read_text()))
+        wrapper=out/'indexed_fixture.cpp';wrapper.write_text('#define GX_INDEXED_BATCH_SCAN_TESTS 1\n#include '+json.dumps(str(ROOT/'tests/gx_primitive_batch.cpp'))+'\n')
+        with patch.dict(os.environ,{'GX_DRAW_BUILD_DIR':str(out),'GX_DRAW_FIXTURE_SOURCE':str(wrapper),
+            'GX_DRAW_PROCESSOR_SOURCE':str(measured),'GX_DRAW_VERIFIED_ARRAYS':'2700','MP_GX_DRAW_PREP_PROFILE':'0',
+            'MP_GX_PRIMITIVE_BATCH':'1','MP_GX_INDEXED_BATCH':'1'}):
+            fixture.GxDrawPreparationTests('test_actual_draw_helpers_and_fetched_array_bytes').test_actual_draw_helpers_and_fetched_array_bytes()
+        env=dict(os.environ,MP_GX_DRAW_PREP_PROFILE='0',MP_GX_PRIMITIVE_BATCH='1',MP_GX_TRIANGLE_BATCH='1')
+        for key in ('GX_TINY_MALFORMED','GX_TINY_MALFORMED_TRIANGLES','GX_TINY_MALFORMED_PREFIX',
+                    'GX_TINY_TRIANGLE_CASES','GX_INDEXED_VERTICES','GX_INDEXED_GROUP','GX_INDEXED_BENCH'):
+            env.pop(key,None)
+        if env.get('GX_DRAW_SANITIZE')=='1':
+            env.update(LD_PRELOAD='/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so',ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
+        total=0
+        for kind in range(4):
+            for vertices in (6,24,96):
+                captures={};files=[]
+                for enabled in (0,1):
+                    file=out/f'kind{kind}-vertices{vertices}-enabled{enabled}.bin';file.unlink(missing_ok=True);files.append(file)
+                    selected=dict(env,MP_GX_INDEXED_BATCH=str(enabled),GX_INDEXED_KIND=str(kind),GX_INDEXED_VERTICES=str(vertices),GX_CANONICAL=str(file))
+                    run=subprocess.run([out/'run'],env=selected,capture_output=True,text=True,timeout=45)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+                    self.assertEqual(data_rows(run.stdout,'INDEXED_SCAN_CONTRACT'),[{'cases':'90','enabled':str(enabled),
+                        'zero_scans':'72' if enabled else '90','visits':'42' if enabled else '0','maps':'9' if enabled else '0',
+                        'transactional':'1','bounded_fallback':'1'}])
+                    captures[enabled]={prefix:[{k:v for k,v in row.items() if k not in ('median_ms','min_ms','max_ms')}
+                        for row in data_rows(run.stdout,prefix)]for prefix in ('DRAW_PREP','ADVERSARIAL')}
+                self.assertEqual(captures[0],captures[1]);self.assertEqual(files[0].read_bytes(),files[1].read_bytes())
+                total+=files[0].stat().st_size
+                for file in files:file.unlink()
+        for kind in (1,2,3):
+            for prefix in (2,3,17):
+                for malformed,message in [('header','Reader overrun'),('payload','draw vertex data overrun')]:
+                    for enabled in (0,1):
+                        selected=dict(env,MP_GX_INDEXED_BATCH=str(enabled),GX_INDEXED_KIND=str(kind),GX_TINY_MALFORMED=malformed,GX_TINY_MALFORMED_PREFIX=str(prefix))
+                        run=subprocess.run([out/'run'],env=selected,capture_output=True,text=True,preexec_fn=no_core,timeout=15)
+                        self.assertLess(run.returncode,0,run.stdout+run.stderr);self.assertIn(message,run.stdout+run.stderr)
+                        self.assertNotIn('ERROR: AddressSanitizer',run.stdout+run.stderr);self.assertNotIn('runtime error:',run.stdout+run.stderr)
+        print(f'Indexed batching: 90 preflight cases; 12 complete-byte comparisons ({total} bytes/arm); '
+              '29 adversarial cases per primitive family; 36 malformed records preserve original failures.')
 
 if __name__=='__main__':unittest.main()

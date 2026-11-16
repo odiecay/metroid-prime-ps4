@@ -119,3 +119,13 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(window['unknown_stages'],16)
         self.assertEqual(len(window['stages']),144)
         self.assertEqual(window['dropped_events'],0)
+
+    def test_stage_lookup_owns_labels_and_rejects_stale_pointer_hits(self):
+        out=ROOT/'build/frame-trace-tests';out.mkdir(parents=True,exist_ok=True)
+        binary=out/'stage-lookup'
+        subprocess.run(['g++-14','-std=c++20','-O1','-g','-pthread','-DPRIME_TRACE_TEST=1',
+            '-fsanitize=address,undefined','-fno-omit-frame-pointer',
+            '-I'+str(ROOT/'game/MetroidPrimePort/extern/aurora/include'),
+            str(ROOT/'tests/frame_trace_stage_lookup.cpp'),'-o',str(binary)],check=True)
+        run=subprocess.run([binary],capture_output=True,text=True,timeout=30)
+        self.assertEqual(run.returncode,0,run.stdout+run.stderr)

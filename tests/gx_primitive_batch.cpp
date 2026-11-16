@@ -2,12 +2,37 @@
 // Reuse the existing GPU-object seams and fixture helpers, not a mock decoder.
 #define GX_DRAW_PREPARATION_HELPERS_ONLY
 #include "gx_draw_preparation.cpp"
+#include <ctime>
 
+static unsigned indexedKind(){const char* c=getenv("GX_INDEXED_KIND");return c?std::strtoul(c,nullptr,10):0;}
+static GXPrimitive indexedPrimitive(GXPrimitive fallback,unsigned draw){
+ switch(indexedKind()){case 1:return GX_QUADS;case 2:return GX_TRIANGLEFAN;case 3:return draw%18?GX_TRIANGLES:GX_QUADS;default:return fallback;}
+}
+static uint64_t cpuNow(){struct timespec t;clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t);return uint64_t(t.tv_sec)*1000000000+t.tv_nsec;}
+static void canonical(gfx::detail::FramePacket& frame){
+ const char* path=getenv("GX_CANONICAL");if(!path)return;
+ FILE* f=std::fopen(path,"ab");assert(f);
+ auto put=[&](const void* data,size_t size){uint64_t n=size;assert(std::fwrite(&n,sizeof(n),1,f)==1);if(size)assert(std::fwrite(data,1,size,f)==size);};
+ for(const auto& pass:frame.renderPasses)for(const auto& c:pass.commands){
+  put(&c.type,sizeof(c.type));
+  if(c.type==gfx::detail::CommandType::SetViewport){put(&c.data.setViewport,sizeof(c.data.setViewport));continue;}
+  if(c.type==gfx::detail::CommandType::SetScissor){put(&c.data.setScissor,sizeof(c.data.setScissor));continue;}
+  if(c.type==gfx::detail::CommandType::DebugMarker){put(&c.data.debugMarkerIndex,sizeof(c.data.debugMarkerIndex));continue;}
+  assert(c.type==gfx::detail::CommandType::Draw);
+  const auto* d=reinterpret_cast<const gx::DrawData*>(c.data.draw.payload.data());
+  std::array<uint64_t,15> values{d->pipeline,d->vertRange.offset,d->vertRange.size,d->idxRange.offset,d->idxRange.size,d->uniformRange.offset,d->uniformRange.size,d->vtxCount,d->indexCount,d->instanceCount,d->dstAlpha,d->shadowGroup,d->bindGroups.textureBindGroup,d->immediateData.vtxStart,d->immediateData.serial};
+  put(values.data(),sizeof(values));put(&d->immediateData,sizeof(d->immediateData));
+ }
+ auto bytes=[&](const ByteBuffer& in,const gfx::detail::SpillBuffer& spill){put(in.data(),in.size());put(spill.data.get(),spill.length);};
+ bytes(frame.verts,frame.spillVerts);bytes(frame.indices,frame.spillIndices);bytes(frame.storage,frame.spillStorage);bytes(frame.uniforms,frame.spillUniforms);std::fclose(f);
+}
 static std::vector<u8> tiny_workload(bool materials,bool matrices,GXPrimitive primitive,bool raster=false,unsigned draws=16200){
  std::vector<u8> out;
+ const char* countSetting=getenv("GX_INDEXED_VERTICES");if(countSetting){draws=draws*6/std::strtoul(countSetting,nullptr,10)/18*18;}
  for(unsigned draw=0;draw<draws;++draw){
-  const unsigned group=draw/18;
-  if(draw%18==0){
+  const char* groupSetting=getenv("GX_INDEXED_GROUP");const unsigned groupSize=groupSetting?std::strtoul(groupSetting,nullptr,10):18;
+  const unsigned group=draw/groupSize;
+  if(draw%groupSize==0){
    const auto& model=models[group%models.size()];
    array(out,GX_VA_POS,model.positions);array(out,GX_VA_NRM,model.normals);array(out,GX_VA_TEX0,model.uvs);array(out,GX_VA_TEX1,model.uvs);
    auroraCommand(out,GX_AURORA_PORT_DRAW_SERIAL);be(out,group+1,4);
@@ -15,8 +40,9 @@ static std::vector<u8> tiny_workload(bool materials,bool matrices,GXPrimitive pr
    if(raster){out.push_back(GX_LOAD_BP_REG);be(out,(0x41u<<24)|1u|8u|16u|(GX_BL_SRCALPHA<<8)|((group&1?GX_BL_ONE:GX_BL_INVSRCALPHA)<<5),4);}
    if(materials){out.push_back(GX_LOAD_BP_REG);be(out,(0xc0u<<24)|(GX_CC_ZERO<<12)|(GX_CC_ZERO<<8)|(GX_CC_ZERO<<4)|((group&1)?GX_CC_RASC:GX_CC_KONST),4);}
   }
-  out.push_back(primitive|GX_VTXFMT0);be(out,6,2);
-  for(unsigned v=0;v<6;++v){be(out,v,2);be(out,v,2);be(out,v,2);be(out,v,2);}
+  const char* setting=getenv("GX_INDEXED_VERTICES");const unsigned vertices=setting?std::strtoul(setting,nullptr,10):6;
+  out.push_back(indexedPrimitive(primitive,draw)|GX_VTXFMT0);be(out,vertices,2);
+  for(unsigned v=0;v<vertices;++v){be(out,v,2);be(out,v,2);be(out,v,2);be(out,v,2);}
  }
  return out;
 }
@@ -297,6 +323,10 @@ static void triangle_scan_contract(gfx::detail::FramePacket& frame){
 
 #endif
 
+#ifdef GX_INDEXED_BATCH_SCAN_TESTS
+#include "gx_indexed_scan_contract.inc"
+#endif
+
 int main(){
  webgpu::g_graphicsConfig.surfaceConfiguration.format=wgpu::TextureFormat::RGBA8Unorm;
  webgpu::g_graphicsConfig.depthFormat=wgpu::TextureFormat::Depth24Plus;
@@ -312,6 +342,9 @@ int main(){
   fill(models[a].positions,24*1024);fill(models[a].normals,24*1024);fill(models[a].uvs,32*1024);
  }
  gfx::detail::testing::StagingPool staging;gfx::detail::FramePacket frame;staging.attach(frame);
+#ifdef GX_INDEXED_BATCH_SCAN_TESTS
+ indexed_scan_contract(frame);
+#endif
  inline_mapping_contract(frame);
  vertex_mapping_contract(frame);
 #ifdef GX_PRIMITIVE_BATCH_SCAN_TESTS
@@ -322,8 +355,8 @@ int main(){
   const GXPrimitive badPrimitive=env_flag("GX_TINY_MALFORMED_TRIANGLES")?GX_TRIANGLES:GX_TRIANGLESTRIP;
   const char* prefixSetting=getenv("GX_TINY_MALFORMED_PREFIX");
   const unsigned prefix=prefixSetting?std::strtoul(prefixSetting,nullptr,10):3;
-  for(unsigned n=0;n<prefix;++n){bad.push_back(badPrimitive);be(bad,6,2);for(unsigned i=0;i<48;++i)bad.push_back(0);}
-  bad.push_back(badPrimitive);bad.push_back(0);
+  for(unsigned n=0;n<prefix;++n){bad.push_back(indexedPrimitive(badPrimitive,n));be(bad,6,2);for(unsigned i=0;i<48;++i)bad.push_back(0);}
+  bad.push_back(indexedPrimitive(badPrimitive,prefix));bad.push_back(0);
   if(!std::strcmp(malformed,"payload")){bad.push_back(100);bad.push_back(0);}
   gx::fifo::process(bad.data(),bad.size());std::fprintf(stderr,"MALFORMED_ACCEPTED\n");return 2;
  }
@@ -333,13 +366,13 @@ int main(){
  for(unsigned scenario=0;scenario<6;++scenario){
   const auto commands=tiny_workload(scenario==2||scenario==3,scenario>=1,(scenario==3||scenario==5)?GX_TRIANGLESTRIP:GX_TRIANGLES,scenario>=4);
   std::array<uint64_t,9> samples{};std::array<Timing,MetricCount> totals{};
-  uint64_t uniformHash=0,vertexHash=0,indexHash=0;
+  uint64_t uniformHash=0,vertexHash=0,indexHash=0;unsigned countedDraws=0,preparationCount=0;
   for(unsigned iteration=0;iteration<14;++iteration){
    tiny_state();gx::fifo::clear_draw_cache();gx::fifo::clear_frame_arrays();
    frame.renderPasses.clear();frame.verts.clear();frame.indices.clear();frame.storage.clear();frame.uniforms.clear();
    gfx::detail::begin_recording(frame,0);
    times={};profile=iteration==13;
-   const uint64_t begin=now();const auto result=gx::fifo::process(commands.data(),commands.size());const uint64_t elapsed=now()-begin;
+   const uint64_t begin=cpuNow();const auto result=gx::fifo::process(commands.data(),commands.size());const uint64_t elapsed=cpuNow()-begin;
    profile=false;assert(result.bytesProcessed==commands.size()&&!result.drawDone);
    if(iteration>=4&&iteration<13)samples[iteration-4]=elapsed;
    if(iteration==13)totals=times;
@@ -354,19 +387,20 @@ int main(){
     }
     ++draws;
    }
-   assert(draws==900);
-   if(iteration==13){vertexHash=xxh3_hash_s(frame.verts.data(),frame.verts.size());indexHash=xxh3_hash_s(frame.indices.data(),frame.indices.size());}
+   const char* verticesSetting=getenv("GX_INDEXED_VERTICES");const unsigned expectedDraws=verticesSetting?16200*6/std::strtoul(verticesSetting,nullptr,10)/18:900;const char* gs=getenv("GX_INDEXED_GROUP");const unsigned grouping=gs?std::strtoul(gs,nullptr,10):18;assert(draws==expectedDraws*18/grouping);countedDraws=draws;preparationCount=expectedDraws*18;
+   if(iteration==13){canonical(frame);vertexHash=xxh3_hash_s(frame.verts.data(),frame.verts.size());indexHash=xxh3_hash_s(frame.indices.data(),frame.indices.size());}
    gfx::finish();gfx::detail::end_recording();gfx::detail::recycle_frame_commands(frame,0);
   }
   std::sort(samples.begin(),samples.end());
-  std::printf("DRAW_PREP scenario=%s draws=900 preparations=16200 fifo_bytes=%zu median_ms=%.6f min_ms=%.6f max_ms=%.6f storage_bytes=%zu vertex_bytes=%zu index_bytes=%zu uniform_bytes=%zu verified_arrays=2700 uniform_fetch_hash=%016llx vertex_hash=%016llx index_hash=%016llx merged_count=%u\n",
-    names[scenario],commands.size(),samples[4]/1e6,samples.front()/1e6,samples.back()/1e6,frame.storage.size(),frame.verts.size(),frame.indices.size(),frame.uniforms.size(),(unsigned long long)uniformHash,(unsigned long long)vertexHash,(unsigned long long)indexHash,frame.stats.mergedDrawCallCount);
+  std::printf("DRAW_PREP scenario=%s draws=%u preparations=%u fifo_bytes=%zu median_ms=%.6f min_ms=%.6f max_ms=%.6f storage_bytes=%zu vertex_bytes=%zu index_bytes=%zu uniform_bytes=%zu verified_arrays=%u uniform_fetch_hash=%016llx vertex_hash=%016llx index_hash=%016llx merged_count=%u\n",
+    names[scenario],countedDraws,preparationCount,commands.size(),samples[4]/1e6,samples.front()/1e6,samples.back()/1e6,frame.storage.size(),frame.verts.size(),frame.indices.size(),frame.uniforms.size(),countedDraws*3,(unsigned long long)uniformHash,(unsigned long long)vertexHash,(unsigned long long)indexHash,frame.stats.mergedDrawCallCount);
   const char* labels[]={"pipeline_config","shader_info","uniform_pack","array_staging","vertex_staging","index_staging","texture_resolution"};
   for(unsigned i=0;i<MetricCount;++i)std::printf("DRAW_STAGE scenario=%s stage=%s calls=%llu total_ms=%.6f bytes=%llu\n",names[scenario],labels[i],(unsigned long long)totals[i].calls,totals[i].ns/1e6,(unsigned long long)totals[i].bytes);
  }
 
+ if(env_flag("GX_INDEXED_BENCH")){gfx::detail::shutdown_recording();gx::g_gxState={};return 0;}
  const auto savedLimits=gfx::frame_buffer_sizes();
- for(unsigned kind=0;kind<25;++kind){
+ for(unsigned kind=0;kind<29;++kind){
   auto savedVerts=std::move(frame.verts),savedIndices=std::move(frame.indices);
   std::array<uint8_t,128> tinyVertex{},tinyIndex{};
   auto& limits=const_cast<gfx::FrameBufferSizes&>(gfx::frame_buffer_sizes());limits=savedLimits;
@@ -393,7 +427,7 @@ int main(){
   array(commands,GX_VA_POS,models[0].positions);array(commands,GX_VA_NRM,models[0].normals);
   array(commands,GX_VA_TEX0,models[0].uvs);array(commands,GX_VA_TEX1,models[0].uvs);
   std::vector<size_t> boundaries;
-  const unsigned countDraws=kind==14?20000:kind==15?6:kind==18?500:80;
+  const unsigned countDraws=kind==14?20000:kind==15||kind>=25?6:kind==18?500:80;
   for(unsigned n=0;n<countDraws;++n){
    if((kind==2||kind==18)&&n%3==0)commands.push_back(GX_NOP);
    if((kind==3||kind==18)&&n%2==0){commands.push_back(GX_LOAD_BP_REG);be(commands,(0xc0u<<24)|(GX_CC_ZERO<<12)|(GX_CC_ZERO<<8)|(GX_CC_ZERO<<4)|(n&2?GX_CC_RASC:GX_CC_KONST),4);}
@@ -402,12 +436,14 @@ int main(){
    if(kind==9&&n%2==0){auroraCommand(commands,GX_AURORA_LOAD_COPY_SRC);for(u32 value:{n,0u,128u,128u})be(commands,value,4);}
    GXPrimitive primitive=env_flag("GX_TINY_TRIANGLE_CASES")?GX_TRIANGLES:GX_TRIANGLESTRIP;
    if(kind==5||kind==18){constexpr GXPrimitive types[]={GX_TRIANGLESTRIP,GX_TRIANGLEFAN,GX_TRIANGLES,GX_QUADS};primitive=types[(n/4)%4];}
+   if(indexedKind())primitive=indexedPrimitive(primitive,n);
    const GXVtxFmt fmt=(kind==7||kind==18)&&n%2?GX_VTXFMT1:GX_VTXFMT0;
    unsigned vertices=kind==1?n%13:6;
    if(kind==14)vertices=4;
    if(kind==15)vertices=n==3?21848:6;
    if(kind==16)vertices=n%5+1;
    if(kind==18)vertices=(n*1009u^n*17u)%31;
+   if(kind>=25)vertices=n==3?(kind==25?43691:kind==26?43692:kind==27?65534:65535):6;
    commands.push_back(primitive|fmt);be(commands,vertices,2);
    for(unsigned v=0;v<vertices;++v)for(unsigned a=0;a<4;++a)be(commands,v%6,2);
    if(kind==17)boundaries.push_back(commands.size());
@@ -416,6 +452,7 @@ int main(){
   size_t begin=0;
   for(size_t end:boundaries){if(end==begin)continue;auto result=gx::fifo::process(commands.data()+begin,end-begin);assert(result.bytesProcessed==end-begin&&!result.drawDone);begin=end;}
   gfx::finish();gfx::detail::end_recording();
+  canonical(frame);
   uint64_t signature=0;unsigned draws=0,commandsCount=0;
   for(const auto& pass:frame.renderPasses)for(const auto& c:pass.commands){
    ++commandsCount;signature=xxh3_hash_s(&c.type,sizeof(c.type),signature);

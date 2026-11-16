@@ -22,6 +22,7 @@
 #include <SDL3/SDL_hints.h>
 #include "lifecycle.h"
 #include "candidate_profile.hpp"
+#include "benchmark_tour.hpp"
 #include "asset_bundle.hpp"
 
 extern "C" void prime_ps4_trace_start();
@@ -117,6 +118,7 @@ static int run_game(int argc,char **argv) {
         }
     }
     prime::CandidateProfile candidate;
+    bool benchmarkTour=false;
     try {
         candidate=prime::read_candidate_profile("/app0/prime-profile.txt",root);
         prime::prepare_candidate_storage(candidate,"/data/project-prime/user");
@@ -126,10 +128,12 @@ static int run_game(int argc,char **argv) {
             prime::unpack_asset_bundle(std::filesystem::exists(bundled)?bundled:std::filesystem::path(candidate.assetsRoot.string()+".primebundle"),candidate.assetsRoot);
         }
         prime::apply_candidate_environment(candidate);
+        benchmarkTour=prime::prepare_benchmark_tour(candidate.key.empty()?std::filesystem::path(root):candidate.root);
     } catch(const std::exception& error) {
         message(error.what());return 4;
     }
-    const std::string logRoot=candidate.key.empty()?"/data/project-prime/logs":(candidate.root/"logs").string();
+    const std::string logRoot=benchmarkTour?prime::benchmark_tour_log_root().string():
+        candidate.key.empty()?"/data/project-prime/logs":(candidate.root/"logs").string();
     setenv("MP_PS4_BOOT_LOG",(logRoot+"/boot.log").c_str(),1);
     std::rename((logRoot+"/boot.log").c_str(),(logRoot+"/boot.previous.log").c_str());
     if (prime_ps4_log_open((logRoot+"/boot.log").c_str())<0) {

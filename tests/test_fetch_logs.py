@@ -19,6 +19,13 @@ class FTPFixture:
             action=self.after_read;self.after_read=None;action()
 
 class FetchLogTests(unittest.TestCase):
+    def test_automated_tour_paths_stay_separate_from_gameplay_logs(self):
+        self.assertEqual(m.log_directory('consolidated'),'/data/project-prime/release/logs/')
+        self.assertEqual(m.log_directory('consolidated',True),
+                         '/data/project-prime/release/benchmarks/tour-v1/logs/')
+        self.assertEqual(m.log_directory(None,True),'/data/project-prime/benchmarks/tour-v1/logs/')
+        self.assertEqual(m.log_directory('original-hd-v0022',True),
+                         '/data/project-prime/candidates/original-hd-v0022/benchmarks/tour-v1/logs/')
     def test_append_is_exact_and_transfers_only_suffix_plus_overlap(self):
         f=FTPFixture(bytes(range(256))*1024)
         first,cache,_,_=m.read_profile(f,'/profile',len(f.data))

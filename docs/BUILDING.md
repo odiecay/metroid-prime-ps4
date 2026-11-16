@@ -50,3 +50,18 @@ Detailed Vulkan call timing is off by default. For a profiling session,
 `/data/project-prime/release/benchmark-v2.cfg` can contain
 `dawn_call_profile=1`; use `0` or remove the file to disable it. The normal
 five-second frame summaries remain available without this extra sampling.
+
+The optional developer room tour uses `benchmark-tour.cfg` in
+`/data/project-prime/release/`, containing exactly
+`PROJECT_PRIME_BENCHMARK_TOUR_V1` followed by a newline. It copies existing
+settings into `benchmarks/tour-v1/`, with separate user data, caches and logs.
+The tour warps through six rooms with assisted inventory and four stationary
+camera directions; it is a rendering workload, not a gameplay completion test.
+Remove the request file and relaunch for normal play.
+
+Collect `benchmark-tour.jsonl` and `frame-profile.jsonl` from that folder's
+`logs/` directory, then analyse the matching launch on the PC:
+
+```sh
+python3 tools/analyse_benchmark_tour.py benchmark-tour.jsonl frame-profile.jsonl --details
+```

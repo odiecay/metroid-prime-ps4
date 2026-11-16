@@ -17,7 +17,11 @@
 namespace {
 using namespace aurora::trace;
 constexpr unsigned MaxStages=144, Buckets=1024;
-struct Stage { const char* name{}; Kind kind{}; Lane lane{}; };
+constexpr unsigned MaxStageName = 256, StageLookupSlots = 512;
+struct Stage { std::array<char,MaxStageName> name{}; Kind kind{}; Lane lane{}; };
+struct StageLookup { uintptr_t address{}; unsigned index{}; };
+std::array<StageLookup,StageLookupSlots> stageLookups;
+
 struct Bucket {
     uint64_t frame{};
     bool complete{};
@@ -33,11 +37,28 @@ std::array<SlowFrame,16> slow{};
 unsigned slowCount=0;
 uint64_t slowOmitted=0;
 unsigned stage_index(const Event& e) {
+    if(!e.name) { ++unknownStages;return MaxStages; }
+    const uintptr_t address=reinterpret_cast<uintptr_t>(e.name);
+    const auto mixed=(address^(address>>9)^(address>>17)^uintptr_t(e.kind)*0x9e3779b1u^uintptr_t(e.lane)*0x85ebca6bu);
+    auto& slot=stageLookups[mixed&(StageLookupSlots-1)];
+    if(slot.address==address && slot.index<stageCount) {
+        const auto& stage=stages[slot.index];
+        if(stage.kind==e.kind && stage.lane==e.lane && !std::strcmp(stage.name.data(),e.name)) return slot.index;
+    }
+    // Own the registered name: the source address may later be reused for
+    // another label. Long names are explicitly rejected instead of truncated.
+    const size_t length=strnlen(e.name,MaxStageName);
+    if(length==MaxStageName) { ++unknownStages;return MaxStages; }
     for(unsigned i=0;i<stageCount;++i)
-        if(stages[i].kind==e.kind && stages[i].lane==e.lane && !std::strcmp(stages[i].name,e.name)) return i;
+        if(stages[i].kind==e.kind && stages[i].lane==e.lane && !std::strcmp(stages[i].name.data(),e.name)) {
+            slot={address,i};return i;
+        }
     if(stageCount==MaxStages) { ++unknownStages;return MaxStages; }
-    stages[stageCount]={e.name,e.kind,e.lane};return stageCount++;
+    auto& stage=stages[stageCount];
+    std::memcpy(stage.name.data(),e.name,length+1);stage.kind=e.kind;stage.lane=e.lane;
+    slot={address,stageCount};return stageCount++;
 }
+
 std::array<std::array<Accum,MaxStages>,MaxThreads> accum;
 void finish_bucket(unsigned thread,Bucket& b) {
     uint64_t wall=0;
@@ -87,6 +108,15 @@ void json_name(FILE* out,const char* text) {
     std::fputc('"',out);
 }
 }
+extern "C" const char* prime_ps4_trace_session_id() noexcept {
+    // Shared with automated scene markers so appended launches never pool.
+    static const std::string sessionId=[] {
+        const auto wall=std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        return std::to_string(wall)+"-"+std::to_string(aurora::trace::now_ns());
+    }();
+    return sessionId.c_str();
+}
 static void poll_trace(uint64_t now,bool force=false) {
     using namespace aurora::trace;
     static uint64_t start=0;
@@ -102,11 +132,7 @@ static void poll_trace(uint64_t now,bool force=false) {
     // The file appends across launches, while Orbis monotonic time restarts.
     // Keep a stable ID across this process's rotations so analysis never pools
     // repeated frame IDs or mistakes a previous launch for fresh telemetry.
-    static const std::string sessionId=[] {
-        const auto wall=std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        return std::to_string(wall)+"-"+std::to_string(aurora::trace::now_ns());
-    }();
+    const char* sessionId=prime_ps4_trace_session_id();
     if(!out && !failed) {
         out=std::fopen(outputPath.c_str(),"a");
         if(!out) { failed=true;std::fprintf(stderr,"orbis: frame profiler output unavailable\n"); }
@@ -119,7 +145,7 @@ static void poll_trace(uint64_t now,bool force=false) {
             "\"vulkan_call_sampling\":{\"enabled\":%s,\"period\":%u,\"maximum_samples_per_category_per_submission\":%u,"
             "\"timing\":\"observed sampled CPU-side wall only; includes scheduling; not GPU execution\"},"
             "\"timing\":\"monotonic wall; inclusive rows overlap; waits are not CPU execution\",\"stages\":[",
-            sessionId.c_str(),(unsigned long long)start,(unsigned long long)now,(unsigned long long)dropped,
+            sessionId,(unsigned long long)start,(unsigned long long)now,(unsigned long long)dropped,
             (unsigned long long)collisions,(unsigned long long)unknownStages,MaxStages,stageCount,
             prime::dawn_call_profile::configured()?"true":"false",prime::dawn_call_profile::SamplePeriod,
             prime::dawn_call_profile::MaximumSamplesPerCategory);
@@ -129,7 +155,7 @@ static void poll_trace(uint64_t now,bool force=false) {
             if(!a.events && !s.frames && !a.unattributed) continue;
             if(!first) std::fputc(',',out);first=false;
             std::fprintf(out,"{\"thread\":%u,\"lane\":\"%s\",\"stage\":",t,stages[i].lane==Main?"main":"render");
-            json_name(out,stages[i].name);
+            json_name(out,stages[i].name.data());
             std::fprintf(out,",\"kind\":%u,\"frames\":%llu,\"sum_ns\":%llu,\"median_ns\":%llu,"
                 "\"p95_ns\":%llu,\"p99_ns\":%llu,\"max_ns\":%llu,\"counter\":%llu,\"unattributed_ns\":%llu,"
                 "\"over_1667\":%llu,\"over_20\":%llu,\"over_25\":%llu,\"over_3333\":%llu}",
@@ -147,7 +173,7 @@ static void poll_trace(uint64_t now,bool force=false) {
             bool firstStage=true;
             for(unsigned s=0;s<stageCount;++s) if(f.values[s]) {
                 if(!firstStage) std::fputc(',',out);firstStage=false;
-                std::fputs("{\"stage\":",out);json_name(out,stages[s].name);
+                std::fputs("{\"stage\":",out);json_name(out,stages[s].name.data());
                 std::fprintf(out,",\"kind\":%u,\"value\":%llu}",unsigned(stages[s].kind),(unsigned long long)f.values[s]);
             }
             std::fputs("]}",out);

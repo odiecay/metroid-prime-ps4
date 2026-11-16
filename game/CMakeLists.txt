@@ -84,6 +84,8 @@ add_subdirectory(MetroidPrimePort upstream)
 set_property(TARGET metroid_prime_port APPEND PROPERTY LINK_DEPENDS
   "${PRIME_ROOT}/platform/ps4/orbis-native.ld")
 target_include_directories(metroid_prime_port PRIVATE "${PRIME_ROOT}/platform/ps4")
+set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/MetroidPrimePort/src/MetroidPrime/CStateManager.cpp"
+  TARGET_DIRECTORY mp_game APPEND PROPERTY INCLUDE_DIRECTORIES "${PRIME_ROOT}/platform/ps4")
 # zstd's optional weak tracing hooks have no native provider and cannot be
 # assigned to an Orbis import library. Compression itself stays fully enabled.
 target_compile_definitions(libzstd_static PRIVATE ZSTD_TRACE=0)
@@ -106,6 +108,7 @@ target_sources(metroid_prime_port PRIVATE
   "${PRIME_ROOT}/platform/ps4/video_profile.c"
   "${PRIME_ROOT}/platform/ps4/entry.cpp"
   "${PRIME_ROOT}/platform/ps4/candidate_profile.cpp"
+  "${PRIME_ROOT}/platform/ps4/benchmark_tour.cpp"
   "${PRIME_ROOT}/platform/ps4/asset_bundle.cpp"
   "${PRIME_ROOT}/platform/ps4/crash.cpp"
   "${PRIME_ROOT}/platform/ps4/aurora_bridge.cpp"

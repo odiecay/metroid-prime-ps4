@@ -11,6 +11,12 @@ import json
 from pathlib import Path
 import time
 
+def log_directory(candidate_profile=None, benchmark_tour=False):
+    if candidate_profile=='consolidated': root='/data/project-prime/release/'
+    elif candidate_profile: root='/data/project-prime/candidates/'+candidate_profile+'/'
+    else: root='/data/project-prime/'
+    return root+('benchmarks/tour-v1/logs/' if benchmark_tour else 'logs/')
+
 def optional_metadata(ftp, remote):
     try:
         return (ftp.sendcmd('MDTM '+remote), ftp.size(remote))
@@ -58,12 +64,12 @@ def main():
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--follow-seconds',type=int,default=0)
     parser.add_argument('--candidate-profile',choices=['performance-v0021','original-hd-v0022','remastered-lite-v0023','remastered-enhanced-v0024','consolidated'])
+    parser.add_argument('--benchmark-tour',action='store_true',help='Read the isolated automated room-tour logs')
     args=parser.parse_args()
     if not 0<=args.follow_seconds<=600:parser.error('Follow duration must be 0..600 seconds')
     args.out.mkdir(parents=True,exist_ok=False)
     deadline=time.monotonic()+args.follow_seconds
-    log_root=('/data/project-prime/candidates/'+args.candidate_profile+'/logs/' if args.candidate_profile else '/data/project-prime/logs/')
-    if args.candidate_profile=='consolidated': log_root='/data/project-prime/release/logs/'
+    log_root=log_directory(args.candidate_profile,args.benchmark_tour)
     previous={};records=[];sequence=0;profile_cache=None
     while True:
         try:
@@ -71,7 +77,8 @@ def main():
             try:
                 for name in ('boot.log','crash.log','startup.log','shutdown.log',
                              'boot.previous.log','crash.previous.log','shutdown.log.previous',
-                             'frame-profile.jsonl','frame-profile.jsonl.previous'):
+                             'frame-profile.jsonl','frame-profile.jsonl.previous')+(
+                             ('benchmark-tour.jsonl',) if args.benchmark_tour else ()):
                     remote=log_root+name
                     try:
                         metadata=(ftp.sendcmd('MDTM '+remote),ftp.size(remote))
