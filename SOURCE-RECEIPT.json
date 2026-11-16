@@ -1,18 +1,21 @@
 {
   "format_version": 1,
-  "version": "00.40",
+  "version": "00.41",
   "stage": "development",
-  "package_file": "Metroid-Prime-PS4-00.40-Original-HD.pkg",
+  "package_file": "Metroid-Prime-PS4-00.41-Original-HD.pkg",
   "package_bytes": 82968576,
-  "package_sha256": "ba3f4516b06d60e111fc1c77994f7a02a7fa844cb3218a34c8e4076e2047b5eb",
-  "source_tag": "dev-00.40",
+  "package_sha256": "27ed5ea95ef22d2afb587509504888c073941310afb72ab1bf2725c225f91692",
+  "source_tag": "dev-00.41",
   "upstream_commit": "c872da704adde9a7838492aaa56dac73a32053e4",
-  "runtime_source_files_verified": 115,
+  "runtime_source_files_verified": 119,
   "runtime_source_sha256": {
-    "tests/gx_primitive_batch.cpp": "cfe809ee4d8d635a857a7776f8a1a8923ecf135a1f8261ba5e93f08ac6c33103",
+    "platform/ps4/menu_console_model.cpp": "1acd95f1956e0ddc3742a12b5cfc3ab1f629dbad9e8d6216baa3d7fe0eae41d2",
+    "platform/ps4/menu_console_model.hpp": "9985aa0c511ff62527ee20914caddad81fe21cdc3ebd9031a72ea7e8139de530",
+    "platform/ps4/menu_console_model_data.hpp": "ec9449e25c91331238e60d85195e81afb71d10706d82268e36c818a419368eee",
+    "tests/menu_console_model.cpp": "885d4943193474ed61c196db4073071665a3840f3c1d85f7f4466f1303238877",
     "CMakeLists.txt": "06dffc9a3ad185ef0a2c4aa271ea120e2c0b221ea41026da51bea0eacd0e5438",
-    "game/CMakeLists.txt": "2d68db9a0176626770c7d34198b1bb8d16ed8c7300616c8fb5b86be80be40c0a",
-    "patches/MetroidPrimePort.patch": "90f64665acce72bb83427ff3a451ef9605970e4ac478e6a1c17eda931fb30316",
+    "game/CMakeLists.txt": "2360bc4d1b978fd25ed1a28543c591f1e826695ff874c36884d8921f0f7e0229",
+    "patches/MetroidPrimePort.patch": "8d812ad81c1885a1b8859502978ef9dec79d5740e39f511473f91ed5053fd341",
     "patches/SDL-release-3.4.10.patch": "94d8f9fe3e2e8e33f5c56d2cf0739c7a4a89c2a12f1f351a6e825bc6fbb689a8",
     "patches/aurora-abseil-orbis.patch": "5b0901a55ec19f1f1eda00c3a2ad01ed0fe24cf7d6e8f56435b838670ed5c879",
     "patches/aurora-tracy-orbis.patch": "a84da2482dfac21d4cd6b13ed351ce73f487b877767976ca1c6ea04151400fc6",
@@ -33,7 +36,7 @@
     "platform/ps4/crash.cpp": "8c92728a66d628815b88e8c8fc4b766723b754bfbc31b75d8af7ee78dc96a92b",
     "platform/ps4/disc/gc_iso.cpp": "ecf6249cdc0f67586554bf4647c3eb11cc5994b503e66e38db97bc3e02c98c07",
     "platform/ps4/disc/gc_iso_cache.h": "513adf286c1f9ec200385276a279dfc599378b1903cb5424df2f07bc7a185439",
-    "platform/ps4/entry.cpp": "c534c8a72eba5f959bf5f4907f3985c7f45ceb0ea2e5565ef30463fdbf1aaa57",
+    "platform/ps4/entry.cpp": "a19fff69814198854915e55974ee32f74d73c246f9daee30f6cb071c6cdbba7b",
     "platform/ps4/frame_metrics.cpp": "452e8dfe892c5f09e9858f4fdd4cb8f61b19fc18eb9b11891c5e2c4c3ac17e7b",
     "platform/ps4/frame_metrics.hpp": "cd3a36fa3052929839579fdcc8ee43864fe3d3994fca8ac8123236643ffe4011",
     "platform/ps4/frame_trace_writer.cpp": "87da3d15624295261f09d854230c907bc0b2503a609f597947fc33ca782b5efe",
@@ -93,6 +96,7 @@
     "tests/gx_draw_preparation.cpp": "c00d2419062d121d4ae2d9f93b8501fde7f1db8ea79ce312091abedcfb941b97",
     "tests/gx_draw_profile.cpp": "e64f949975af98731327b46ffe7d5d205b0b7d6703f4c95c3f0d2b95cb8a16bf",
     "tests/gx_input_pruning.cpp": "ad5d00c554352d804b0af6562624d8685033861298c1a01b23c4a2dfe6e929de",
+    "tests/gx_primitive_batch.cpp": "cfe809ee4d8d635a857a7776f8a1a8923ecf135a1f8261ba5e93f08ac6c33103",
     "tests/lifecycle.cpp": "b914791b6e0c75fd4667fb28ff98d7c4618e0537246701b1b92d6179430e2440",
     "tests/lifecycle_signals.cpp": "6f2d80c76f8af6605a32bdbbd2249cce54a8c74026a7590f53ee366e71ac93e9",
     "tests/lift_checkpoint.cpp": "93e7eed98b7fd5677950ebeddc3e2207d1b8fd79d41137bf6bbb65e2d93c37d3",
@@ -191,6 +195,21 @@
       "export_sha256": "df50c6fa232c0b37cf6ca69b05929b772543458c0ec77b801ba882ca73b3f7ab",
       "diff_hunks_unchanged": true,
       "scope": "Author display header only; actual patch hunks are identical."
+    }
+  },
+  "original_menu_model": {
+    "compiled_into_game": true,
+    "original_authored_geometry": true,
+    "textures_or_commercial_model_inputs": false,
+    "license": "MIT",
+    "license_notice": "LICENSES/port-license.txt",
+    "source_sha256": {
+      "platform/ps4/menu_console_model.cpp": "1acd95f1956e0ddc3742a12b5cfc3ab1f629dbad9e8d6216baa3d7fe0eae41d2",
+      "platform/ps4/menu_console_model.hpp": "9985aa0c511ff62527ee20914caddad81fe21cdc3ebd9031a72ea7e8139de530",
+      "platform/ps4/menu_console_model_data.hpp": "ec9449e25c91331238e60d85195e81afb71d10706d82268e36c818a419368eee",
+      "tools/generate_menu_console.py": "def1355e39f74eac0a360363b23868e6858963c4fee48c054a7b517e88b77466",
+      "tests/menu_console_model.cpp": "885d4943193474ed61c196db4073071665a3840f3c1d85f7f4466f1303238877",
+      "tests/test_menu_console_model.py": "dc84f05b1fb8dedfa943f4b3e8665d91d14f1918f776bcb3db7f814ee3b74445"
     }
   }
 }

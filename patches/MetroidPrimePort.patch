@@ -4522,6 +4522,20 @@ index 04f2b0f7..afa25ca4 100644
  #endif
  };
  
+diff --git a/include/MetroidPrime/CGameCubeDoll.hpp b/include/MetroidPrime/CGameCubeDoll.hpp
+index ef5ea9be..1a6818f5 100644
+--- a/include/MetroidPrime/CGameCubeDoll.hpp
++++ b/include/MetroidPrime/CGameCubeDoll.hpp
+@@ -27,6 +27,9 @@ private:
+   rstl::single_ptr< CActorLights > x18_actorLights;
+   float x1c_fader;
+   bool x20_24_loaded : 1;
++#ifdef __ORBIS__
++  rstl::single_ptr<CModel> mPs4MenuModel;
++#endif
+   
+   void UpdateActorLights();
+ };
 diff --git a/include/rstl/pointer_iterator.hpp b/include/rstl/pointer_iterator.hpp
 index 35db8852..6dfdad6d 100644
 --- a/include/rstl/pointer_iterator.hpp
@@ -4889,6 +4903,20 @@ index 69d28d7a..c4732aff 100644
  // While suspended no mod loads, whatever the settings say: a Remastered import
  // unloads them so their memory is free while it runs. Takes effect at the next
  // reload or start.
+diff --git a/platform/include/port_ps4_menu_model.h b/platform/include/port_ps4_menu_model.h
+new file mode 100644
+index 00000000..e2c9b9cf
+--- /dev/null
++++ b/platform/include/port_ps4_menu_model.h
+@@ -0,0 +1,8 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++class CModel;
++class IObjectStore;
++namespace PortPS4Menu {
++// Original-authored native menu art; the caller owns the returned model.
++CModel* CreateModel(IObjectStore& store);
++}
 diff --git a/platform/include/port_resource_profile.h b/platform/include/port_resource_profile.h
 new file mode 100644
 index 00000000..5dd440b4
@@ -6496,6 +6524,85 @@ index 9d67eacb..4b208380 100644
              fprintf(stderr, "[resume] loading file %u\n", fileIdx);
              xdc_saveUI->StartGame(static_cast< int >(fileIdx));
              // Black from here, and no file-select->game movie.
+diff --git a/src/MetroidPrime/CGameCubeDoll.cpp b/src/MetroidPrime/CGameCubeDoll.cpp
+index 4ea4a716..cd512c8e 100644
+--- a/src/MetroidPrime/CGameCubeDoll.cpp
++++ b/src/MetroidPrime/CGameCubeDoll.cpp
+@@ -12,6 +12,14 @@
+ #include "MetaRender/CCubeRenderer.hpp"
+ 
+ #include "rstl/math.hpp"
++#ifdef __ORBIS__
++#include "port_ps4_menu_model.h"
++#include "Kyoto/CSimplePool.hpp"
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <exception>
++#endif
+ 
+ CGameCubeDoll::CGameCubeDoll()
+ : x0_model(gpSimplePool->GetObj("CMDL_GameCube"))
+@@ -33,6 +41,19 @@ bool CGameCubeDoll::CheckLoadComplete() {
+     return false;
+   }
+ 
++#ifdef __ORBIS__
++  // This is the rotating pause-options sculpture, not the Fusion-link model.
++  // Keep the original token as a fallback if the optional native mesh fails.
++  const char* setting=std::getenv("MP_PS4_MENU_MODEL");
++  if (setting==nullptr || std::strcmp(setting,"0")!=0) {
++    try {
++      mPs4MenuModel=PortPS4Menu::CreateModel(*gpSimplePool);
++      std::fprintf(stdout,"orbis: original-authored 3D PS4 options model ready\n");
++    } catch (const std::exception& error) {
++      std::fprintf(stderr,"orbis: PS4 options model unavailable; keeping original: %s\n",error.what());
++    }
++  }
++#endif
+   x20_24_loaded = true;
+   return true;
+ }
+@@ -52,6 +73,12 @@ void CGameCubeDoll::UpdateActorLights() {
+ void CGameCubeDoll::Touch() {
+   if (!CheckLoadComplete())
+     return;
++#ifdef __ORBIS__
++  if (!mPs4MenuModel.null()) {
++    mPs4MenuModel->Touch(0);
++    return;
++  }
++#endif
+   TToken< CModel >(x0_model)->Touch(0);
+ }
+ 
+@@ -78,10 +105,21 @@ void CGameCubeDoll::Draw(float alpha) {
+   x18_actorLights->ActivateLights();
+ 
+   float f = (CGraphics::GetSecondsMod900() * 360.f) * 0.25f;
+-  CGraphics::SetModelMatrix(CTransform4f::RotateZ(CRelAngle::FromDegrees(-f)) *
+-                            CTransform4f::Scale(0.2f));
+-
+-  TToken< CModel > model(x0_model);
+-  model->Draw(CModelFlags(CModelFlags::kT_Blend, alphaFader));
++  const CTransform4f spin=CTransform4f::RotateZ(CRelAngle::FromDegrees(-f)) *
++                            CTransform4f::Scale(0.2f);
++  CGraphics::SetModelMatrix(spin);
++#ifdef __ORBIS__
++  if (!mPs4MenuModel.null()) {
++    // Keep the flat console's top visible while retaining the original spin,
++    // camera, actor-light rig and fade. Restore the old draw's matrix contract.
++    CGraphics::SetModelMatrix(CTransform4f::RotateX(CRelAngle::FromDegrees(40.f)) * spin);
++    mPs4MenuModel->Draw(CModelFlags(CModelFlags::kT_Blend, alphaFader));
++    CGraphics::SetModelMatrix(spin);
++  } else
++#endif
++  {
++    TToken<CModel> model(x0_model);
++    model->Draw(CModelFlags(CModelFlags::kT_Blend,alphaFader));
++  }
+   CGraphics::DisableAllLights();
+ }
 diff --git a/src/MetroidPrime/CStateManager.cpp b/src/MetroidPrime/CStateManager.cpp
 index 8dbfa95d..fd89f86a 100644
 --- a/src/MetroidPrime/CStateManager.cpp

@@ -31,6 +31,10 @@ extern "C" int prime_ps4_sqlite_init(void);
 extern "C" int prime_ps4_log_open(const char *);
 
 namespace {
+const char* boot_log_location() noexcept {
+    const char* path=std::getenv("MP_PS4_BOOT_LOG");
+    return path && *path ? path : "/data/project-prime/logs/boot.log";
+}
 void message(const char *text) {
     sceKernelDebugOutText(0,text);
     sceSystemServiceHideSplashScreen();
@@ -96,8 +100,8 @@ extern "C" void prime_ps4_report_fatal(const char *module,const char *text,unsig
     std::fflush(stdout);std::fflush(stderr);
     char explanation[1024];
     std::snprintf(explanation,sizeof(explanation),
-        "Metroid Prime could not continue.\n\n%s: %.*s\n\nDetails are recorded in /data/project-prime/logs/.",
-        module?module:"Native engine",int(length>720?720:length),text?text:"");
+        "Metroid Prime could not continue.\n\n%s: %.*s\n\nDetails are recorded in %s.",
+        module?module:"Native engine",int(length>720?720:length),text?text:"",boot_log_location());
     message(explanation);
 }
 
@@ -205,7 +209,12 @@ static int run_game(int argc,char **argv) {
     prime_ps4_trace_stop();
     std::fprintf(stdout,"Project Prime: engine returned %d\n",status);
     std::fflush(stdout);std::fflush(stderr);
-    if (status) message("Metroid Prime stopped during startup. Its diagnostic log is in /data/project-prime/logs/. Relaunch after checking the game data and graphics report.");
+    if (status) {
+        char failure[512];
+        std::snprintf(failure,sizeof(failure),
+            "Metroid Prime stopped during startup.\n\nCheck the game data and graphics report.\n\nDiagnostic log: %s",boot_log_location());
+        message(failure);
+    }
     return status;
 }
 

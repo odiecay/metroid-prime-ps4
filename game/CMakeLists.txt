@@ -108,7 +108,8 @@ target_sources(metroid_prime_port PRIVATE
   "${PRIME_ROOT}/platform/ps4/candidate_profile.cpp"
   "${PRIME_ROOT}/platform/ps4/asset_bundle.cpp"
   "${PRIME_ROOT}/platform/ps4/crash.cpp"
-  "${PRIME_ROOT}/platform/ps4/aurora_bridge.cpp")
+  "${PRIME_ROOT}/platform/ps4/aurora_bridge.cpp"
+  "${PRIME_ROOT}/platform/ps4/menu_console_model.cpp")
 target_link_libraries(metroid_prime_port PRIVATE prime_pad ps4-vkloader sqlite3 prime_gpu_wait
   SceSysmodule SceUserService SceSystemService SceCommonDialog SceMsgDialog SceNet)
 target_link_options(metroid_prime_port PRIVATE

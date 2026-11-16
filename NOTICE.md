@@ -13,3 +13,6 @@ from the versions recorded in `upstream.lock.json`.
 No game image, keys, saves, SDK binaries or promotional artwork are included.
 
 The original controller diagram in `docs/images/ps4-controls.svg` is CC0-1.0.
+
+The original PS4 menu console geometry and its generator retain their MIT
+terms; see their SPDX headers and `LICENSES/port-license.txt`.
