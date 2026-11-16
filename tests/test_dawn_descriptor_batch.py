@@ -91,5 +91,75 @@ int main() {
             result = subprocess.run([program], capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_same_pipeline_compatibility_preserves_layout_and_immediate_checks(self):
+        import json
+        def method(text):
+            start = text.index("    bool AreLayoutsCompatible() override {")
+            end = text.index("\n    const BindGroupBase*", start)
+            return text[start:end]
+        current = (ROOT / "external/dawn/src/dawn/native/vulkan/CommandBufferVk.cpp").read_text()
+        lock = json.loads((ROOT / "upstream.lock.json").read_text())
+        pin = next(c["commit"] for c in lock["components"] if c["path"] == "external/dawn")
+        reference = subprocess.check_output([
+            "git", "-C", str(ROOT / "external/dawn"), "show",
+            pin + ":src/dawn/native/vulkan/CommandBufferVk.cpp"], text=True)
+        fixture = r'''
+#include <array>
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+struct Pipeline {
+    const int* layout;
+    inline static uint32_t getterCalls = 0;
+    const int* GetLayout() { ++getterCalls; return layout; }
+};
+struct Base { virtual bool AreLayoutsCompatible() = 0; };
+struct State : Base {
+    Pipeline* mLastAppliedPipeline = nullptr;
+    Pipeline* mPipeline = nullptr;
+    uint32_t mLastAppliedImmediateSize = 0;
+    uint32_t mImmediateSize = 0;
+};
+struct Reference : State {
+''' + method(reference) + "\n};\nstruct Current : State {\n" + method(current) + r'''
+};
+int main() {
+    std::array<int, 4> layouts{};
+    std::array<Pipeline, 8> pipelines;
+    for (unsigned i = 0; i < pipelines.size(); ++i) pipelines[i].layout = &layouts[i % 4];
+    uint32_t cases = 0;
+    for (unsigned last = 0; last <= pipelines.size(); ++last)
+    for (auto& current : pipelines)
+    for (uint32_t beforeSize = 0; beforeSize < 17; ++beforeSize)
+    for (uint32_t afterSize = 0; afterSize < 17; ++afterSize) {
+        Reference a; Current b;
+        a.mLastAppliedPipeline = b.mLastAppliedPipeline = last == pipelines.size() ? nullptr : &pipelines[last];
+        a.mPipeline = b.mPipeline = &current;
+        a.mLastAppliedImmediateSize = b.mLastAppliedImmediateSize = beforeSize;
+        a.mImmediateSize = b.mImmediateSize = afterSize;
+        const bool expected = a.AreLayoutsCompatible();
+        Pipeline::getterCalls = 0;
+        assert(b.AreLayoutsCompatible() == expected);
+        const uint32_t calls = !b.mLastAppliedPipeline || b.mLastAppliedPipeline == b.mPipeline ? 0 : 2;
+        assert(Pipeline::getterCalls == calls);
+        ++cases;
+    }
+    assert(cases == 20808);
+    std::printf("descriptor_compatibility_cases=%u exact_results=1 same_object_getters=0 changed_object_getters=2\n", cases);
+}
+'''
+        out = ROOT / "build/dawn-descriptor-batch-host"
+        out.mkdir(exist_ok=True)
+        unit = out / "actual_layout_compatibility.cpp"
+        unit.write_text(fixture)
+        program = out / "layout_compatibility"
+        subprocess.run(["g++-14", "-std=c++20", "-O2", "-fsanitize=address,undefined",
+                        str(unit), "-o", str(program)], check=True)
+        result = subprocess.run([program], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("descriptor_compatibility_cases=20808 exact_results=1", result.stdout)
+        print(result.stdout.strip())
+
+
 if __name__ == "__main__":
     unittest.main()

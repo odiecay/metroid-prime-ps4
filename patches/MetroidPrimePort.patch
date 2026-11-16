@@ -1525,7 +1525,7 @@ index 00000000..fc523f89
 +};
 +} // namespace aurora::gfx
 diff --git a/extern/aurora/lib/gfx/recording.cpp b/extern/aurora/lib/gfx/recording.cpp
-index 06ce09d1..536afbac 100644
+index 06ce09d1..8c97f635 100644
 --- a/extern/aurora/lib/gfx/recording.cpp
 +++ b/extern/aurora/lib/gfx/recording.cpp
 @@ -1,4 +1,6 @@
@@ -1690,7 +1690,7 @@ index 06ce09d1..536afbac 100644
    current_render_passes().emplace_back(std::move(newPass));
    ++g_recorder.currentRenderPass;
  
-@@ -1673,6 +1741,45 @@ void finish() {
+@@ -1673,6 +1741,72 @@ void finish() {
    }
  }
  
@@ -1726,10 +1726,37 @@ index 06ce09d1..536afbac 100644
 +      vertexBytes > UINT32_MAX - vertexEnd || indexBytes > UINT32_MAX - indexEnd) return false;
 +  auto& frame = current_frame_packet();
 +  if (!frame.verts.data() || !frame.indices.data()) return false;
-+  vertices = frame.verts.append_uninit(vertexBytes);
-+  indices = frame.indices.append_uninit(indexBytes);
++  vertices = vertexBytes ? frame.verts.append_uninit(vertexBytes) : frame.verts.data() + frame.verts.size();
++  indices = indexBytes ? frame.indices.append_uninit(indexBytes) : frame.indices.data() + frame.indices.size();
 +  vertexRange = {uint32_t(vertexEnd), uint32_t(vertexBytes)};
 +  indexRange = {uint32_t(indexEnd), uint32_t(indexBytes)};
++  return true;
++}
++
++size_t inline_vertex_headroom(uint64_t expectedEnd) noexcept {
++  if (!g_recorder.active() || expectedEnd > UINT32_MAX) return 0;
++  auto& frame = current_frame_packet();
++  const auto& sizes = frame_buffer_sizes();
++  const uint64_t used = frame.verts.size();
++  const uint64_t base = sizes.base(StagingKind::Vertex);
++  if (frame.spillVerts.length || !frame.verts.data() || base > expectedEnd || used != expectedEnd - base) return 0;
++  const uint64_t cap = std::min({uint64_t(frame.verts.capacity()), sizes.limit(StagingKind::Vertex),
++                                 sizes.device(StagingKind::Vertex), uint64_t(UINT32_MAX) - base});
++  return used < cap ? size_t(cap - used) : 0;
++}
++
++bool map_inline_vertices(uint64_t expectedEnd, size_t length, uint8_t*& destination, Range& range) noexcept {
++  destination = nullptr; range = {};
++  if (!g_recorder.active() || expectedEnd > UINT32_MAX || length > UINT32_MAX - expectedEnd) return false;
++  auto& frame = current_frame_packet();
++  const auto& sizes = frame_buffer_sizes();
++  const uint64_t used = frame.verts.size();
++  const uint64_t cap = std::min({uint64_t(frame.verts.capacity()), sizes.limit(StagingKind::Vertex), sizes.device(StagingKind::Vertex)});
++  if (frame.spillVerts.length || sizes.base(StagingKind::Vertex) > expectedEnd ||
++      used != expectedEnd - sizes.base(StagingKind::Vertex) ||
++      used > cap || length > cap - used || !frame.verts.data()) return false;
++  destination = length ? frame.verts.append_uninit(length) : frame.verts.data() + used;
++  range = {uint32_t(expectedEnd),uint32_t(length)};
 +  return true;
 +}
 +
@@ -1737,7 +1764,7 @@ index 06ce09d1..536afbac 100644
    ZoneScoped;
    if (!check_recording("push_verts")) {
 diff --git a/extern/aurora/lib/gfx/recording.hpp b/extern/aurora/lib/gfx/recording.hpp
-index 1c162a55..7618029f 100644
+index 1c162a55..3ee82153 100644
 --- a/extern/aurora/lib/gfx/recording.hpp
 +++ b/extern/aurora/lib/gfx/recording.hpp
 @@ -22,7 +22,13 @@ struct RecordedFrame {
@@ -1754,7 +1781,7 @@ index 1c162a55..7618029f 100644
  
  namespace testing {
  void suppress_render_worker(bool suppress) noexcept;
-@@ -91,6 +97,17 @@ inline constexpr Range OverflowRange{UINT32_MAX, 0};
+@@ -91,6 +97,21 @@ inline constexpr Range OverflowRange{UINT32_MAX, 0};
  constexpr bool overflowed(const Range& range) noexcept { return range.offset == OverflowRange.offset; }
  
  Range push_verts(const uint8_t* data, size_t length, size_t alignment);
@@ -1764,6 +1791,10 @@ index 1c162a55..7618029f 100644
 +// Does not reserve, grow, synchronize, or inspect replaceable GPU handles.
 +bool inline_geometry_headroom(uint64_t vertexEnd, uint64_t indexEnd,
 +                              size_t& vertexBytes, size_t& indexBytes) noexcept;
++// Vertex-only version for nonindexed triangle batches. Headroom is zero for
++// an invalid cursor, spill, missing backing or exhausted existing device extent.
++size_t inline_vertex_headroom(uint64_t vertexEnd) noexcept;
++bool map_inline_vertices(uint64_t vertexEnd, size_t vertexBytes, uint8_t*& vertices, Range& vertexRange) noexcept;
 +// Reserve both preflighted inline spans atomically on the recording thread.
 +// False leaves both cursors unchanged; returned CPU pointers remain frame-slot
 +// owned. Never grows, spills or accesses GPU handles.
@@ -1923,16 +1954,17 @@ index 99029c05..f6644981 100644
  }
  
 diff --git a/extern/aurora/lib/gx/command_processor.cpp b/extern/aurora/lib/gx/command_processor.cpp
-index 7609e30e..cc0ce525 100644
+index 7609e30e..60e472b7 100644
 --- a/extern/aurora/lib/gx/command_processor.cpp
 +++ b/extern/aurora/lib/gx/command_processor.cpp
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  #include "command_processor.hpp"
 +#include "draw_profile.hpp"
++#include "uniform_reuse_key.hpp"
  
  #include "../gfx/bloom.hpp"
  #include "../gfx/volfog.hpp"
-@@ -20,11 +21,13 @@
+@@ -20,11 +22,13 @@
  #include "resident.hpp"
  #include "shader_info.hpp"
  #include "texture.hpp"
@@ -1946,7 +1978,7 @@ index 7609e30e..cc0ce525 100644
  #include <bit>
  #include <cmath>
  #include <cstdint>
-@@ -99,6 +102,23 @@ u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxC
+@@ -99,6 +103,23 @@ u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxC
    return static_cast<u16>(numIndices);
  }
  
@@ -1970,11 +2002,19 @@ index 7609e30e..cc0ce525 100644
  // GX FIFO opcodes - use CP_ prefix to avoid clashing with GXCommandList.h macros
  constexpr u8 CP_CMD_NOP = GX_NOP;
  constexpr u8 CP_CMD_LOAD_CP_REG = GX_LOAD_CP_REG;
-@@ -171,6 +191,67 @@ struct DrawCache {
+@@ -165,12 +186,80 @@ struct DrawCache {
+   u8 lineMode = 0;
+   bool hasPipeline = false;
+   gfx::Range uniformRange{};
++  std::optional<uniform_reuse::Key> uniformKey;
+   gfx::Range fogRange{};
+   FogRangeLutKey fogRangeKey{};
+   bool hasFogRange = false;
    GXVtxFmt lastDrawFmt = GX_MAX_VTXFMT;
  };
  DrawCache sDrawCache;
 +uint64_t sRasterUniformReuses = 0, sRasterConfigReuses = 0, sFullPipelineConfigs = 0;
++uint64_t sLdrUniformReuses = 0, sLdrUniformKeyMisses = 0, sLdrUniformDirtyBuilds = 0;
 +draw_profile::Metrics sDrawPrepMetrics;
 +uint64_t sPrimitiveBatchGroups = 0, sPrimitiveBatchPrimitives = 0;
 +
@@ -1995,6 +2035,11 @@ index 7609e30e..cc0ce525 100644
 +#else
 +  return nullptr;
 +#endif
++}
++
++bool ldr_uniform_reuse_enabled() noexcept {
++  static const bool enabled = env_flag("MP_GX_LDR_UNIFORM_REUSE", true);
++  return enabled;
 +}
 +
 +bool raster_uniform_reuse_enabled() noexcept {
@@ -2038,7 +2083,7 @@ index 7609e30e..cc0ce525 100644
  
  // Port (from MP2 653e85a27): a vertex array is copied into a frame's storage once, not once per
  // slot and bind. The game sets a model's arrays again for each of its draws that follows another
-@@ -191,6 +272,10 @@ struct FrameArrayKey {
+@@ -191,6 +280,10 @@ struct FrameArrayKey {
    }
  };
  absl::flat_hash_map<FrameArrayKey, gfx::Range> sFrameArrays;
@@ -2049,7 +2094,7 @@ index 7609e30e..cc0ce525 100644
  // Per attribute: cleared since its last array, so the next one set there is copied afresh.
  bool sArrayFresh[GX_VA_MAX_ATTR] = {};
  
-@@ -203,14 +288,23 @@ bool frame_array_reuse() noexcept {
+@@ -203,14 +296,23 @@ bool frame_array_reuse() noexcept {
  }
  
  // The frame's copy of the array, made now if this frame has none; an overflowed range is not kept.
@@ -2074,7 +2119,7 @@ index 7609e30e..cc0ce525 100644
    if (reuse && range.size != 0 && !gfx::overflowed(range)) {
      sFrameArrays.emplace(FrameArrayKey{data, size}, range);
    }
-@@ -356,6 +450,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
+@@ -356,6 +458,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
      }
  
      case CP_CMD_INVAL_VTX: {
@@ -2083,7 +2128,7 @@ index 7609e30e..cc0ce525 100644
        for (auto& array : g_gxState.arrays) {
          array.cachedRange = {};
        }
-@@ -700,7 +796,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
+@@ -700,7 +804,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
  }
  
  static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange, gfx::Range idxRange,
@@ -2093,7 +2138,7 @@ index 7609e30e..cc0ce525 100644
    auto& state = g_gxState;
    auto& cache = sDrawCache;
    if (drop_overflowed_draw(vertRange, "vertex") || drop_overflowed_draw(idxRange, "index")) {
-@@ -716,7 +813,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -716,7 +821,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
      auto& array = state.arrays[i];
      if (array.cachedRange.size == 0 && !resident::array_range(array.data, array.size, array.cachedRange)) {
@@ -2102,7 +2147,7 @@ index 7609e30e..cc0ce525 100644
        if (drop_overflowed_draw(array.cachedRange, "storage")) {
          array.cachedRange = {};
          return;
-@@ -725,8 +822,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -725,8 +830,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      immediates.arrayStart[i - GX_VA_POS] = array.cachedRange.offset + array.baseIndex * array.stride;
    }
  
@@ -2113,11 +2158,17 @@ index 7609e30e..cc0ce525 100644
                               cache.lineMode == lineMode && cache.config.msaaSamples == gfx::get_sample_count() &&
                               // The pass's target, not only the FIFO's switch: a new frame (reset to LDR),
                               // an offscreen pass or a colour pass must not keep an HDR pipeline, or back.
-@@ -738,8 +836,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -738,8 +844,27 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
                               (cache.config.shaderConfig.pbr == 0 ||
                                (cache.config.shaderConfig.pbrPlain | cache.config.shaderConfig.pbrNoDebug << 1) ==
                                    pbr_static_flags());
 +  const bool pipelineValid = pipelinePropertiesValid && (state.dirty & DirtyAnyPipeline) == 0;
++  // Snapshot before pipeline rebuilds manufacture UBO dirtiness. Texture
++  // changes keep the original pack path and invalidate the small reuse key.
++  const bool texturesInitiallyClean = (state.dirty & DirtyTextures) == 0;
++  const bool ldrUniformCandidate = ldr_uniform_reuse_enabled() && !pipelineValid &&
++      texturesInitiallyClean && (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0 &&
++      cache.uniformKey.has_value() && cache.bindGeneration == texture::current_bind_generation();
 +  bool rasterUniformReuseCandidate = false;
    if (!pipelineValid) {
      const bool hadPipeline = cache.hasPipeline;
@@ -2135,7 +2186,7 @@ index 7609e30e..cc0ce525 100644
      const auto prevSampledTextures = cache.shaderInfo.sampledTextures;
      const auto prevSampledIndTextures = cache.shaderInfo.sampledIndTextures;
      const bool prevUsesVolFog = cache.shaderInfo.usesVolFog;
-@@ -747,7 +858,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -747,7 +872,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool prevActorDecal = cache.shaderInfo.actorDecal;
      const bool prevUsesShell = cache.shaderInfo.usesShell;
      const bool prevUsesLightmap = cache.shaderInfo.usesLightmap;
@@ -2158,7 +2209,7 @@ index 7609e30e..cc0ce525 100644
      // GX_AURORA_PORT_DEPTH_PREPASS: pass 2 shades an eligible draw where the depth is equal without
      // writing it, yet it casts as the draw it stands for (LEQUAL, writing). Its config can equal a
      // plain EQUAL draw's, which doesn't cast, so it bypasses the memo.
-@@ -761,9 +886,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -761,9 +900,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool blocking = blocking_pipelines();
      const gfx::PipelineRef ref = xxh3_hash(cache.config, static_cast<HashType>(gfx::ShaderType::GX));
      auto memoIt = blocking || prepassShade ? sPipelineMemo.end() : sPipelineMemo.find(ref);
@@ -2170,7 +2221,7 @@ index 7609e30e..cc0ce525 100644
        const auto& memo = memoIt->second;
        cache.shaderInfo = memo.shaderInfo;
        cache.pipelineRef = ref;
-@@ -772,9 +899,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -772,9 +913,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
        cache.cutPipelineRef = memo.cutPipelineRef;
        cache.cutCaster = memo.cutCaster;
      } else {
@@ -2183,7 +2234,7 @@ index 7609e30e..cc0ce525 100644
        // Only an opaque surface that writes depth casts: the shadow map's vertex-only pass can't
        // alpha-test or blend. The game draws most opaque surfaces as a ONE/ZERO blend.
        const auto& sc = cache.config.shaderConfig;
-@@ -796,12 +926,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -796,12 +940,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          return config;
        };
        if (cache.shadowCaster) {
@@ -2200,7 +2251,7 @@ index 7609e30e..cc0ce525 100644
        }
        if (!prepassShade) {
          sPipelineMemo.insert_or_assign(cache.pipelineRef, PipelineMemo{
-@@ -816,9 +950,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -816,9 +964,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      cache.fmt = fmt;
      cache.lineMode = lineMode;
      cache.hasPipeline = true;
@@ -2218,7 +2269,7 @@ index 7609e30e..cc0ce525 100644
      if (!hadPipeline || prevSampledTextures != cache.shaderInfo.sampledTextures ||
          prevSampledIndTextures != cache.shaderInfo.sampledIndTextures ||
          prevUsesVolFog != cache.shaderInfo.usesVolFog || prevUsesLightmap != cache.shaderInfo.usesLightmap ||
-@@ -828,19 +967,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -828,19 +981,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
@@ -2242,19 +2293,43 @@ index 7609e30e..cc0ce525 100644
      cache.bindGeneration = texture::current_bind_generation();
      state.dirty &= ~DirtyTextures;
      // For texture_size_bias uniform
-@@ -849,7 +992,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -849,13 +1006,34 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
+-  const bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0;
 +  profile.stage(draw_profile::Uniforms);
-   const bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0;
++  bool uniformValid = (state.dirty & DirtyUniform) == 0 && cache.uniformRange.size != 0;
++  std::optional<uniform_reuse::Key> nextUniformKey;
++  if (!uniformValid && ldr_uniform_reuse_enabled() && texturesInitiallyClean && bindGroupsValid) {
++    nextUniformKey = uniform_reuse::key(cache.shaderInfo, cache.config.shaderConfig);
++    if (ldrUniformCandidate && nextUniformKey && cache.uniformKey == nextUniformKey) {
++      uniformValid = true;
++      state.dirty &= ~DirtyUniform;
++      ++sLdrUniformReuses;
++    } else if (ldrUniformCandidate) {
++      ++sLdrUniformKeyMisses;
++    } else if (nextUniformKey) {
++      ++sLdrUniformDirtyBuilds;
++    }
++  }
 +  if (rasterUniformReuseCandidate && uniformValid) {
 +    ++sRasterUniformReuses;
 +  }
    if (!uniformValid) {
      cache.uniformRange = build_uniform(cache.shaderInfo);
      if (drop_overflowed_draw(cache.uniformRange, "uniform")) {
-@@ -872,6 +1019,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+       cache.uniformRange = {};
++      cache.uniformKey.reset();
+       return;
+     }
++    // Seed only stable-texture preparations, paired with the successful
++    // same-frame range. A texture change clears validity without a key lookup.
++    cache.uniformKey = nextUniformKey;
+     state.dirty &= ~DirtyUniform;
+   }
+   if (cache.config.shaderConfig.fogRangeEnabled) {
+@@ -872,6 +1050,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
    }
    immediates.fogRangeBase = cache.fogRange.offset / sizeof(u32);
  
@@ -2262,7 +2337,7 @@ index 7609e30e..cc0ce525 100644
    state.dirty &= ~DirtyImmediates;
  
    uint32_t instanceCount = 1;
-@@ -923,15 +1071,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -923,15 +1102,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          actorConfig.cullMode = GX_CULL_BACK;
        }
        actorConfig.msaaSamples = 1;
@@ -2283,7 +2358,7 @@ index 7609e30e..cc0ce525 100644
    ZoneScoped;
    u32 numIndices = 0;
    gfx::Range idxRange;
-@@ -944,11 +1096,84 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
+@@ -944,11 +1127,122 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
      idxBuf.clear();
    }
  
@@ -2361,6 +2436,44 @@ index 7609e30e..cc0ce525 100644
 +  }
 +
 +  return false;
++}
++
++[[gnu::noinline]] static bool try_batch_triangles(GXVtxFmt fmt, u16 vtxCount, u32 vtxSize, ByteReader& reader, DrawData* lastDraw) noexcept {
++  static const bool enabled = env_flag("MP_GX_PRIMITIVE_BATCH", true) && env_flag("MP_GX_TRIANGLE_BATCH", true);
++  if (!enabled || testing::vertexArrayCheck.load(std::memory_order_relaxed)) return false;
++  const uint64_t vertexEnd = uint64_t(lastDraw->vertRange.offset) + lastDraw->vertRange.size;
++  const size_t available = gfx::inline_vertex_headroom(vertexEnd);
++  if (available == 0) return false;
++  const size_t maxBatchBytes = std::min<size_t>(64 * 1024, available);
++  uint32_t primitives = 0, vertices = 0, bytes = 0;
++  uint16_t count = vtxCount;
++  size_t pos = reader.offset();
++  const uint8_t opcode = GX_TRIANGLES | uint8_t(fmt);
++  while (count >= 3) {
++    const uint32_t nextBytes = uint32_t(count) * vtxSize;
++    if (nextBytes > reader.size() - pos || nextBytes > maxBatchBytes - bytes ||
++        uint64_t(lastDraw->vtxCount) + vertices + count > UINT16_MAX) break;
++    bytes += nextBytes; vertices += count; ++primitives; pos += nextBytes;
++    if (reader.size() - pos < 3 || reader.data()[pos] != opcode) break;
++    count = (uint16_t(reader.data()[pos + 1]) << 8) | reader.data()[pos + 2];
++    pos += 3;
++  }
++  if (primitives < 2) return false;
++  uint8_t* destination = nullptr; gfx::Range range{};
++  if (!gfx::map_inline_vertices(vertexEnd, bytes, destination, range)) return false;
++  size_t at = reader.offset(), written = 0; count = vtxCount;
++  for (uint32_t i = 0; i < primitives; ++i) {
++    const size_t length = size_t(count) * vtxSize;
++    std::memcpy(destination + written, reader.data() + at, length);
++    written += length; at += length;
++    if (i + 1 != primitives) { count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3; }
++  }
++  lastDraw->vertRange.size += bytes;
++  lastDraw->vtxCount += vertices;
++  gfx::detail::add_merged_draw_count(primitives);
++  ++sPrimitiveBatchGroups; sPrimitiveBatchPrimitives += primitives;
++  reader.skip(at - reader.offset());
++  return true;
  }
  
  static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader& reader) noexcept {
@@ -2369,10 +2482,15 @@ index 7609e30e..cc0ce525 100644
    u32 vtxSize;
    if (g_gxState.lastVtxFmt == fmt)
      LIKELY { vtxSize = g_gxState.lastVtxSize; }
-@@ -982,6 +1207,12 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -982,6 +1276,17 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
    auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
    const bool canMerge = lastDraw != nullptr && lastDraw->instanceCount == 1;
  
++  if (prim == GX_TRIANGLES && canMerge && lastDraw->indexCount == 0 &&
++      try_batch_triangles(fmt, vtxCount, vtxSize, reader, lastDraw)) {
++    profile.complete(); return;
++  }
++
 +  if (prim == GX_TRIANGLESTRIP && canMerge && lastDraw->indexCount != 0 &&
 +      try_batch_strips(fmt, vtxCount, vtxSize, reader, lastDraw)) {
 +    profile.complete();
@@ -2382,7 +2500,7 @@ index 7609e30e..cc0ce525 100644
    // Push raw vertex data to buffer. Merged draws must remain contiguous with the previous range.
    const auto vertexData = reader.take(totalVtxBytes);
    gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), canMerge ? 0 : 4);
-@@ -1026,10 +1257,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -1026,10 +1331,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
      lastDraw->vtxCount += vtxCount;
      lastDraw->indexCount += numIndices;
      gfx::detail::increment_merged_draw_count();
@@ -2395,7 +2513,7 @@ index 7609e30e..cc0ce525 100644
  }
  
  // How many indices prepare_idx_buffer makes of a draw, or 0 for one it cannot make into
-@@ -1151,6 +1383,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1151,6 +1457,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      return;
    }
    for (const resident::Chunk& chunk : entry->chunks) {
@@ -2403,7 +2521,7 @@ index 7609e30e..cc0ce525 100644
      const gfx::Range vertRange{entry->vert.offset + chunk.vertOffset, chunk.vertSize};
      const gfx::Range idxRange{entry->idx.offset + chunk.idxOffset, chunk.idxCount * u32(sizeof(u16))};
      // The same vertices as they are in the list's bytes, which is what the array check reads.
-@@ -1158,7 +1391,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1158,7 +1465,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      if (check_indexed_arrays(vtxData, chunk.fmt, GX_TRIANGLES, chunk.vtxCount, current_vtx_size(chunk.fmt))) UNLIKELY {
        continue;
      }
@@ -2412,7 +2530,7 @@ index 7609e30e..cc0ce525 100644
    }
    // The next draw must not merge into these: its vertices are not after them.
    sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
-@@ -1209,12 +1442,28 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1209,12 +1516,28 @@ void handle_aurora(ByteReader& reader) noexcept {
      g_gxState.dirty |= DirtyUniform;
    } else if (subCmd >= GX_AURORA_LOAD_ARRAYBASE && subCmd <= (GX_AURORA_LOAD_ARRAYBASE | 0x0f)) {
      const u32 attrIdx = subCmd - GX_AURORA_LOAD_ARRAYBASE + GX_VA_POS;
@@ -2444,7 +2562,7 @@ index 7609e30e..cc0ce525 100644
      if (array.data != newData || array.size != arraySize || array.le != le) {
        // Only an indexed attribute's array, or TEX7's under pbr (bind_pos_active), is in the
        // pipeline config (a VCD or pbr change dirties it anyway).
-@@ -1226,15 +1475,6 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1226,15 +1549,6 @@ void handle_aurora(ByteReader& reader) noexcept {
          // Endianness is baked into the shader
          g_gxState.dirty |= DirtyPipeline;
        }
@@ -2460,7 +2578,7 @@ index 7609e30e..cc0ce525 100644
        array.data = newData;
        array.size = arraySize;
        array.le = le;
-@@ -1242,23 +1482,25 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1242,23 +1556,25 @@ void handle_aurora(ByteReader& reader) noexcept {
        g_gxState.dirty |= DirtyImmediates;
      }
    } else if (subCmd == GX_AURORA_LOAD_TEXOBJ) {
@@ -2496,7 +2614,7 @@ index 7609e30e..cc0ce525 100644
      if (slot.data != newData || slot.userData != newUserData || slot.mWidth != newWidth || slot.mHeight != newHeight ||
          slot.mFormat != static_cast<u32>(newFormat) || slot.tlut != newTlut || slot.flags != newFlags ||
          slot.texObjId != newTexObjId || slot.texDataVersion != newTexDataVersion) {
-@@ -1376,6 +1618,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1376,6 +1692,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      call_resident_dl(key, size);
    } else if (subCmd == GX_AURORA_DRAW_INDEXED) {
      ZoneScopedN("DRAW_INDEXED");
@@ -2504,7 +2622,7 @@ index 7609e30e..cc0ce525 100644
      const u8 cmd = reader.read<u8>();
      const u16 vtxCount = reader.read<u16>();
      const u32 indexCount = reader.read<u32>();
-@@ -1400,7 +1643,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1400,7 +1717,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      } else {
        const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
        if (indexCount != 0) {
@@ -2513,7 +2631,31 @@ index 7609e30e..cc0ce525 100644
        }
      }
    } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
-@@ -2056,9 +2299,60 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1496,6 +1813,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+       sDrawCache.hasPipeline = false;
+       sDrawCache.bindGeneration = 0;
+       sDrawCache.uniformRange = {};
++      sDrawCache.uniformKey.reset();
+       sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
+       st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
+     }
+@@ -1889,6 +2207,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+       sDrawCache.hasPipeline = false;
+       sDrawCache.bindGeneration = 0;
+       sDrawCache.uniformRange = {};
++      sDrawCache.uniformKey.reset();
+       sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
+       st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
+     } else if (mode == 3) {
+@@ -1896,6 +2215,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+       sDrawCache.hasPipeline = false;
+       sDrawCache.bindGeneration = 0;
+       sDrawCache.uniformRange = {};
++      sDrawCache.uniformKey.reset();
+       sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
+       st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
+     }
+@@ -2056,11 +2376,67 @@ void handle_aurora(ByteReader& reader) noexcept {
    }
  }
  
@@ -2568,13 +2710,20 @@ index 7609e30e..cc0ce525 100644
 +    for (unsigned stage=0; stage<draw_profile::StageCount; ++stage)
 +      trace::count(names[stage], prep.stages[stage], trace::Main);
 +  }
++  trace::count("GX LDR uniform reuses", sLdrUniformReuses, trace::Main);
++  trace::count("GX LDR uniform key misses", sLdrUniformKeyMisses, trace::Main);
++  trace::count("GX LDR uniform dirty builds", sLdrUniformDirtyBuilds, trace::Main);
++  sLdrUniformReuses = sLdrUniformKeyMisses = sLdrUniformDirtyBuilds = 0;
 +  trace::count("GX raster uniform reuses", sRasterUniformReuses, trace::Main);
 +  trace::count("GX raster config updates", sRasterConfigReuses, trace::Main);
 +  trace::count("GX full pipeline config builds", sFullPipelineConfigs, trace::Main);
 +  sRasterUniformReuses = sRasterConfigReuses = sFullPipelineConfigs = 0;
    sDrawCache.bindGeneration = 0;
    sDrawCache.uniformRange = {};
++  sDrawCache.uniformKey.reset();
    sDrawCache.fogRange = {};
+   sDrawCache.hasFogRange = false;
+   g_gxState.copySceneLinear = false;
 diff --git a/extern/aurora/lib/gx/draw_profile.hpp b/extern/aurora/lib/gx/draw_profile.hpp
 new file mode 100644
 index 00000000..4417ab32
@@ -3320,6 +3469,92 @@ index 49ecf53f..5e0ee7b9 100644
    }
  }
  
+diff --git a/extern/aurora/lib/gx/uniform_reuse_key.hpp b/extern/aurora/lib/gx/uniform_reuse_key.hpp
+new file mode 100644
+index 00000000..a6c843fb
+--- /dev/null
++++ b/extern/aurora/lib/gx/uniform_reuse_key.hpp
+@@ -0,0 +1,80 @@
++#pragma once
++
++#include "gx.hpp"
++
++#include <array>
++#include <bit>
++#include <optional>
++
++namespace aurora::gx::uniform_reuse {
++
++// Every selection and emission order used by the ordinary LDR uniform packer.
++// Numeric constants remain protected by DirtyUniform. Advanced passes retain
++// the full pack path because some of their values derive from pipeline state.
++static_assert(MaxTevRegs <= 8 && MaxKColors <= 8 && MaxColorChannels / 2 <= 8 && MaxTextures <= 8);
++
++struct Layout {
++  std::array<uint64_t, 4> words{};
++  bool operator==(const Layout&) const = default;
++};
++
++inline std::optional<Layout> layout(const ShaderInfo& info, const ShaderConfig& config) noexcept {
++  if (info.usesPbr || info.usesPbrThermal || info.usesHdrTone || info.usesVolFog || info.usesShadow ||
++      info.usesShell || info.actorDecal || info.shellScene || config.pbr || config.sceneHdr ||
++      config.volFog || config.shadow || config.shell || config.actorDecal || config.depthOnly || config.drawId) {
++    return {};
++  }
++
++  Layout result;
++  result.words[0] = info.uniformSize;
++  result.words[1] = info.loadsTevReg.to_ullong() | (info.sampledKColors.to_ullong() << 8) |
++                    (info.sampledColorChannels.to_ullong() << 16) | (info.sampledTextures.to_ullong() << 24);
++  result.words[2] = uint64_t(info.lineMode) | (uint64_t(info.lightingEnabled) << 2) |
++                    (uint64_t(info.usesFog) << 3) | (uint64_t(info.usesPTTexMtx.any()) << 4) |
++                    (uint64_t(info.usedIndTexMtxs.any()) << 5) | (uint64_t(info.usesHudDyin) << 6) |
++                    (uint64_t(info.usesClipPlane) << 7) | (uint64_t(info.usesAlphaRef) << 8) |
++                    (uint64_t(info.usesColorMatrix) << 9);
++  for (size_t i = 0; i < info.sampledColorChannels.size(); ++i) {
++    if (!info.sampledColorChannels[i]) {
++      continue;
++    }
++    for (size_t alpha = 0; alpha < 2; ++alpha) {
++      const auto& channel = config.colorChannels[i + alpha * GX_ALPHA0];
++      const unsigned selected = (channel.lightingEnabled && channel.ambSrc == GX_SRC_REG ? 1u : 0u) |
++                                (channel.matSrc == GX_SRC_REG ? 2u : 0u);
++      result.words[3] |= uint64_t(selected) << (i * 4 + alpha * 2);
++    }
++  }
++  return result;
++}
++
++struct ViewportBits {
++  std::array<uint32_t, 4> words{};
++  bool operator==(const ViewportBits&) const = default;
++};
++
++inline ViewportBits viewport_bits() noexcept {
++  // The viewport setters assign even when float equality sees +0 and -0 as
++  // equal. Preserve the exact uploaded bits without changing setter behavior.
++  return {{{std::bit_cast<uint32_t>(g_gxState.renderViewport.width),
++            std::bit_cast<uint32_t>(g_gxState.renderViewport.height),
++            std::bit_cast<uint32_t>(g_gxState.logicalViewport.width),
++            std::bit_cast<uint32_t>(g_gxState.logicalViewport.height)}}};
++}
++
++struct Key {
++  Layout layout;
++  ViewportBits viewport;
++  bool operator==(const Key&) const = default;
++};
++static_assert(sizeof(Key) == 48);
++
++inline std::optional<Key> key(const ShaderInfo& info, const ShaderConfig& config) noexcept {
++  const auto selected = layout(info, config);
++  if (!selected) {
++    return {};
++  }
++  return Key{*selected, viewport_bits()};
++}
++
++} // namespace aurora::gx::uniform_reuse
 diff --git a/extern/aurora/lib/input.cpp b/extern/aurora/lib/input.cpp
 index 8c690f25..12dd4ec0 100644
 --- a/extern/aurora/lib/input.cpp
@@ -4253,7 +4488,7 @@ index d814f3cd..5a1cae48 100644
 +  }
 +}
 diff --git a/extern/aurora/tests/gx_scene_hdr_fifo_test.cpp b/extern/aurora/tests/gx_scene_hdr_fifo_test.cpp
-index bd0a2c4b..7024ac00 100644
+index bd0a2c4b..b3684e1b 100644
 --- a/extern/aurora/tests/gx_scene_hdr_fifo_test.cpp
 +++ b/extern/aurora/tests/gx_scene_hdr_fifo_test.cpp
 @@ -11,6 +11,8 @@
@@ -4274,7 +4509,7 @@ index bd0a2c4b..7024ac00 100644
  } // namespace aurora::gfx
  namespace aurora::gx {
  extern uint32_t g_testPopulateCount;
-@@ -414,6 +418,81 @@ TEST_F(GXSceneHdrFifoTest, BlendOnlyTransitionsRefreshTheHdrUniform) {
+@@ -414,6 +418,88 @@ TEST_F(GXSceneHdrFifoTest, BlendOnlyTransitionsRefreshTheHdrUniform) {
    aurora::gx::fifo::shutdown();
  }
  
@@ -4339,16 +4574,23 @@ index bd0a2c4b..7024ac00 100644
 +  GXSetZMode(GX_TRUE, GX_LESS, GX_TRUE);
 +  draw();
 +  EXPECT_EQ(g_testUniformBuildCount, afterTexture + 1);
-+  // A non-raster shader change retains the conservative rebuild.
++  // A pipeline invalidation without changed constants/layout can now reuse
++  // the same-frame LDR range. The independent real-packer regression checks
++  // exact payload bytes; this FIFO-only fixture checks build/range ownership.
++  const auto constantsRange = aurora::gfx::g_testLastDraw.uniformRange;
++  const char* ldrEnv = std::getenv("MP_GX_LDR_UNIFORM_REUSE");
++  const bool ldrReuse = ldrEnv == nullptr || std::strcmp(ldrEnv, "0") != 0;
 +  g_gxState.dirty |= DirtyPipeline;
 +  draw();
-+  EXPECT_EQ(g_testUniformBuildCount, afterTexture + 2);
++  EXPECT_EQ(g_testUniformBuildCount, afterTexture + (ldrReuse ? 1 : 2));
++  if (ldrReuse) EXPECT_EQ(aurora::gfx::g_testLastDraw.uniformRange.offset, constantsRange.offset);
++  const u32 afterShader = g_testUniformBuildCount;
 +  // Frame-local ranges never escape their frame, even if the pipeline is cached.
 +  aurora::gx::fifo::end_frame();
 +  aurora::gx::fifo::begin_frame();
 +  GXSetZMode(GX_TRUE, GX_GEQUAL, GX_TRUE);
 +  draw();
-+  EXPECT_EQ(g_testUniformBuildCount, afterTexture + 3);
++  EXPECT_EQ(g_testUniformBuildCount, afterShader + 1);
 +  aurora::gx::fifo::end_frame();
 +  aurora::gx::fifo::shutdown();
 +}
@@ -4376,7 +4618,7 @@ index 00000000..c7e89192
 +extern std::vector<ArrayStorageCopy> arrayStorageCopies;
 +}
 diff --git a/extern/aurora/tests/gx_test_stubs.cpp b/extern/aurora/tests/gx_test_stubs.cpp
-index b9c98f00..aea0810b 100644
+index b9c98f00..c9363f7e 100644
 --- a/extern/aurora/tests/gx_test_stubs.cpp
 +++ b/extern/aurora/tests/gx_test_stubs.cpp
 @@ -19,6 +19,7 @@
@@ -4387,7 +4629,7 @@ index b9c98f00..aea0810b 100644
  #include "webgpu/gpu.hpp"
  
  #include <atomic>
-@@ -51,8 +52,24 @@ Resources& resources() noexcept {
+@@ -51,8 +52,30 @@ Resources& resources() noexcept {
  }
  
  void increment_merged_draw_count() noexcept {}
@@ -4398,6 +4640,12 @@ index b9c98f00..aea0810b 100644
 +bool inline_geometry_headroom(uint64_t, uint64_t, size_t& vertex, size_t& index) noexcept {
 +  // The FIFO-only fixture has no mapped frame staging and cannot batch it.
 +  vertex = index = 0;
++  return false;
++}
++size_t inline_vertex_headroom(uint64_t) noexcept { return 0; }
++bool map_inline_vertices(uint64_t, size_t, uint8_t*& vertices, Range& range) noexcept {
++  vertices = nullptr;
++  range = {};
 +  return false;
 +}
 +bool map_inline_geometry(uint64_t, uint64_t, size_t, size_t,
@@ -4412,7 +4660,7 @@ index b9c98f00..aea0810b 100644
  namespace aurora::webgpu {
  GraphicsConfig g_graphicsConfig{};
  bool g_dualSourceBlendingSupported = false;
-@@ -188,7 +205,19 @@ Range push_indices(const uint8_t* data, size_t length, size_t alignment) { retur
+@@ -188,7 +211,19 @@ Range push_indices(const uint8_t* data, size_t length, size_t alignment) { retur
  Range push_uniform(const uint8_t* data, size_t length) { return {}; }
  // Tests set it to see draws dropped for want of storage room.
  bool g_testStorageFull = false;
@@ -4433,7 +4681,7 @@ index b9c98f00..aea0810b 100644
  
  // The resident regions: tests set them, and see the uploads.
  Range g_testResidentRegions[3]{};
-@@ -259,7 +288,13 @@ template <>
+@@ -259,7 +294,13 @@ template <>
  PipelineRef pipeline_ref<gx::PipelineConfig>(const gx::PipelineConfig& config) {
    return 0;
  }

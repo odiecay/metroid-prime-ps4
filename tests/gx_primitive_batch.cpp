@@ -33,7 +33,7 @@ static void inline_mapping_contract(gfx::detail::FramePacket& frame){
  const auto savedLimits=gfx::frame_buffer_sizes();
  auto& limits=const_cast<gfx::FrameBufferSizes&>(gfx::frame_buffer_sizes());
  unsigned successes=0,failures=0;
- for(unsigned kind=0;kind<35;++kind){
+ for(unsigned kind=0;kind<40;++kind){
   tiny_state();
   std::array<uint8_t,192> vertices,indices;vertices.fill(0xa5);indices.fill(0x5a);
   limits=savedLimits;limits.maxVertex=limits.deviceVertex=128;limits.maxIndex=limits.deviceIndex=128;
@@ -45,7 +45,7 @@ static void inline_mapping_contract(gfx::detail::FramePacket& frame){
   bool active=kind!=33;
   if(active)gfx::detail::begin_recording(frame,0);
   size_t vertexBytes=32,indexBytes=24;
-  bool expected=kind==0||kind==1||kind==27||kind==28||kind==29||kind==31||kind==34;
+  bool expected=kind==0||kind==1||kind==27||kind==28||kind==29||kind==31||kind==34||kind>=35;
   switch(kind){
   case 1:limits.residentVertex=4096;limits.residentIndex=8192;break;
   case 4:vertexBytes=113;break;
@@ -76,6 +76,11 @@ static void inline_mapping_contract(gfx::detail::FramePacket& frame){
   case 31:vertexBytes=indexBytes=0;break;
   case 32:limits.residentVertex=1024;limits.residentIndex=2048;break;
   case 34:limits.residentVertex=17;limits.residentIndex=29;vertexBytes=112;indexBytes=120;break;
+  case 35:frame.verts.clear();frame.indices.clear();vertexBytes=indexBytes=0;break;
+  case 36:frame.verts.clear();vertexBytes=0;break;
+  case 37:frame.indices.clear();indexBytes=0;break;
+  case 38:frame.verts.clear();frame.indices.clear();indexBytes=0;break;
+  case 39:frame.verts.clear();frame.indices.clear();vertexBytes=0;break;
   default:break;
   }
   uint64_t vertexEnd=limits.residentVertex+frame.verts.size(),indexEnd=limits.residentIndex+frame.indices.size();
@@ -124,8 +129,174 @@ static void inline_mapping_contract(gfx::detail::FramePacket& frame){
  }
  frame.verts=std::move(savedVerts);frame.indices=std::move(savedIndices);limits=savedLimits;
  frame.renderPasses.clear();frame.uniforms.clear();frame.storage.clear();
- std::printf("INLINE_MAP_CONTRACT cases=35 successes=%u failures=%u atomic_failure=1 frame_slot_owned=1 no_reallocation=1\n",successes,failures);
+ std::printf("INLINE_MAP_CONTRACT cases=40 successes=%u failures=%u atomic_failure=1 frame_slot_owned=1 no_reallocation=1\n",successes,failures);
 }
+// Exercise the production vertex mapper independently of index storage.
+static void vertex_mapping_contract(gfx::detail::FramePacket& frame){
+ auto savedVerts=std::move(frame.verts),savedIndices=std::move(frame.indices);
+ const auto savedLimits=gfx::frame_buffer_sizes();
+ auto& limits=const_cast<gfx::FrameBufferSizes&>(gfx::frame_buffer_sizes());
+ unsigned successes=0,failures=0;
+ for(unsigned kind=0;kind<28;++kind){
+  tiny_state();
+  std::array<uint8_t,192> vertices,indices;vertices.fill(0xa5);indices.fill(0x5a);
+  limits=savedLimits;limits.maxVertex=limits.deviceVertex=128;limits.residentVertex=0;
+  frame.verts=ByteBuffer{vertices.data()+32,128};frame.indices=ByteBuffer{indices.data()+32,128};
+  frame.verts.append_zeroes(16);frame.indices.append_zeroes(8);
+  frame.uniforms.clear();frame.storage.clear();frame.renderPasses.clear();
+  frame.spillVerts={};frame.spillIndices={};frame.spillUniforms={};frame.spillStorage={};
+  const bool active=kind!=18;if(active)gfx::detail::begin_recording(frame,0);
+  size_t length=32;
+  bool expected=kind==0||kind==1||kind==14||kind==15||kind==17||kind==19||kind==20||kind==21||kind==22||kind==24||kind==25||kind==26;
+  switch(kind){
+  case 1:limits.residentVertex=4096;break;
+  case 3:length=113;break;
+  case 4:frame.spillVerts.data=std::make_unique<uint8_t[]>(1);frame.spillVerts.capacity=frame.spillVerts.length=1;break;
+  case 5:limits.maxVertex=47;break;
+  case 6:limits.deviceVertex=47;break;
+  case 7:frame.verts=ByteBuffer{vertices.data()+32,47};frame.verts.append_zeroes(16);break;
+  case 8:frame.verts.fill_to_capacity();break;
+  case 9:limits.maxVertex=15;break;
+  case 10:limits.deviceVertex=15;break;
+  case 11:frame.verts=ByteBuffer{nullptr,128};break;
+  case 13:limits.residentVertex=uint64_t(UINT32_MAX)-16;break;
+  case 14:limits.residentVertex=uint64_t(UINT32_MAX)-16-32;break;
+  case 15:limits.maxVertex=limits.deviceVertex=48;break;
+  case 16:length=SIZE_MAX;break;
+  case 17:length=0;break;
+  case 19:frame.spillIndices.data=std::make_unique<uint8_t[]>(1);frame.spillIndices.capacity=frame.spillIndices.length=1;break;
+  case 20:frame.indices=ByteBuffer{nullptr,128};break;
+  case 21:frame.indices=ByteBuffer{indices.data()+32,0};break;
+  case 22:limits.maxIndex=limits.deviceIndex=0;break;
+  case 23:limits.residentVertex=4096;break;
+  case 24:length=112;break;
+  case 25:frame.verts.fill_to_capacity();length=0;break;
+  case 26:frame.verts.clear();length=0;break;
+  case 27:frame.verts=ByteBuffer{nullptr,128};length=0;break;
+  default:break;
+  }
+  uint64_t expectedEnd=limits.residentVertex+frame.verts.size();
+  if(kind==2)++expectedEnd;if(kind==12)expectedEnd=uint64_t(UINT32_MAX)+1;
+  if(kind==23)expectedEnd=frame.verts.size();
+  const auto vertexBefore=vertices,indexBefore=indices;
+  auto* vertexBacking=frame.verts.data();auto* indexBacking=frame.indices.data();
+  const auto vertexUsed=frame.verts.size(),indexUsed=frame.indices.size();
+  const auto vertexCapacity=frame.verts.capacity(),indexCapacity=frame.indices.capacity();
+  const auto vertexSpillLength=frame.spillVerts.length,indexSpillLength=frame.spillIndices.length;
+  auto* vertexSpill=frame.spillVerts.data.get();auto* indexSpill=frame.spillIndices.data.get();
+  uint8_t* output=reinterpret_cast<uint8_t*>(uintptr_t(1));gfx::Range range{91,92};
+  const bool mapped=gfx::map_inline_vertices(expectedEnd,length,output,range);
+  if(mapped!=expected)std::fprintf(stderr,"vertex mapping case=%u expected=%d actual=%d\n",kind,expected,mapped);
+  assert(mapped==expected);
+  assert(frame.verts.data()==vertexBacking&&frame.indices.data()==indexBacking);
+  assert(frame.verts.capacity()==vertexCapacity&&frame.indices.capacity()==indexCapacity);
+  assert(frame.spillVerts.length==vertexSpillLength&&frame.spillIndices.length==indexSpillLength);
+  assert(frame.spillVerts.data.get()==vertexSpill&&frame.spillIndices.data.get()==indexSpill);
+  assert(vertices==vertexBefore&&indices==indexBefore);
+  assert(frame.indices.size()==indexUsed);
+  if(!mapped){
+   assert(output==nullptr&&range.offset==0&&range.size==0&&frame.verts.size()==vertexUsed);++failures;
+  }else{
+   assert(output==vertexBacking+vertexUsed&&range.offset==expectedEnd&&range.size==length);
+   assert(frame.verts.size()==vertexUsed+length);
+   std::memset(output,0xc3,length);
+   for(size_t n=0;n<vertices.size();++n)assert(vertices[n]==(n>=32+vertexUsed&&n<32+vertexUsed+length?0xc3:vertexBefore[n]));
+   assert(indices==indexBefore);++successes;
+  }
+  if(active){gfx::finish();gfx::detail::end_recording();gfx::detail::recycle_frame_commands(frame,0);}
+  output=vertices.data();range={1,2};
+  assert(!gfx::map_inline_vertices(0,1,output,range));
+  assert(output==nullptr&&range.offset==0&&range.size==0);
+  frame.spillVerts={};frame.spillIndices={};frame.spillUniforms={};frame.spillStorage={};
+ }
+ frame.verts=std::move(savedVerts);frame.indices=std::move(savedIndices);limits=savedLimits;
+ frame.renderPasses.clear();frame.uniforms.clear();frame.storage.clear();
+ std::printf("VERTEX_MAP_CONTRACT cases=28 successes=%u failures=%u transactional=1 frame_slot_owned=1 no_reallocation=1 index_unchanged=1\n",successes,failures);
+}
+
+#ifdef GX_PRIMITIVE_BATCH_SCAN_TESTS
+namespace aurora::gx::fifo {
+extern uint64_t testTriangleVisits,testTriangleMaps;
+bool test_try_batch_triangles(GXVtxFmt,u16,u32,ByteReader&,DrawData*) noexcept;
+}
+
+static void triangle_scan_contract(gfx::detail::FramePacket& frame){
+ auto savedVerts=std::move(frame.verts),savedIndices=std::move(frame.indices);
+ const auto savedLimits=gfx::frame_buffer_sizes();auto& limits=const_cast<gfx::FrameBufferSizes&>(gfx::frame_buffer_sizes());
+ const bool enabled=env_flag("MP_GX_PRIMITIVE_BATCH",true)&&env_flag("MP_GX_TRIANGLE_BATCH",true);
+ unsigned successes=0,failures=0,zeroScans=0;uint64_t visits=0,maps=0;
+ for(unsigned kind=0;kind<15;++kind){
+  tiny_state();gx::testing::set_vertex_array_check(false);
+  std::array<uint8_t,640> vertexBytes,indexBytes;vertexBytes.fill(0xa5);indexBytes.fill(0x5a);
+  limits=savedLimits;limits.maxVertex=limits.deviceVertex=512;limits.residentVertex=0;
+  frame.verts=ByteBuffer{vertexBytes.data()+32,512};frame.indices=ByteBuffer{indexBytes.data()+32,512};
+  frame.verts.append_zeroes(64);frame.indices.append_zeroes(32);
+  frame.renderPasses.clear();frame.uniforms.clear();frame.storage.clear();
+  frame.spillVerts={};frame.spillIndices={};frame.spillStorage={};frame.spillUniforms={};
+  const bool active=kind!=14;if(active)gfx::detail::begin_recording(frame,0);
+  gx::DrawData draw{};draw.vertRange={16,48};draw.vtxCount=6;draw.instanceCount=1;
+  switch(kind){
+  case 0:frame.spillVerts.data=std::make_unique<uint8_t[]>(1);frame.spillVerts.capacity=frame.spillVerts.length=1;break;
+  case 1:frame.verts=ByteBuffer{vertexBytes.data()+32,64};frame.verts.fill_to_capacity();break;
+  case 2:limits.deviceVertex=64;break;
+  case 3:limits.maxVertex=64;break;
+  case 4:(void)frame.verts.append_uninit(1);break;
+  case 5:frame.verts=ByteBuffer{nullptr,512};draw.vertRange={0,0};break;
+  case 6:draw.vertRange={UINT32_MAX,1};break;
+  case 7:limits.residentVertex=1024;draw.vertRange.offset+=1024;break;
+  case 8:frame.spillIndices.data=std::make_unique<uint8_t[]>(1);frame.spillIndices.capacity=frame.spillIndices.length=1;break;
+  case 9:frame.indices=ByteBuffer{nullptr,0};break;
+  case 10:limits.deviceIndex=limits.maxIndex=0;break;
+  case 11:limits.deviceVertex=160;break;
+  case 12:limits.deviceVertex=112;break;
+  case 13:limits.deviceVertex=111;break;
+  default:break;
+  }
+  std::vector<u8> commands;for(unsigned n=0;n<3;++n){
+   if(n){commands.push_back(GX_TRIANGLES);be(commands,6,2);}
+   for(unsigned byte=0;byte<48;++byte)commands.push_back(u8(n*17+byte));
+  }
+  ByteReader reader{commands.data(),commands.size()};
+  const auto vBefore=vertexBytes,iBefore=indexBytes;
+  auto* vPointer=frame.verts.data();auto* iPointer=frame.indices.data();
+  const auto vCapacity=frame.verts.capacity(),iCapacity=frame.indices.capacity();
+  const auto vUsed=frame.verts.size(),iUsed=frame.indices.size();
+  const auto drawBefore=draw;
+  gx::fifo::testTriangleVisits=gx::fifo::testTriangleMaps=0;
+  const bool result=gx::fifo::test_try_batch_triangles(GX_VTXFMT0,6,8,reader,&draw);
+  const bool expected=enabled&&(kind>=7&&kind<=11);
+  assert(result==expected);
+  const unsigned accepted=kind==11?2:3;
+  const unsigned expectedVisits=!enabled||kind<=6||kind==14?0:kind==12?2:kind==13?1:3;
+  assert(gx::fifo::testTriangleVisits<=expectedVisits);
+  assert(gx::fifo::testTriangleMaps==(expected?1:0));
+  if(!expectedVisits)++zeroScans;
+  visits+=gx::fifo::testTriangleVisits;maps+=gx::fifo::testTriangleMaps;
+  assert(frame.verts.data()==vPointer&&frame.indices.data()==iPointer);
+  assert(frame.verts.capacity()==vCapacity&&frame.indices.capacity()==iCapacity);
+  assert(frame.indices.size()==iUsed&&indexBytes==iBefore);
+  assert(draw.vertRange.offset==drawBefore.vertRange.offset&&draw.indexCount==0&&draw.idxRange.size==0);
+  if(!result){
+   assert(reader.offset()==0&&frame.verts.size()==vUsed&&vertexBytes==vBefore);
+   assert(draw.vertRange.size==drawBefore.vertRange.size&&draw.vtxCount==drawBefore.vtxCount);++failures;
+  }else{
+   assert(reader.offset()==accepted*48+(accepted-1)*3);
+   assert(frame.verts.size()==vUsed+accepted*48&&draw.vertRange.size==drawBefore.vertRange.size+accepted*48);
+   assert(draw.vtxCount==drawBefore.vtxCount+accepted*6);
+   size_t at=0;for(unsigned n=0;n<accepted;++n){if(n)at+=3;assert(!std::memcmp(vPointer+vUsed+n*48,commands.data()+at,48));at+=48;}
+   for(size_t n=0;n<vertexBytes.size();++n)if(n<32+vUsed||n>=32+vUsed+accepted*48)assert(vertexBytes[n]==vBefore[n]);
+   ++successes;
+  }
+  if(active){gfx::finish();gfx::detail::end_recording();gfx::detail::recycle_frame_commands(frame,0);}
+  frame.spillVerts={};frame.spillIndices={};frame.spillStorage={};frame.spillUniforms={};
+ }
+ frame.verts=std::move(savedVerts);frame.indices=std::move(savedIndices);limits=savedLimits;
+ frame.renderPasses.clear();frame.uniforms.clear();frame.storage.clear();
+ std::printf("TRIANGLE_SCAN_CONTRACT cases=15 enabled=%d successes=%u failures=%u zero_scan_cases=%u loop_visits=%llu maps=%llu bounded_fallback=1\n",enabled,successes,failures,zeroScans,(unsigned long long)visits,(unsigned long long)maps);
+}
+
+#endif
+
 int main(){
  webgpu::g_graphicsConfig.surfaceConfiguration.format=wgpu::TextureFormat::RGBA8Unorm;
  webgpu::g_graphicsConfig.depthFormat=wgpu::TextureFormat::Depth24Plus;
@@ -142,10 +313,17 @@ int main(){
  }
  gfx::detail::testing::StagingPool staging;gfx::detail::FramePacket frame;staging.attach(frame);
  inline_mapping_contract(frame);
+ vertex_mapping_contract(frame);
+#ifdef GX_PRIMITIVE_BATCH_SCAN_TESTS
+ triangle_scan_contract(frame);
+#endif
  if(const char* malformed=getenv("GX_TINY_MALFORMED")){
   tiny_state();gfx::detail::begin_recording(frame,0);std::vector<u8> bad;
-  for(unsigned n=0;n<2;++n){bad.push_back(GX_TRIANGLESTRIP);be(bad,6,2);for(unsigned i=0;i<48;++i)bad.push_back(0);}
-  bad.push_back(GX_TRIANGLESTRIP);bad.push_back(0);
+  const GXPrimitive badPrimitive=env_flag("GX_TINY_MALFORMED_TRIANGLES")?GX_TRIANGLES:GX_TRIANGLESTRIP;
+  const char* prefixSetting=getenv("GX_TINY_MALFORMED_PREFIX");
+  const unsigned prefix=prefixSetting?std::strtoul(prefixSetting,nullptr,10):3;
+  for(unsigned n=0;n<prefix;++n){bad.push_back(badPrimitive);be(bad,6,2);for(unsigned i=0;i<48;++i)bad.push_back(0);}
+  bad.push_back(badPrimitive);bad.push_back(0);
   if(!std::strcmp(malformed,"payload")){bad.push_back(100);bad.push_back(0);}
   gx::fifo::process(bad.data(),bad.size());std::fprintf(stderr,"MALFORMED_ACCEPTED\n");return 2;
  }
@@ -188,7 +366,7 @@ int main(){
  }
 
  const auto savedLimits=gfx::frame_buffer_sizes();
- for(unsigned kind=0;kind<22;++kind){
+ for(unsigned kind=0;kind<25;++kind){
   auto savedVerts=std::move(frame.verts),savedIndices=std::move(frame.indices);
   std::array<uint8_t,128> tinyVertex{},tinyIndex{};
   auto& limits=const_cast<gfx::FrameBufferSizes&>(gfx::frame_buffer_sizes());limits=savedLimits;
@@ -196,6 +374,12 @@ int main(){
   if(kind==11)frame.indices=ByteBuffer{tinyIndex.data(),tinyIndex.size()};else frame.indices=std::move(savedIndices);
   if(kind==12)limits.maxVertex=386;
   if(kind==13)limits.maxIndex=98;
+  if(kind==22){limits.residentVertex=4096;limits.residentIndex=8192;}
+  // This CPU fixture has no device for grow_frame_buffer: exhaust both the
+  // committed extent and allocation limit to exercise the existing drop path.
+  // The direct mapper/scan contracts independently test device-only bounds.
+  if(kind==23)limits.maxVertex=limits.deviceVertex=386;
+  if(kind==24)limits.maxIndex=limits.deviceIndex=98;
   tiny_state();gx::g_gxState.vtxFmts[1]=gx::g_gxState.vtxFmts[0];
   if(kind==19)gx::g_gxState.shadowCasterOnly=true;
   if(kind==20){gx::g_gxState.depthPrepass=1;gx::g_gxState.depthCompare=false;}
@@ -216,7 +400,7 @@ int main(){
    if(kind==4&&n%2==0){auroraCommand(commands,GX_AURORA_PORT_DRAW_SERIAL);be(commands,n+2,4);}
    if(kind==8&&n%2==0){auroraCommand(commands,GX_AURORA_LOAD_VIEWPORT_RENDER);for(float value:{0.f,0.f,float(1917+n),1080.f,0.f,1.f})be(commands,std::bit_cast<u32>(value),4);}
    if(kind==9&&n%2==0){auroraCommand(commands,GX_AURORA_LOAD_COPY_SRC);for(u32 value:{n,0u,128u,128u})be(commands,value,4);}
-   GXPrimitive primitive=GX_TRIANGLESTRIP;
+   GXPrimitive primitive=env_flag("GX_TINY_TRIANGLE_CASES")?GX_TRIANGLES:GX_TRIANGLESTRIP;
    if(kind==5||kind==18){constexpr GXPrimitive types[]={GX_TRIANGLESTRIP,GX_TRIANGLEFAN,GX_TRIANGLES,GX_QUADS};primitive=types[(n/4)%4];}
    const GXVtxFmt fmt=(kind==7||kind==18)&&n%2?GX_VTXFMT1:GX_VTXFMT0;
    unsigned vertices=kind==1?n%13:6;
