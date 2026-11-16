@@ -12,6 +12,23 @@ index 4a588938..8f99d55a 100644
  if(IOS)
      # platform/port_ios.mm. Enabled here: enabled where the target is made, it
      # comes after the subdirectories and leaves CMake without its compile rules.
+diff --git a/docs/SETTINGS.md b/docs/SETTINGS.md
+index 6f586088..0bd8efdf 100644
+--- a/docs/SETTINGS.md
++++ b/docs/SETTINGS.md
+@@ -1397,7 +1397,11 @@ other `X:\Users\<name>`: `X:\Users\<user>`); the
+   proportions and spread across a wide viewport instead of stretching.
+ - The front end (`FRME_FrontEndPL` title/menu, `FRME_NewFileSelect`, the GBA
+   screens) is aspect-matched too, so the title screen is pillarboxed rather than
+-  stretched.
++  stretched. On PS4, the original title/file-select movies instead fill a 16:9
++  screen by removing their baked cinema bars; the native menu camera follows
++  the same uniform zoom. Other movie dimensions and GBA pages keep their own
++  framing. `MP_FRONTEND_FULLSCREEN=0` restores the original framing, and
++  `MP_FRONTEND_FILTER=0` restores nearest video sampling (PS4 uses bilinear).
+ - The mouse cursor is hidden while the game has focus and is shown only over the
+   F1 overlay. The overlay is also openable and navigable with a controller: the
+   Start+Back chord toggles it (Start is suppressed for the game while Back is
 diff --git a/extern/aurora/cmake/AuroraDawnProvider.cmake b/extern/aurora/cmake/AuroraDawnProvider.cmake
 index a9e25d74..4dfee2d7 100644
 --- a/extern/aurora/cmake/AuroraDawnProvider.cmake
@@ -827,42 +844,83 @@ index 00000000..03871f26
 +};
 +} // namespace aurora::gfx::detail
 diff --git a/extern/aurora/lib/gfx/encoding.cpp b/extern/aurora/lib/gfx/encoding.cpp
-index 3c844ae9..cd5b56ca 100644
+index 3c844ae9..5126ed39 100644
 --- a/extern/aurora/lib/gfx/encoding.cpp
 +++ b/extern/aurora/lib/gfx/encoding.cpp
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
 +#include <aurora/frame_trace.hpp>
  #include "encoding.hpp"
 +#include "encoding_state.hpp"
++#include "pass_lookup_memo.hpp"
  #include "overdraw.hpp"
  #include "vis_query.hpp"
  
-@@ -38,6 +40,8 @@ namespace {
+@@ -38,6 +41,35 @@ namespace {
  constexpr Module Log{"aurora::gfx"};
  PipelineRef g_currentPipeline;
  BindGroupRef g_currentTextureGroup;
 +GXEncodingState g_gxEncodingState;
 +uint64_t g_gxEncodingCounts[5]{}; // draws, uniform binds/reuses, index binds/reuses
++
++struct PassObjectLookups {
++  PassLookupMemo<PipelineRef, wgpu::RenderPipeline> pipelines;
++  PassLookupMemo<BindGroupRef, wgpu::BindGroup> textureGroups;
++  void clear() {
++    pipelines.clear();
++    textureGroups.clear();
++  }
++};
++PassObjectLookups* g_passObjectLookups = nullptr;
++class ScopedPassObjectLookups {
++  PassObjectLookups m_lookups;
++  PassObjectLookups* m_previous;
++public:
++  ScopedPassObjectLookups() : m_previous(std::exchange(g_passObjectLookups, &m_lookups)) {}
++  ~ScopedPassObjectLookups() { g_passObjectLookups = m_previous; }
++  ScopedPassObjectLookups(const ScopedPassObjectLookups&) = delete;
++  ScopedPassObjectLookups& operator=(const ScopedPassObjectLookups&) = delete;
++};
++class ScopedPassObjectLookupPause {
++  PassObjectLookups* m_previous = std::exchange(g_passObjectLookups, nullptr);
++public:
++  ScopedPassObjectLookupPause() = default;
++  ScopedPassObjectLookupPause(const ScopedPassObjectLookupPause&) = delete;
++  ScopedPassObjectLookupPause& operator=(const ScopedPassObjectLookupPause&) = delete;
++  ~ScopedPassObjectLookupPause() { g_passObjectLookups = m_previous; }
++};
  
  void apply_viewport(const wgpu::RenderPassEncoder& pass, const Viewport& vp) {
    const float minDepth = gx::UseReversedZ ? 1.f - vp.zfar : vp.znear;
-@@ -113,6 +117,7 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
+@@ -112,7 +144,11 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
+ 
  void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, RenderPass& passInfo) {
    ZoneScoped;
++  // Strong lookup references live only for this pass. The Dawn command stream
++  // independently owns every object it records after these lookups return.
++  ScopedPassObjectLookups passObjectLookups;
    g_currentPipeline = UINTPTR_MAX;
 +  g_gxEncodingState.reset();
  #ifdef AURORA_GFX_DEBUG_GROUPS
    std::vector<std::string> lastDebugGroupStack;
  #endif
-@@ -167,6 +172,7 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
+@@ -165,8 +201,15 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
+       }
+     } break;
      case CommandType::CustomDraw: {
-       render_custom_draw(cmd.data.customDraw, pass, passInfo);
+-      render_custom_draw(cmd.data.customDraw, pass, passInfo);
++      {
++        ScopedPassObjectLookupPause pause;
++        render_custom_draw(cmd.data.customDraw, pass, passInfo);
++      }
++      // Callbacks may clear/rebuild the underlying caches. Resolve subsequent
++      // recorded IDs again instead of retaining stale lookup state.
++      g_passObjectLookups->clear();
        g_currentPipeline = UINTPTR_MAX;
 +      g_gxEncodingState.reset();
        pass.SetBindGroup(0, resources().staticBindGroup);
        pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
        g_currentTextureGroup = 0;
-@@ -536,7 +542,11 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
+@@ -536,7 +579,11 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
  
  namespace detail {
  void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op) {
@@ -875,8 +933,68 @@ index 3c844ae9..cd5b56ca 100644
    switch (op.type) {
    case FrameOpType::RenderPass:
      if (op.renderPass != nullptr) {
-@@ -581,4 +591,41 @@ void bind_texture_group(BindGroupRef ref, const wgpu::RenderPassEncoder& pass) {
+@@ -558,27 +605,91 @@ void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op)
  }
+ } // namespace detail
+ 
+-bool bind_pipeline(PipelineRef ref, const wgpu::RenderPassEncoder& pass) {
+-  if (ref == g_currentPipeline) {
+-    return true;
++namespace {
++// Keep lookup ownership and memo bookkeeping out of the already-bound path.
++[[gnu::noinline]] bool bind_changed_pipeline(PipelineRef ref, const wgpu::RenderPassEncoder& pass) {
++  wgpu::RenderPipeline uncached;
++  const wgpu::RenderPipeline* pipeline = &uncached;
++  if (g_passObjectLookups != nullptr) {
++    pipeline = g_passObjectLookups->pipelines.find(ref, uncached, [&](wgpu::RenderPipeline& value) {
++      return get_pipeline(ref, value);
++    });
++  } else if (!get_pipeline(ref, uncached)) {
++    pipeline = nullptr;
+   }
+-  wgpu::RenderPipeline pipeline;
+-  if (!get_pipeline(ref, pipeline)) {
++  if (pipeline == nullptr) {
+     note_skipped_draw();
+     return false;
+   }
+-  pass.SetPipeline(pipeline);
++  pass.SetPipeline(*pipeline);
+   g_currentPipeline = ref;
+   return true;
+ }
+ 
+-void bind_texture_group(BindGroupRef ref, const wgpu::RenderPassEncoder& pass) {
+-  if (ref == g_currentTextureGroup) {
+-    return;
++[[gnu::noinline]] void bind_changed_texture_group(BindGroupRef ref, const wgpu::RenderPassEncoder& pass) {
++  if (g_passObjectLookups != nullptr) {
++    wgpu::BindGroup uncached;
++    const auto* group = g_passObjectLookups->textureGroups.find(ref, uncached, [&](wgpu::BindGroup& value) {
++      value = find_bind_group(ref);
++      return true;
++    });
++    pass.SetBindGroup(2, *group);
++  } else {
++    pass.SetBindGroup(2, find_bind_group(ref));
+   }
+-  pass.SetBindGroup(2, find_bind_group(ref));
+   g_currentTextureGroup = ref;
+ }
++} // namespace
++
++bool bind_pipeline(PipelineRef ref, const wgpu::RenderPassEncoder& pass) {
++  if (ref == g_currentPipeline) {
++    return true;
++  }
++  return bind_changed_pipeline(ref, pass);
++}
++
++void bind_texture_group(BindGroupRef ref, const wgpu::RenderPassEncoder& pass) {
++  if (ref != g_currentTextureGroup) {
++    bind_changed_texture_group(ref, pass);
++  }
++}
  
  void forget_texture_group() { g_currentTextureGroup = 0; }
 +
@@ -1117,6 +1235,74 @@ index 24e4dfc8..7248a6f8 100644
    uint32_t frameIndex = 0;
    size_t stagingBuffer = 0;
    StagingHighWater copied;
+diff --git a/extern/aurora/lib/gfx/pass_lookup_memo.hpp b/extern/aurora/lib/gfx/pass_lookup_memo.hpp
+new file mode 100644
+index 00000000..3bcd3d2b
+--- /dev/null
++++ b/extern/aurora/lib/gfx/pass_lookup_memo.hpp
+@@ -0,0 +1,62 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <utility>
++
++namespace aurora::gfx::detail {
++// A render-pass lookup memo, not a resource cache. Own each resolved object until
++// the pass ends, and discard the table after custom callbacks. Producer-side
++// cache lookup/touch functions still stamp every recorded resource normally.
++// Failed resolutions are never stored, so an async pipeline can appear later
++// in the same pass. Collisions replace one owning reference; encoded commands
++// retain their own references independently.
++template <typename Key, typename Object, size_t Capacity = 64>
++class PassLookupMemo {
++  static_assert(Capacity != 0 && (Capacity & (Capacity - 1)) == 0);
++  struct Entry {
++    Key key{};
++    Object object;
++  };
++  std::array<Entry, Capacity> m_entries{};
++  uint32_t m_hits = 0;
++  uint32_t m_misses = 0;
++  bool m_bypass = false;
++
++public:
++  template <typename Resolve>
++  const Object* find(Key key, Object& uncached, Resolve&& resolve) {
++    // A working set that repeatedly collides should fall back to the original
++    // lookup cost for this pass. The caller owns the fallback just as before.
++    if (m_bypass) {
++      return resolve(uncached) ? &uncached : nullptr;
++    }
++    const auto bits = static_cast<uint64_t>(key);
++    Entry& entry = m_entries[(bits ^ (bits >> 32)) & (Capacity - 1)];
++    if (entry.object && entry.key == key) {
++      ++m_hits;
++      return &entry.object;
++    }
++    if (!resolve(uncached)) {
++      return nullptr;
++    }
++    if (++m_misses >= Capacity * 2 && m_hits < m_misses / 4) {
++      m_bypass = true;
++      return &uncached;
++    }
++    entry.object = std::move(uncached);
++    entry.key = key;
++    return &entry.object;
++  }
++
++  void clear() {
++    m_hits = m_misses = 0;
++    m_bypass = false;
++    for (auto& entry : m_entries) {
++      entry.object = nullptr;
++    }
++  }
++};
++} // namespace aurora::gfx::detail
 diff --git a/extern/aurora/lib/gfx/pipeline_cache.cpp b/extern/aurora/lib/gfx/pipeline_cache.cpp
 index a24a9371..f875b8bc 100644
 --- a/extern/aurora/lib/gfx/pipeline_cache.cpp
@@ -1339,7 +1525,7 @@ index 00000000..fc523f89
 +};
 +} // namespace aurora::gfx
 diff --git a/extern/aurora/lib/gfx/recording.cpp b/extern/aurora/lib/gfx/recording.cpp
-index 06ce09d1..e8cc25db 100644
+index 06ce09d1..536afbac 100644
 --- a/extern/aurora/lib/gfx/recording.cpp
 +++ b/extern/aurora/lib/gfx/recording.cpp
 @@ -1,4 +1,6 @@
@@ -1475,7 +1661,18 @@ index 06ce09d1..e8cc25db 100644
    for (auto& pool : g_passSnapshotPools) {
      pool = {};
    }
-@@ -1041,7 +1105,7 @@ void begin_color_pass(const ColorPassDescriptor& desc) {
+@@ -898,6 +962,10 @@ void seed_offscreen_cache(uint32_t width, uint32_t height, wgpu::TextureFormat c
+ 
+ } // namespace testing
+ 
++void add_merged_draw_count(uint32_t amount) noexcept {
++  if (g_recorder.active()) g_recorder.mergedDrawCallCount += amount;
++}
++
+ void increment_merged_draw_count() noexcept {
+   if (g_recorder.active()) {
+     ++g_recorder.mergedDrawCallCount;
+@@ -1041,7 +1109,7 @@ void begin_color_pass(const ColorPassDescriptor& desc) {
    color.loadOp = desc.colorLoadOp;
    color.storeOp = desc.colorStoreOp;
    color.clear = desc.colorLoadOp == wgpu::LoadOp::Clear;
@@ -1484,7 +1681,7 @@ index 06ce09d1..e8cc25db 100644
    frame.renderPasses.emplace_back(std::move(pass));
    g_recorder.currentRenderPass = static_cast<uint32_t>(frame.renderPasses.size() - 1);
  
-@@ -1198,7 +1262,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
+@@ -1198,7 +1266,7 @@ void resolve_pass_into(TextureHandle texture, ClipRect rect, bool clearColor, bo
      sceneColor.clear = true;
      sceneColor.clearValue = clearColorValue;
    }
@@ -1493,7 +1690,7 @@ index 06ce09d1..e8cc25db 100644
    current_render_passes().emplace_back(std::move(newPass));
    ++g_recorder.currentRenderPass;
  
-@@ -1673,6 +1737,25 @@ void finish() {
+@@ -1673,6 +1741,45 @@ void finish() {
    }
  }
  
@@ -1516,14 +1713,34 @@ index 06ce09d1..e8cc25db 100644
 +  return vertex != 0 && index != 0;
 +}
 +
++// All validation precedes either cursor update. This maps only existing
++// CPU-owned frame staging; no allocation, spill, device growth or GPU handle.
++bool map_inline_geometry(uint64_t vertexEnd, uint64_t indexEnd, size_t vertexBytes, size_t indexBytes,
++                         uint8_t*& vertices, uint8_t*& indices, Range& vertexRange, Range& indexRange) noexcept {
++  vertices = indices = nullptr;
++  vertexRange = indexRange = {};
++  size_t vertexSpace = 0, indexSpace = 0;
++  if (vertexEnd > UINT32_MAX || indexEnd > UINT32_MAX ||
++      !inline_geometry_headroom(vertexEnd, indexEnd, vertexSpace, indexSpace) ||
++      vertexBytes > vertexSpace || indexBytes > indexSpace ||
++      vertexBytes > UINT32_MAX - vertexEnd || indexBytes > UINT32_MAX - indexEnd) return false;
++  auto& frame = current_frame_packet();
++  if (!frame.verts.data() || !frame.indices.data()) return false;
++  vertices = frame.verts.append_uninit(vertexBytes);
++  indices = frame.indices.append_uninit(indexBytes);
++  vertexRange = {uint32_t(vertexEnd), uint32_t(vertexBytes)};
++  indexRange = {uint32_t(indexEnd), uint32_t(indexBytes)};
++  return true;
++}
++
  Range push_verts(const uint8_t* data, size_t length, size_t alignment) {
    ZoneScoped;
    if (!check_recording("push_verts")) {
 diff --git a/extern/aurora/lib/gfx/recording.hpp b/extern/aurora/lib/gfx/recording.hpp
-index 1c162a55..a1a05a7a 100644
+index 1c162a55..7618029f 100644
 --- a/extern/aurora/lib/gfx/recording.hpp
 +++ b/extern/aurora/lib/gfx/recording.hpp
-@@ -22,6 +22,11 @@ struct RecordedFrame {
+@@ -22,7 +22,13 @@ struct RecordedFrame {
  void begin_recording(FramePacket& packet, size_t frameSlot);
  RecordedFrame end_recording();
  void shutdown_recording();
@@ -1533,9 +1750,11 @@ index 1c162a55..a1a05a7a 100644
 +bool command_storage_reuse_enabled();
 +void recycle_frame_commands(FramePacket& packet, size_t frameSlot);
  void increment_merged_draw_count() noexcept;
++void add_merged_draw_count(uint32_t amount) noexcept;
  
  namespace testing {
-@@ -91,6 +96,12 @@ inline constexpr Range OverflowRange{UINT32_MAX, 0};
+ void suppress_render_worker(bool suppress) noexcept;
+@@ -91,6 +97,17 @@ inline constexpr Range OverflowRange{UINT32_MAX, 0};
  constexpr bool overflowed(const Range& range) noexcept { return range.offset == OverflowRange.offset; }
  
  Range push_verts(const uint8_t* data, size_t length, size_t alignment);
@@ -1545,6 +1764,11 @@ index 1c162a55..a1a05a7a 100644
 +// Does not reserve, grow, synchronize, or inspect replaceable GPU handles.
 +bool inline_geometry_headroom(uint64_t vertexEnd, uint64_t indexEnd,
 +                              size_t& vertexBytes, size_t& indexBytes) noexcept;
++// Reserve both preflighted inline spans atomically on the recording thread.
++// False leaves both cursors unchanged; returned CPU pointers remain frame-slot
++// owned. Never grows, spills or accesses GPU handles.
++bool map_inline_geometry(uint64_t vertexEnd, uint64_t indexEnd, size_t vertexBytes, size_t indexBytes,
++                         uint8_t*& vertices, uint8_t*& indices, Range& vertexRange, Range& indexRange) noexcept;
  template <typename T>
  Range push_verts(ArrayRef<T> data, size_t alignment) {
    return push_verts(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(T), alignment);
@@ -1699,7 +1923,7 @@ index 99029c05..f6644981 100644
  }
  
 diff --git a/extern/aurora/lib/gx/command_processor.cpp b/extern/aurora/lib/gx/command_processor.cpp
-index 7609e30e..64c21d3b 100644
+index 7609e30e..cc0ce525 100644
 --- a/extern/aurora/lib/gx/command_processor.cpp
 +++ b/extern/aurora/lib/gx/command_processor.cpp
 @@ -1,4 +1,5 @@
@@ -1722,7 +1946,31 @@ index 7609e30e..64c21d3b 100644
  #include <bit>
  #include <cmath>
  #include <cstdint>
-@@ -171,6 +174,67 @@ struct DrawCache {
+@@ -99,6 +102,23 @@ u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxC
+   return static_cast<u16>(numIndices);
+ }
+ 
++// Strip winding matches prepare_idx_buffer; caller has preflighted count >= 3
++// and the complete destination span. Emit two triangles per iteration.
++static u16* write_prepared_strip(u16* out, u16 base, u16 count) noexcept {
++  *out++ = base;
++  *out++ = u16(base + 1);
++  *out++ = u16(base + 2);
++  u32 v = 3;
++  for (; v + 1 < count; v += 2) {
++    *out++ = u16(base + v - 1); *out++ = u16(base + v - 2); *out++ = u16(base + v);
++    *out++ = u16(base + v - 1); *out++ = u16(base + v); *out++ = u16(base + v + 1);
++  }
++  if (v < count) {
++    *out++ = u16(base + v - 1); *out++ = u16(base + v - 2); *out++ = u16(base + v);
++  }
++  return out;
++}
++
+ // GX FIFO opcodes - use CP_ prefix to avoid clashing with GXCommandList.h macros
+ constexpr u8 CP_CMD_NOP = GX_NOP;
+ constexpr u8 CP_CMD_LOAD_CP_REG = GX_LOAD_CP_REG;
+@@ -171,6 +191,67 @@ struct DrawCache {
    GXVtxFmt lastDrawFmt = GX_MAX_VTXFMT;
  };
  DrawCache sDrawCache;
@@ -1790,7 +2038,7 @@ index 7609e30e..64c21d3b 100644
  
  // Port (from MP2 653e85a27): a vertex array is copied into a frame's storage once, not once per
  // slot and bind. The game sets a model's arrays again for each of its draws that follows another
-@@ -191,6 +255,10 @@ struct FrameArrayKey {
+@@ -191,6 +272,10 @@ struct FrameArrayKey {
    }
  };
  absl::flat_hash_map<FrameArrayKey, gfx::Range> sFrameArrays;
@@ -1801,7 +2049,7 @@ index 7609e30e..64c21d3b 100644
  // Per attribute: cleared since its last array, so the next one set there is copied afresh.
  bool sArrayFresh[GX_VA_MAX_ATTR] = {};
  
-@@ -203,14 +271,23 @@ bool frame_array_reuse() noexcept {
+@@ -203,14 +288,23 @@ bool frame_array_reuse() noexcept {
  }
  
  // The frame's copy of the array, made now if this frame has none; an overflowed range is not kept.
@@ -1826,7 +2074,7 @@ index 7609e30e..64c21d3b 100644
    if (reuse && range.size != 0 && !gfx::overflowed(range)) {
      sFrameArrays.emplace(FrameArrayKey{data, size}, range);
    }
-@@ -356,6 +433,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
+@@ -356,6 +450,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
      }
  
      case CP_CMD_INVAL_VTX: {
@@ -1835,7 +2083,7 @@ index 7609e30e..64c21d3b 100644
        for (auto& array : g_gxState.arrays) {
          array.cachedRange = {};
        }
-@@ -700,7 +779,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
+@@ -700,7 +796,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
  }
  
  static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange, gfx::Range idxRange,
@@ -1845,7 +2093,7 @@ index 7609e30e..64c21d3b 100644
    auto& state = g_gxState;
    auto& cache = sDrawCache;
    if (drop_overflowed_draw(vertRange, "vertex") || drop_overflowed_draw(idxRange, "index")) {
-@@ -716,7 +796,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -716,7 +813,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
      auto& array = state.arrays[i];
      if (array.cachedRange.size == 0 && !resident::array_range(array.data, array.size, array.cachedRange)) {
@@ -1854,7 +2102,7 @@ index 7609e30e..64c21d3b 100644
        if (drop_overflowed_draw(array.cachedRange, "storage")) {
          array.cachedRange = {};
          return;
-@@ -725,8 +805,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -725,8 +822,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      immediates.arrayStart[i - GX_VA_POS] = array.cachedRange.offset + array.baseIndex * array.stride;
    }
  
@@ -1865,7 +2113,7 @@ index 7609e30e..64c21d3b 100644
                               cache.lineMode == lineMode && cache.config.msaaSamples == gfx::get_sample_count() &&
                               // The pass's target, not only the FIFO's switch: a new frame (reset to LDR),
                               // an offscreen pass or a colour pass must not keep an HDR pipeline, or back.
-@@ -738,8 +819,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -738,8 +836,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
                               (cache.config.shaderConfig.pbr == 0 ||
                                (cache.config.shaderConfig.pbrPlain | cache.config.shaderConfig.pbrNoDebug << 1) ==
                                    pbr_static_flags());
@@ -1887,7 +2135,7 @@ index 7609e30e..64c21d3b 100644
      const auto prevSampledTextures = cache.shaderInfo.sampledTextures;
      const auto prevSampledIndTextures = cache.shaderInfo.sampledIndTextures;
      const bool prevUsesVolFog = cache.shaderInfo.usesVolFog;
-@@ -747,7 +841,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -747,7 +858,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool prevActorDecal = cache.shaderInfo.actorDecal;
      const bool prevUsesShell = cache.shaderInfo.usesShell;
      const bool prevUsesLightmap = cache.shaderInfo.usesLightmap;
@@ -1910,7 +2158,7 @@ index 7609e30e..64c21d3b 100644
      // GX_AURORA_PORT_DEPTH_PREPASS: pass 2 shades an eligible draw where the depth is equal without
      // writing it, yet it casts as the draw it stands for (LEQUAL, writing). Its config can equal a
      // plain EQUAL draw's, which doesn't cast, so it bypasses the memo.
-@@ -761,9 +869,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -761,9 +886,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool blocking = blocking_pipelines();
      const gfx::PipelineRef ref = xxh3_hash(cache.config, static_cast<HashType>(gfx::ShaderType::GX));
      auto memoIt = blocking || prepassShade ? sPipelineMemo.end() : sPipelineMemo.find(ref);
@@ -1922,7 +2170,7 @@ index 7609e30e..64c21d3b 100644
        const auto& memo = memoIt->second;
        cache.shaderInfo = memo.shaderInfo;
        cache.pipelineRef = ref;
-@@ -772,9 +882,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -772,9 +899,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
        cache.cutPipelineRef = memo.cutPipelineRef;
        cache.cutCaster = memo.cutCaster;
      } else {
@@ -1935,7 +2183,7 @@ index 7609e30e..64c21d3b 100644
        // Only an opaque surface that writes depth casts: the shadow map's vertex-only pass can't
        // alpha-test or blend. The game draws most opaque surfaces as a ONE/ZERO blend.
        const auto& sc = cache.config.shaderConfig;
-@@ -796,12 +909,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -796,12 +926,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          return config;
        };
        if (cache.shadowCaster) {
@@ -1952,7 +2200,7 @@ index 7609e30e..64c21d3b 100644
        }
        if (!prepassShade) {
          sPipelineMemo.insert_or_assign(cache.pipelineRef, PipelineMemo{
-@@ -816,9 +933,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -816,9 +950,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      cache.fmt = fmt;
      cache.lineMode = lineMode;
      cache.hasPipeline = true;
@@ -1970,7 +2218,7 @@ index 7609e30e..64c21d3b 100644
      if (!hadPipeline || prevSampledTextures != cache.shaderInfo.sampledTextures ||
          prevSampledIndTextures != cache.shaderInfo.sampledIndTextures ||
          prevUsesVolFog != cache.shaderInfo.usesVolFog || prevUsesLightmap != cache.shaderInfo.usesLightmap ||
-@@ -828,19 +950,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -828,19 +967,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
@@ -1994,7 +2242,7 @@ index 7609e30e..64c21d3b 100644
      cache.bindGeneration = texture::current_bind_generation();
      state.dirty &= ~DirtyTextures;
      // For texture_size_bias uniform
-@@ -849,7 +975,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -849,7 +992,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
@@ -2006,7 +2254,7 @@ index 7609e30e..64c21d3b 100644
    if (!uniformValid) {
      cache.uniformRange = build_uniform(cache.shaderInfo);
      if (drop_overflowed_draw(cache.uniformRange, "uniform")) {
-@@ -872,6 +1002,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -872,6 +1019,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
    }
    immediates.fogRangeBase = cache.fogRange.offset / sizeof(u32);
  
@@ -2014,7 +2262,7 @@ index 7609e30e..64c21d3b 100644
    state.dirty &= ~DirtyImmediates;
  
    uint32_t instanceCount = 1;
-@@ -923,15 +1054,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -923,15 +1071,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          actorConfig.cullMode = GX_CULL_BACK;
        }
        actorConfig.msaaSamples = 1;
@@ -2035,7 +2283,7 @@ index 7609e30e..64c21d3b 100644
    ZoneScoped;
    u32 numIndices = 0;
    gfx::Range idxRange;
-@@ -944,11 +1079,82 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
+@@ -944,11 +1096,84 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
      idxBuf.clear();
    }
  
@@ -2051,8 +2299,8 @@ index 7609e30e..64c21d3b 100644
 +  // any capacity boundary, diagnostic array checking, state change or non-strip.
 +  static const bool primitiveBatch = env_flag("MP_GX_PRIMITIVE_BATCH", true);
 +  if (primitiveBatch && !testing::vertexArrayCheck.load(std::memory_order_relaxed)) {
-+    constexpr size_t VertexScratchBytes = 64 * 1024;
-+    constexpr size_t IndexScratchBytes = 256 * 1024;
++    constexpr size_t MaxBatchVertexBytes = 64 * 1024;
++    constexpr size_t MaxBatchIndexBytes = 256 * 1024;
 +    const uint64_t vertexEnd = uint64_t(lastDraw->vertRange.offset) + lastDraw->vertRange.size;
 +    const uint64_t indexEnd = uint64_t(lastDraw->idxRange.offset) + lastDraw->idxRange.size;
 +    size_t vertexHeadroom = 0, indexHeadroom = 0;
@@ -2066,8 +2314,8 @@ index 7609e30e..64c21d3b 100644
 +      const uint32_t indexBytes = (uint32_t(count) - 2) * 3 * sizeof(uint16_t);
 +      if (indexBytes / sizeof(uint16_t) > UINT16_MAX ||
 +          vertexBytes > reader.size() - pos ||
-+          batchVertexBytes + vertexBytes > VertexScratchBytes ||
-+          batchIndexBytes + indexBytes > IndexScratchBytes ||
++          batchVertexBytes + vertexBytes > MaxBatchVertexBytes ||
++          batchIndexBytes + indexBytes > MaxBatchIndexBytes ||
 +          uint64_t(lastDraw->vtxCount) + batchVertices + count > UINT16_MAX ||
 +          batchVertexBytes + vertexBytes > vertexHeadroom ||
 +          batchIndexBytes + indexBytes > indexHeadroom) break;
@@ -2078,31 +2326,33 @@ index 7609e30e..64c21d3b 100644
 +      pos += 3;
 +    }
 +    if (batchPrims > 1) {
-+      static std::array<uint8_t, VertexScratchBytes> vertices;
-+      alignas(uint16_t) static std::array<uint8_t, IndexScratchBytes> indices;
-+      ByteBuffer idx{indices.data(), indices.size()};
++      uint8_t* vertexOut = nullptr;
++      uint8_t* indexOut = nullptr;
++      gfx::Range batchedVerts{}, batchedIndices{};
++      if (!gfx::map_inline_geometry(vertexEnd, indexEnd, batchVertexBytes, batchIndexBytes,
++                                    vertexOut, indexOut, batchedVerts, batchedIndices)) return false;
++      u16* indexCursor = reinterpret_cast<u16*>(indexOut);
 +      size_t at = reader.offset(), written = 0;
 +      uint32_t precedingVertices = lastDraw->vtxCount;
 +      count = vtxCount;
 +      for (uint32_t i = 0; i < batchPrims; ++i) {
 +        const size_t bytes = size_t(count) * vtxSize;
-+        std::memcpy(vertices.data() + written, reader.data() + at, bytes);
-+        prepare_idx_buffer(idx, prim, uint16_t(precedingVertices), count);
++        std::memcpy(vertexOut + written, reader.data() + at, bytes);
++        indexCursor = write_prepared_strip(indexCursor, u16(precedingVertices), count);
 +        precedingVertices += count; written += bytes; at += bytes;
 +        if (i + 1 != batchPrims) {
 +          count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2];
 +          at += 3;
 +        }
 +      }
-+      const auto batchedVerts = gfx::push_verts(vertices.data(), batchVertexBytes, 0);
-+      const auto batchedIndices = gfx::push_indices(indices.data(), batchIndexBytes, 0);
++      CHECK(size_t(reinterpret_cast<u8*>(indexCursor) - indexOut) == batchIndexBytes, "batch index length");
 +      CHECK(!gfx::overflowed(batchedVerts) && !gfx::overflowed(batchedIndices), "inline batch reservation failed");
 +      CHECK(vertexEnd == batchedVerts.offset && indexEnd == batchedIndices.offset, "non-contiguous inline batch");
 +      lastDraw->vertRange.size += batchVertexBytes;
 +      lastDraw->idxRange.size += batchIndexBytes;
 +      lastDraw->vtxCount += batchVertices;
 +      lastDraw->indexCount += batchIndexBytes / sizeof(uint16_t);
-+      for (uint32_t i = 0; i < batchPrims; ++i) gfx::detail::increment_merged_draw_count();
++      gfx::detail::add_merged_draw_count(batchPrims);
 +      ++sPrimitiveBatchGroups;
 +      sPrimitiveBatchPrimitives += batchPrims;
 +      reader.skip(at - reader.offset());
@@ -2119,7 +2369,7 @@ index 7609e30e..64c21d3b 100644
    u32 vtxSize;
    if (g_gxState.lastVtxFmt == fmt)
      LIKELY { vtxSize = g_gxState.lastVtxSize; }
-@@ -982,6 +1188,12 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -982,6 +1207,12 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
    auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
    const bool canMerge = lastDraw != nullptr && lastDraw->instanceCount == 1;
  
@@ -2132,7 +2382,7 @@ index 7609e30e..64c21d3b 100644
    // Push raw vertex data to buffer. Merged draws must remain contiguous with the previous range.
    const auto vertexData = reader.take(totalVtxBytes);
    gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), canMerge ? 0 : 4);
-@@ -1026,10 +1238,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -1026,10 +1257,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
      lastDraw->vtxCount += vtxCount;
      lastDraw->indexCount += numIndices;
      gfx::detail::increment_merged_draw_count();
@@ -2145,7 +2395,7 @@ index 7609e30e..64c21d3b 100644
  }
  
  // How many indices prepare_idx_buffer makes of a draw, or 0 for one it cannot make into
-@@ -1151,6 +1364,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1151,6 +1383,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      return;
    }
    for (const resident::Chunk& chunk : entry->chunks) {
@@ -2153,7 +2403,7 @@ index 7609e30e..64c21d3b 100644
      const gfx::Range vertRange{entry->vert.offset + chunk.vertOffset, chunk.vertSize};
      const gfx::Range idxRange{entry->idx.offset + chunk.idxOffset, chunk.idxCount * u32(sizeof(u16))};
      // The same vertices as they are in the list's bytes, which is what the array check reads.
-@@ -1158,7 +1372,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1158,7 +1391,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      if (check_indexed_arrays(vtxData, chunk.fmt, GX_TRIANGLES, chunk.vtxCount, current_vtx_size(chunk.fmt))) UNLIKELY {
        continue;
      }
@@ -2162,7 +2412,7 @@ index 7609e30e..64c21d3b 100644
    }
    // The next draw must not merge into these: its vertices are not after them.
    sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
-@@ -1209,12 +1423,28 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1209,12 +1442,28 @@ void handle_aurora(ByteReader& reader) noexcept {
      g_gxState.dirty |= DirtyUniform;
    } else if (subCmd >= GX_AURORA_LOAD_ARRAYBASE && subCmd <= (GX_AURORA_LOAD_ARRAYBASE | 0x0f)) {
      const u32 attrIdx = subCmd - GX_AURORA_LOAD_ARRAYBASE + GX_VA_POS;
@@ -2194,7 +2444,7 @@ index 7609e30e..64c21d3b 100644
      if (array.data != newData || array.size != arraySize || array.le != le) {
        // Only an indexed attribute's array, or TEX7's under pbr (bind_pos_active), is in the
        // pipeline config (a VCD or pbr change dirties it anyway).
-@@ -1226,15 +1456,6 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1226,15 +1475,6 @@ void handle_aurora(ByteReader& reader) noexcept {
          // Endianness is baked into the shader
          g_gxState.dirty |= DirtyPipeline;
        }
@@ -2210,7 +2460,7 @@ index 7609e30e..64c21d3b 100644
        array.data = newData;
        array.size = arraySize;
        array.le = le;
-@@ -1242,23 +1463,25 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1242,23 +1482,25 @@ void handle_aurora(ByteReader& reader) noexcept {
        g_gxState.dirty |= DirtyImmediates;
      }
    } else if (subCmd == GX_AURORA_LOAD_TEXOBJ) {
@@ -2246,7 +2496,7 @@ index 7609e30e..64c21d3b 100644
      if (slot.data != newData || slot.userData != newUserData || slot.mWidth != newWidth || slot.mHeight != newHeight ||
          slot.mFormat != static_cast<u32>(newFormat) || slot.tlut != newTlut || slot.flags != newFlags ||
          slot.texObjId != newTexObjId || slot.texDataVersion != newTexDataVersion) {
-@@ -1376,6 +1599,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1376,6 +1618,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      call_resident_dl(key, size);
    } else if (subCmd == GX_AURORA_DRAW_INDEXED) {
      ZoneScopedN("DRAW_INDEXED");
@@ -2254,7 +2504,7 @@ index 7609e30e..64c21d3b 100644
      const u8 cmd = reader.read<u8>();
      const u16 vtxCount = reader.read<u16>();
      const u32 indexCount = reader.read<u32>();
-@@ -1400,7 +1624,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1400,7 +1643,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      } else {
        const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
        if (indexCount != 0) {
@@ -2263,7 +2513,7 @@ index 7609e30e..64c21d3b 100644
        }
      }
    } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
-@@ -2056,9 +2280,60 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -2056,9 +2299,60 @@ void handle_aurora(ByteReader& reader) noexcept {
    }
  }
  
@@ -2820,7 +3070,7 @@ index 200710be..22682429 100644
        pbrVolFog = true;
      }
 diff --git a/extern/aurora/lib/gx/shader_info.cpp b/extern/aurora/lib/gx/shader_info.cpp
-index 49ecf53f..8a7f896f 100644
+index 49ecf53f..5e0ee7b9 100644
 --- a/extern/aurora/lib/gx/shader_info.cpp
 +++ b/extern/aurora/lib/gx/shader_info.cpp
 @@ -447,16 +447,65 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
@@ -2894,6 +3144,182 @@ index 49ecf53f..8a7f896f 100644
        config.tcgs[i] = {};
      }
      // The texgen matrix comes from the uniform (texcoord_scale[i].z).
+@@ -478,10 +527,9 @@ void pipeline_unused_inputs(ShaderConfig& config) noexcept {
+ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+   buf.reserve_extra(info.uniformSize);
+ 
+-  buf.append<f32>(g_gxState.renderViewport.width);
+-  buf.append<f32>(g_gxState.renderViewport.height);
+-  buf.append<f32>(g_gxState.logicalViewport.width);
+-  buf.append<f32>(g_gxState.logicalViewport.height);
++  const std::array<f32,4> viewport{g_gxState.renderViewport.width,g_gxState.renderViewport.height,
++                                    g_gxState.logicalViewport.width,g_gxState.logicalViewport.height};
++  buf.append(viewport);
+   if (info.lineMode != 0) {
+     if (info.lineMode == 3) { // GX_POINTS
+       buf.append<f32>(static_cast<f32>(g_gxState.pointSize) / 6.f);
+@@ -503,17 +551,17 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+   }
+   buf.append(proj);
+ 
+-  for (int i = 0; i < MaxPnMtx; i++) {
+-    buf.append(g_gxState.pnMtx[i].pos);
+-  }
+-
+-  for (int i = 0; i < MaxTexMtx; i++) {
+-    buf.append(g_gxState.texMtxs[i]);
+-  }
+-
+-  for (int i = 0; i < MaxPnMtx; i++) {
+-    buf.append(g_gxState.pnMtx[i].nrm);
+-  }
++  // Reserve the fixed matrix prefix once. Its wire layout is POS[10],
++  // TEX[10], NRM[10]; the source POS/NRM records remain interleaved.
++  constexpr size_t matrixBytes=sizeof(Mat3x4<float>);
++  static_assert(MaxPnMtx*2+MaxTexMtx==30);
++  static_assert(sizeof(g_gxState.texMtxs)==matrixBytes*MaxTexMtx);
++  auto* matrices=buf.append_uninit(matrixBytes*(MaxPnMtx*2+MaxTexMtx));
++  for (int i=0;i<MaxPnMtx;++i) {
++    std::memcpy(matrices+i*matrixBytes,&g_gxState.pnMtx[i].pos,matrixBytes);
++    std::memcpy(matrices+(MaxPnMtx+MaxTexMtx+i)*matrixBytes,&g_gxState.pnMtx[i].nrm,matrixBytes);
++  }
++  std::memcpy(matrices+MaxPnMtx*matrixBytes,g_gxState.texMtxs.data(),sizeof(g_gxState.texMtxs));
+ 
+   for (int i = 0; i < info.loadsTevReg.size(); ++i) {
+     if (info.loadsTevReg.test(i)) {
+@@ -525,9 +573,9 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+     static_assert(sizeof(g_gxState.lights) == 80 * GX::MaxLights);
+     buf.append(g_gxState.lights);
+     // Light state for all channels
+-    for (int i = 0; i < 4; ++i) {
+-      buf.append<u32>(g_gxState.colorChannelState[i].lightMask.to_ulong());
+-    }
++    std::array<u32,4> lightMasks;
++    for (size_t i=0;i<lightMasks.size();++i) lightMasks[i]=g_gxState.colorChannelState[i].lightMask.to_ulong();
++    buf.append(lightMasks);
+   }
+   for (int i = 0; i < info.sampledColorChannels.size(); ++i) {
+     if (!info.sampledColorChannels.test(i)) {
+@@ -564,18 +612,10 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+     buf.append(g_gxState.pbrParam);
+     buf.append(g_gxState.pbrUp);
+     buf.append(g_gxState.pbrCubeParams);
+-    for (const auto& v : g_gxState.pbrAmbient) {
+-      buf.append(v);
+-    }
+-    for (const auto& v : g_gxState.pbrVolumeRows) {
+-      buf.append(v);
+-    }
+-    for (const auto& v : g_gxState.pbrTone) {
+-      buf.append(v);
+-    }
+-    for (const auto& v : g_gxState.pbrBacklightLights) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.pbrAmbient.data(),sizeof(g_gxState.pbrAmbient));
++    buf.append(g_gxState.pbrVolumeRows.data(),sizeof(g_gxState.pbrVolumeRows));
++    buf.append(g_gxState.pbrTone.data(),sizeof(g_gxState.pbrTone));
++    buf.append(g_gxState.pbrBacklightLights.data(),sizeof(g_gxState.pbrBacklightLights));
+     // yzw carry the baked-light modulation.
+     Vec4<float> lightSkip = g_gxState.pbrLightSkip;
+     lightSkip.y() = g_gxState.pbrBakedLightModulation.x();
+@@ -599,16 +639,10 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+       }
+       buf.append(lastLinear[i]);
+     }
+-    for (const auto& v : g_gxState.pbrLightHdr) {
+-      buf.append(v);
+-    }
+-    for (const auto& v : g_gxState.pbrShield) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.pbrLightHdr.data(),sizeof(g_gxState.pbrLightHdr));
++    buf.append(g_gxState.pbrShield.data(),sizeof(g_gxState.pbrShield));
+     buf.append(g_gxState.pbrLightmapRect);
+-    for (const auto& v : g_gxState.pbrLightmapAxes) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.pbrLightmapAxes.data(),sizeof(g_gxState.pbrLightmapAxes));
+     buf.append(g_gxState.pbrRoomLights);
+     buf.append(g_gxState.pbrModelDiffuse);
+     buf.append(g_gxState.pbrModelIncan);
+@@ -618,9 +652,7 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+     }
+   }
+   if (info.usesHdrTone) {
+-    for (const auto& v : g_gxState.pbrTone) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.pbrTone.data(),sizeof(g_gxState.pbrTone));
+     // x: a source weighted by its alpha, SRCALPHA/ONE (additive) or SRCALPHA/INVSRCALPHA (alpha over), goes
+     // through the inverse curve already weighted (hdr_tev_srcalpha_add). ONE/INVSRCALPHA needs nothing: its
+     // source is premultiplied, so the plain inverse already gives the source term exactly.
+@@ -647,18 +679,12 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+     buf.append(g_gxState.clipPlaneEq);
+   }
+   if (info.usesShell) {
+-    for (const auto& v : g_gxState.shellUniform) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.shellUniform.data(),sizeof(g_gxState.shellUniform));
+     // shell_tone: the curve the LDR colour pass decodes the scene copy with (shader.cpp).
+-    for (const auto& v : g_gxState.pbrTone) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.pbrTone.data(),sizeof(g_gxState.pbrTone));
+   }
+   if (info.usesPTTexMtx.any()) {
+-    for (int i = 0; i < info.usesPTTexMtx.size(); ++i) {
+-      buf.append(g_gxState.ptTexMtxs[i]);
+-    }
++    buf.append(g_gxState.ptTexMtxs.data(),sizeof(g_gxState.ptTexMtxs));
+   }
+   if (info.usesFog) {
+     const auto& state = g_gxState.fog;
+@@ -673,18 +699,18 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+   }
+   if (info.usesVolFog) {
+     buf.append(g_gxState.volFogParams);
+-    for (const auto& v : g_gxState.volFogTone) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.volFogTone.data(),sizeof(g_gxState.volFogTone));
+   }
+   static_assert(std::tuple_size_v<decltype(g_gxState.texCoordScales)> == MaxTexCoord);
++  auto* texcoords=buf.append_uninit(MaxTexCoord*sizeof(Vec4<float>));
+   for (u32 i = 0; i < MaxTexCoord; ++i) {
+     const auto& scale = g_gxState.texCoordScales[i];
+     // z: the texgen's matrix as a float index into postex_mtx (the shader reads it, the key does not).
+     const u32 mtx = g_gxState.tcgs[i].mtx;
+     const u32 mtxIdx = mtx == GX_IDENTITY ? TexMtxIdentity : mtx / 3;
+-    buf.append(Vec4{static_cast<f32>(scale.scaleS) + 1.0f, static_cast<f32>(scale.scaleT) + 1.0f,
+-                    static_cast<f32>(mtxIdx), 0.0f});
++    const Vec4<float> value{static_cast<f32>(scale.scaleS)+1.0f,static_cast<f32>(scale.scaleT)+1.0f,
++                            static_cast<f32>(mtxIdx),0.0f};
++    std::memcpy(texcoords+i*sizeof(value),&value,sizeof(value));
+   }
+   if (info.usedIndTexMtxs.any()) {
+     for (u32 i = 0; i < MaxIndTexMtxs; ++i) {
+@@ -700,17 +726,13 @@ static void fill_uniform(ByteBuffer& buf, const ShaderInfo& info) noexcept {
+     buf.append(texture_size_bias(get_texture(static_cast<GXTexMapID>(i))));
+   }
+   if (info.usesShadow) {
+-    for (const auto& v : g_gxState.shadowUniform) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.shadowUniform.data(),sizeof(g_gxState.shadowUniform));
+   }
+   if (info.usesAlphaRef) {
+     buf.append(Vec4<u32>{g_gxState.alphaCompare.ref0, g_gxState.alphaCompare.ref1, 0, 0});
+   }
+   if (info.usesColorMatrix) {
+-    for (const auto& v : g_gxState.colorMatrix) {
+-      buf.append(v);
+-    }
++    buf.append(g_gxState.colorMatrix.data(),sizeof(g_gxState.colorMatrix));
+   }
+ }
+ 
 diff --git a/extern/aurora/lib/input.cpp b/extern/aurora/lib/input.cpp
 index 8c690f25..12dd4ec0 100644
 --- a/extern/aurora/lib/input.cpp
@@ -3950,7 +4376,7 @@ index 00000000..c7e89192
 +extern std::vector<ArrayStorageCopy> arrayStorageCopies;
 +}
 diff --git a/extern/aurora/tests/gx_test_stubs.cpp b/extern/aurora/tests/gx_test_stubs.cpp
-index b9c98f00..0d4df314 100644
+index b9c98f00..aea0810b 100644
 --- a/extern/aurora/tests/gx_test_stubs.cpp
 +++ b/extern/aurora/tests/gx_test_stubs.cpp
 @@ -19,6 +19,7 @@
@@ -3961,8 +4387,11 @@ index b9c98f00..0d4df314 100644
  #include "webgpu/gpu.hpp"
  
  #include <atomic>
-@@ -53,6 +54,14 @@ Resources& resources() noexcept {
+@@ -51,8 +52,24 @@ Resources& resources() noexcept {
+ }
+ 
  void increment_merged_draw_count() noexcept {}
++void add_merged_draw_count(uint32_t) noexcept {}
  } // namespace aurora::gfx::detail
  
 +namespace aurora::gfx {
@@ -3971,12 +4400,19 @@ index b9c98f00..0d4df314 100644
 +  vertex = index = 0;
 +  return false;
 +}
++bool map_inline_geometry(uint64_t, uint64_t, size_t, size_t,
++                         uint8_t*& vertices, uint8_t*& indices, Range& vertexRange, Range& indexRange) noexcept {
++  vertices = indices = nullptr;
++  vertexRange = indexRange = {};
++  return false;
++}
++
 +}
 +
  namespace aurora::webgpu {
  GraphicsConfig g_graphicsConfig{};
  bool g_dualSourceBlendingSupported = false;
-@@ -188,7 +197,19 @@ Range push_indices(const uint8_t* data, size_t length, size_t alignment) { retur
+@@ -188,7 +205,19 @@ Range push_indices(const uint8_t* data, size_t length, size_t alignment) { retur
  Range push_uniform(const uint8_t* data, size_t length) { return {}; }
  // Tests set it to see draws dropped for want of storage room.
  bool g_testStorageFull = false;
@@ -3997,7 +4433,7 @@ index b9c98f00..0d4df314 100644
  
  // The resident regions: tests set them, and see the uploads.
  Range g_testResidentRegions[3]{};
-@@ -259,7 +280,13 @@ template <>
+@@ -259,7 +288,13 @@ template <>
  PipelineRef pipeline_ref<gx::PipelineConfig>(const gx::PipelineConfig& config) {
    return 0;
  }
@@ -4475,6 +4911,28 @@ index 7982c66f..dd781bdc 100644
  // Helper: find the first file entry in root by iterating the directory.
  // Returns the entry number and fills fileName, or returns -1 if none found.
  static s32 findFirstRootFile(char* fileName, size_t fileNameSize) {
+diff --git a/include/GuiSys/CGuiCamera.hpp b/include/GuiSys/CGuiCamera.hpp
+index 8048d20b..009c6e07 100644
+--- a/include/GuiSys/CGuiCamera.hpp
++++ b/include/GuiSys/CGuiCamera.hpp
+@@ -44,6 +44,9 @@ public:
+     xb9_aspectMatch = match;
+     mSpreadable = spread;
+   }
++  // Only the front-end frames authored over letterboxed movies opt in. HUD,
++  // gameplay, save dialogs and other cameras retain their existing framing.
++  void SetFrontEndFullscreen(bool enabled) { mFrontEndFullscreen = enabled; }
+   // Widescreen HUD spread for this frame's widgets: 1.0 when inactive.
+   float GetAspectSpread() const { return mSpread; }
+   float GetAspectSpreadCenterX() const { return mSpreadCenterX; }
+@@ -133,6 +136,7 @@ public:
+   // HUD reaches the wide viewport edges without distorting element shapes.
+   // Computed in the const Draw() and read immediately by CGuiFrame::Draw.
+   bool mSpreadable = true;
++  bool mFrontEndFullscreen = false;
+   mutable float mSpread = 1.f;
+   mutable float mSpreadCenterX = 0.f;
+   mutable float mSpreadY = 1.f;
 diff --git a/include/Kyoto/Graphics/CCubeModel.hpp b/include/Kyoto/Graphics/CCubeModel.hpp
 index eb02b631..2edd5401 100644
 --- a/include/Kyoto/Graphics/CCubeModel.hpp
@@ -4508,6 +4966,20 @@ index eb02b631..2edd5401 100644
  #endif
  
    static bool sUsingPackedLightmaps;
+diff --git a/include/Kyoto/Graphics/CMoviePlayer.hpp b/include/Kyoto/Graphics/CMoviePlayer.hpp
+index afaa7873..59564a50 100644
+--- a/include/Kyoto/Graphics/CMoviePlayer.hpp
++++ b/include/Kyoto/Graphics/CMoviePlayer.hpp
+@@ -64,7 +64,8 @@ public:
+   void DecodeFromRead(const void* ptr);
+ 
+   bool DrawVideo() const;
+-  void DrawFrame(const CVector3f&, const CVector3f&, const CVector3f&, const CVector3f&);
++  void DrawFrame(const CVector3f&, const CVector3f&, const CVector3f&, const CVector3f&,
++                 bool linear = false);
+   void MixAudio(short* out, const short* in, unsigned long samples);
+ 
+   EPlayMode GetPlayMode() const { return xe0_playMode; }
 diff --git a/include/MetroidPrime/CActor.hpp b/include/MetroidPrime/CActor.hpp
 index 04f2b0f7..afa25ca4 100644
 --- a/include/MetroidPrime/CActor.hpp
@@ -4536,6 +5008,19 @@ index ef5ea9be..1a6818f5 100644
    
    void UpdateActorLights();
  };
+diff --git a/include/MetroidPrime/SOptionsFrontEndFrame.hpp b/include/MetroidPrime/SOptionsFrontEndFrame.hpp
+index 928e9315..14b36f55 100644
+--- a/include/MetroidPrime/SOptionsFrontEndFrame.hpp
++++ b/include/MetroidPrime/SOptionsFrontEndFrame.hpp
+@@ -18,7 +18,7 @@ public:
+   ~SOptionsFrontEndFrame();
+   void Update(float dt, const CSaveGameScreen* saveUI);
+   bool ProcessUserInput(const CFinalInput& input, CSaveGameScreen* saveUI);
+-  void Draw() const;
++  void Draw(bool fullscreen = false) const;
+ 
+ private:
+   bool PumpLoad();
 diff --git a/include/rstl/pointer_iterator.hpp b/include/rstl/pointer_iterator.hpp
 index 35db8852..6dfdad6d 100644
 --- a/include/rstl/pointer_iterator.hpp
@@ -4719,6 +5204,75 @@ index 7f56f5ac..37991667 100644
  void BeginFrame();
  void Register(const CActor* actor);
  // Renders each actor registered since the last call into its depth map and decals the room geometry under it.
+diff --git a/platform/include/port_frontend_layout.h b/platform/include/port_frontend_layout.h
+new file mode 100644
+index 00000000..90ba7d6e
+--- /dev/null
++++ b/platform/include/port_frontend_layout.h
+@@ -0,0 +1,63 @@
++#ifndef PORT_FRONTEND_LAYOUT_H
++#define PORT_FRONTEND_LAYOUT_H
++
++#include "port_env.h"
++
++// The GameCube front-end movies contain a 16:9 picture inside a 640x480
++// raster. Match the native menu camera to that picture, rather than stretching
++// either the movie or its independently drawn text and button prompts.
++namespace PortFrontEndLayout {
++inline bool Fullscreen() {
++#ifdef __ORBIS__
++  constexpr bool fallback = true;
++#else
++  constexpr bool fallback = false;
++#endif
++  static const bool enabled = port::EnvFlag("MP_FRONTEND_FULLSCREEN", fallback);
++  return enabled;
++}
++
++inline float Zoom(float aspect) {
++  constexpr float original = 4.f / 3.f;
++  constexpr float picture = 16.f / 9.f;
++  if (!(aspect > original)) {
++    return 1.f;
++  }
++  return (aspect < picture ? aspect : picture) / original;
++}
++
++inline bool EmbeddedPicture(unsigned width, unsigned height) {
++  return width == 640 && height == 480;
++}
++
++inline bool FillPicture(bool enabled, bool widescreen, bool menuMovie,
++                        unsigned width, unsigned height) {
++  return enabled && widescreen && menuMovie && EmbeddedPicture(width, height);
++}
++
++struct MovieRect {
++  float left, top, right, bottom;
++};
++
++inline MovieRect PictureRect(float left, float top, float width, float height) {
++  const float zoom = width > 0.f && height > 0.f ? Zoom(width / height) : 1.f;
++  const float halfWidth = height * (4.f / 3.f) * zoom * 0.5f;
++  const float halfHeight = height * zoom * 0.5f;
++  const float x = left + width * 0.5f;
++  const float y = top + height * 0.5f;
++  return {x - halfWidth, y - halfHeight, x + halfWidth, y + halfHeight};
++}
++
++// A point measured from either edge in the authored 480-line raster. Texture
++// prompts follow the movie's centre zoom, including their dimensions.
++inline float PromptPosition(float position, float viewportHeight, float zoom,
++                            float promptHeight = 0.f) {
++  const float mapped = viewportHeight * (0.5f + (position / 480.f - 0.5f) * zoom);
++  // The original title prompt touches the edge of the picture band. Leave a
++  // small safe inset when that band becomes the whole TV picture.
++  const float inset = viewportHeight / 24.f + promptHeight * 0.5f;
++  return mapped > inset ? mapped : inset;
++}
++} // namespace PortFrontEndLayout
++
++#endif
 diff --git a/platform/include/port_fx_debug.h b/platform/include/port_fx_debug.h
 index 2df4e150..7ae3dcc7 100644
 --- a/platform/include/port_fx_debug.h
@@ -4949,6 +5503,19 @@ index 00000000..5dd440b4
 +#else
 +struct PortResourceProfile { PortResourceProfile(unsigned, unsigned) {} };
 +#endif
+diff --git a/platform/include/port_room_env.h b/platform/include/port_room_env.h
+index 61b1620e..d5f9372c 100644
+--- a/platform/include/port_room_env.h
++++ b/platform/include/port_room_env.h
+@@ -1123,6 +1123,8 @@ float EnvFxIntensity();
+ // The ice darkeners of a loaded area's room environment (File::iceDarkeners); null while the area's
+ // file is not loaded (SetLoadedAreas).
+ const std::vector<IceDarkener>* IceDarkeners(uint32_t mrea);
++// Current loaded metadata only; rechecked after asynchronous loads and profile reloads.
++bool HasIceDarkeners();
+ // Once a frame, after SetAreaLayers: a LightHint of a loaded area that turns on (its file is read
+ // with the hint and its layer active, or its layer comes on) takes the dominant light, as
+ // CLightHintGOC::AreaEntitiesLoaded 0x597f04 and OnActivationStateChange 0x597fc8 register it
 diff --git a/platform/include/port_room_geo.h b/platform/include/port_room_geo.h
 index 94abc37e..3bed7850 100644
 --- a/platform/include/port_room_geo.h
@@ -5684,6 +6251,26 @@ index 65d40637..43bbdb23 100644
    sHead = (sHead + 1) % kRing;
    if (sCount < kRing) {
      ++sCount;
+diff --git a/platform/port_room_env.cpp b/platform/port_room_env.cpp
+index 1db8bd5c..8d525a21 100644
+--- a/platform/port_room_env.cpp
++++ b/platform/port_room_env.cpp
+@@ -926,6 +926,15 @@ const std::vector<IceDarkener>* IceDarkeners(uint32_t mrea) {
+   return it == sAreas.end() ? nullptr : &it->second.file.iceDarkeners;
+ }
+ 
++bool HasIceDarkeners() {
++  for (const auto& entry : sAreas) {
++    if (!entry.second.file.iceDarkeners.empty()) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ namespace {
+ float sDominantLight[3] = {0.f, 0.f, -1.f}; // skDownVector, retail's -Z
+ } // namespace
 diff --git a/platform/port_room_geo.cpp b/platform/port_room_geo.cpp
 index d1b5c489..bdb90ba2 100644
 --- a/platform/port_room_geo.cpp
@@ -6140,6 +6727,54 @@ index 8371b1ba..ae9fb208 100644
      // PortCrash::RequestStack takes the pthread_t here (no tgkill on macOS).
      sMainThread.store(reinterpret_cast< long >(pthread_self()));
  #else
+diff --git a/src/GuiSys/CGuiCamera.cpp b/src/GuiSys/CGuiCamera.cpp
+index a15e9246..649bbe30 100644
+--- a/src/GuiSys/CGuiCamera.cpp
++++ b/src/GuiSys/CGuiCamera.cpp
+@@ -11,6 +11,7 @@
+ #include <Kyoto/Streams/CInputStream.hpp>
+ 
+ #include "port_debug.h"
++#include "port_frontend_layout.h"
+ 
+ CGuiWidget* CGuiCamera::Create(CGuiFrame* frame, CInputStream& in, CSimplePool* sp) {
+   CGuiWidgetParms parms = ReadWidgetHeader(frame, in);
+@@ -102,6 +103,9 @@ void CGuiCamera::Draw(const CGuiWidgetDrawParms& parms) const {
+   mSpreadAboutEye = false;
+   mSpreadHalfTan = 0.f;
+   mHudScale = mHudScaled ? static_cast< float >(PortDebug::HudScale()) / 100.f : 1.f;
++  const float frontEndZoom = mFrontEndFullscreen && !fitWidth
++                                ? PortFrontEndLayout::Zoom(renderAspect)
++                                : 1.f;
+ 
+   if (xb8_projection == kProjection_Perspective) {
+     const float authored = mCameraParms.perspective.aspect;
+@@ -117,6 +121,10 @@ void CGuiCamera::Draw(const CGuiWidgetDrawParms& parms) const {
+           std::tan(0.5f * mCameraParms.perspective.fov * 3.14159265f / 180.f) * authored;
+     }
+     float fov = mCameraParms.perspective.fov;
++    if (frontEndZoom != 1.f) {
++      constexpr float kDegToRad = 3.14159265f / 180.f;
++      fov = 2.f * std::atan(std::tan(0.5f * fov * kDegToRad) / frontEndZoom) / kDegToRad;
++    }
+     if (fitWidth) {
+       // The window is taller than authored: spread the layout over the extra height, as the
+       // widescreen spread does over extra width.
+@@ -161,6 +169,14 @@ void CGuiCamera::Draw(const CGuiWidgetDrawParms& parms) const {
+     }
+     mCenterX = 0.5f * (left + right);
+     mCenterZ = 0.5f * (top + bottom);
++    if (frontEndZoom != 1.f) {
++      const float halfWidth = 0.5f * (right - left) / frontEndZoom;
++      const float halfHeight = 0.5f * (top - bottom) / frontEndZoom;
++      left = mCenterX - halfWidth;
++      right = mCenterX + halfWidth;
++      top = mCenterZ + halfHeight;
++      bottom = mCenterZ - halfHeight;
++    }
+     CGraphics::SetOrtho(left, right, top, bottom, mCameraParms.orthographic.znear,
+                         mCameraParms.orthographic.zfar);
+   }
 diff --git a/src/Kyoto/Animation/DolphinCSkinnedModel.cpp b/src/Kyoto/Animation/DolphinCSkinnedModel.cpp
 index f70c1a68..0305ea6e 100644
 --- a/src/Kyoto/Animation/DolphinCSkinnedModel.cpp
@@ -6342,6 +6977,56 @@ index 5a6bfc5a..8631d2c4 100644
  }
  
  void CCubeModel::DrawNormal(const float* positions, const float* normals,
+diff --git a/src/Kyoto/Graphics/CCubeMoviePlayer.cpp b/src/Kyoto/Graphics/CCubeMoviePlayer.cpp
+index 75a1d38f..06c701df 100644
+--- a/src/Kyoto/Graphics/CCubeMoviePlayer.cpp
++++ b/src/Kyoto/Graphics/CCubeMoviePlayer.cpp
+@@ -138,21 +138,23 @@ static void MyTHPGXYuv2RgbSetup(bool field, bool deinterlace) {
+   CGX::SetTevKColor(GX_KCOLOR2, kColor2);
+ }
+ 
+-static void MyTHPYuv2RgbTextureSetup(void* y, void* u, void* v, ushort width, ushort height) {
++static void MyTHPYuv2RgbTextureSetup(void* y, void* u, void* v, ushort width, ushort height,
++                                    bool linear) {
++  const GXTexFilter filter = linear ? GX_LINEAR : GX_NEAR;
+   GXTexObj yTex;
+   GXInitTexObj(&yTex, y, width, height, GX_TF_I8, GX_CLAMP, GX_CLAMP, FALSE);
+-  GXInitTexObjLOD(&yTex, GX_NEAR, GX_NEAR, 0.f, 0.f, 0.f, FALSE, FALSE, GX_ANISO_1);
++  GXInitTexObjLOD(&yTex, filter, filter, 0.f, 0.f, 0.f, FALSE, FALSE, GX_ANISO_1);
+   GXLoadTexObj(&yTex, GX_TEXMAP0);
+ 
+   GXTexObj uTex;
+   GXInitTexObj(&uTex, u, width / 2, height / 2, GX_TF_I8, GX_CLAMP, GX_CLAMP, FALSE);
+-  GXInitTexObjLOD(&uTex, GX_NEAR, GX_NEAR, 0.f, 0.f, 0.f, FALSE, FALSE, GX_ANISO_1);
++  GXInitTexObjLOD(&uTex, filter, filter, 0.f, 0.f, 0.f, FALSE, FALSE, GX_ANISO_1);
+   GXLoadTexObj(&uTex, GX_TEXMAP1);
+ 
+   GXTexObj vTex;
+   GXInitTexObj(&vTex, v, static_cast< s16 >(width / 2), height / 2, GX_TF_I8, GX_CLAMP, GX_CLAMP,
+                FALSE);
+-  GXInitTexObjLOD(&vTex, GX_NEAR, GX_NEAR, 0.f, 0.f, 0.f, FALSE, FALSE, GX_ANISO_1);
++  GXInitTexObjLOD(&vTex, filter, filter, 0.f, 0.f, 0.f, FALSE, FALSE, GX_ANISO_1);
+   GXLoadTexObj(&vTex, GX_TEXMAP2);
+ 
+   // Each draw makes new objects for a new frame: destroyed now, the draw still samples them, but
+@@ -512,7 +514,7 @@ void CMoviePlayer::Update(float dt) {
+ }
+ 
+ void CMoviePlayer::DrawFrame(const CVector3f& v1, const CVector3f& v2, const CVector3f& v3,
+-                             const CVector3f& v4) {
++                             const CVector3f& v4, bool linear) {
+   if (xd0_drawTexSlot == -1) {
+     return;
+   }
+@@ -525,7 +527,7 @@ void CMoviePlayer::DrawFrame(const CVector3f& v1, const CVector3f& v2, const CVe
+   const bool deinterlace = xf4_25_deinterlace;
+   MyTHPGXYuv2RgbSetup(field, deinterlace);
+   MyTHPYuv2RgbTextureSetup(texture.Y(), texture.U(), texture.V(), x6c_videoInfo.mXSize,
+-                           x6c_videoInfo.mYSize);
++                           x6c_videoInfo.mYSize, linear);
+   CGX::Begin(GX_TRIANGLEFAN, GX_VTXFMT7, 4);
+   GXPosition3f32(v1.GetX(), v1.GetY(), v1.GetZ());
+   GXTexCoord2u16(0, 0);
 diff --git a/src/Kyoto/Graphics/DolphinCModel.cpp b/src/Kyoto/Graphics/DolphinCModel.cpp
 index 3c53e059..c75969c1 100644
 --- a/src/Kyoto/Graphics/DolphinCModel.cpp
@@ -6509,10 +7194,31 @@ index 605437db..cec8922a 100644
            mgr.GetPlayerState()->GetActiveVisor(mgr) != CPlayerState::kPV_Thermal && GetDrawShadow() &&
            GetShadow()->PortValid()) {
 diff --git a/src/MetroidPrime/CFrontEndUI.cpp b/src/MetroidPrime/CFrontEndUI.cpp
-index 9d67eacb..4b208380 100644
+index 9d67eacb..b7fb3fae 100644
 --- a/src/MetroidPrime/CFrontEndUI.cpp
 +++ b/src/MetroidPrime/CFrontEndUI.cpp
-@@ -2213,8 +2213,9 @@ CIOWin::EMessageReturn CFrontEndUI::Update(float dt, CArchitectureQueue& queue)
+@@ -37,6 +37,7 @@
+ 
+ #include "port_apclient.h"
+ #include "port_debug.h"
++#include "port_frontend_layout.h"
+ #include "port_pointer.h"
+ #include "port_pointer_menu.h"
+ #include "port_savestate.h"
+@@ -68,6 +69,12 @@
+ #include "rstl/math.hpp"
+ 
+ namespace {
++void PortFrontEndCamera(CGuiFrame* frame, bool fullscreen) {
++  if (frame != nullptr && frame->GetFrameCamera() != nullptr) {
++    frame->GetFrameCamera()->SetFrontEndFullscreen(fullscreen);
++  }
++}
++
+ // Port unlocks (F1 > Game > Unlocks) stand in for the save's flags here without
+ // touching them, so switching an unlock off locks the extra again. The Fusion
+ // Suit also needs normal mode beaten, so its unlock implies that too.
+@@ -2213,8 +2220,9 @@ CIOWin::EMessageReturn CFrontEndUI::Update(float dt, CArchitectureQueue& queue)
          if (ready) {
            // The file must still be there; the state is kept if it is not.
            sResumeStage = kRS_Done;
@@ -6524,6 +7230,98 @@ index 9d67eacb..4b208380 100644
              fprintf(stderr, "[resume] loading file %u\n", fileIdx);
              xdc_saveUI->StartGame(static_cast< int >(fileIdx));
              // Black from here, and no file-select->game movie.
+@@ -2801,6 +2809,18 @@ void CFrontEndUI::Draw() const {
+     return; // black until the game starts
+ #endif
+ 
++  // These original movies already contain a widescreen picture. Enlarge the
++  // picture and the native GUI by the same amount, removing only its baked
++  // cinema bars. Attract movies, GBA pages, credits and replacement movies with
++  // different dimensions retain their own framing.
++  const bool fullscreen = PortFrontEndLayout::FillPicture(
++      PortFrontEndLayout::Fullscreen(),
++      PortDebug::AspectMode() != PortDebug::kAspect_4_3 &&
++          CGraphics::GetViewportWidth() * 3 > CGraphics::GetViewportHeight() * 4,
++      xb8_curMovie >= kMM_FirstStart && xb8_curMovie <= kMM_FileSelectPlayGameA,
++      xcc_curMoviePtr != nullptr ? xcc_curMoviePtr->GetWidth() : 0,
++      xcc_curMoviePtr != nullptr ? xcc_curMoviePtr->GetHeight() : 0);
++
+   if (xec_emuFrme.get() != nullptr) {
+     xec_emuFrme->Draw(xdc_saveUI.get());
+   } else {
+@@ -2825,25 +2845,37 @@ void CFrontEndUI::Draw() const {
+       const int centerX = (static_cast< int >(vidWidth) - vpWidth) / 2;
+       const int centerY = (static_cast< int >(vidHeight) - vpHeight) / 2;
+ #endif
+-      int vl = vpLeft - centerX;
+-      int vr = vpLeft + vpWidth + centerX;
+-      int vb = vpTop + vpHeight + centerY;
+-      int vt = vpTop - centerY;
+-      CVector3f v1(static_cast< float >(vl), 0.f, static_cast< float >(vb));
+-      CVector3f v2(static_cast< float >(vr), 0.f, static_cast< float >(vb));
+-      CVector3f v3(static_cast< float >(vl), 0.f, static_cast< float >(vt));
+-      CVector3f v4(static_cast< float >(vr), 0.f, static_cast< float >(vt));
+-      xcc_curMoviePtr->DrawFrame(v1, v2, v3, v4);
++      PortFrontEndLayout::MovieRect rect = {
++          static_cast< float >(vpLeft - centerX),
++          static_cast< float >(vpTop - centerY),
++          static_cast< float >(vpLeft + vpWidth + centerX),
++          static_cast< float >(vpTop + vpHeight + centerY)};
++      if (fullscreen) {
++        rect = PortFrontEndLayout::PictureRect(vpLeft, vpTop, vpWidth, vpHeight);
++      }
++      CVector3f v1(rect.left, 0.f, rect.bottom);
++      CVector3f v2(rect.right, 0.f, rect.bottom);
++      CVector3f v3(rect.left, 0.f, rect.top);
++      CVector3f v4(rect.right, 0.f, rect.top);
++#ifdef __ORBIS__
++      static const bool linear = port::EnvFlag("MP_FRONTEND_FILTER", true);
++#else
++      static const bool linear = port::EnvFlag("MP_FRONTEND_FILTER", false);
++#endif
++      xcc_curMoviePtr->DrawFrame(v1, v2, v3, v4, linear && xb8_curMovie != kMM_Stopped);
+     }
+ 
+     if (IsInScreenNotTransitioning(kS_FileSelect)) {
+       if (xf0_optionsFrme.get() == nullptr) {
+-        if (xe0_frontendCardFrme.get() == nullptr)
++        if (xe0_frontendCardFrme.get() == nullptr) {
++          PortFrontEndCamera(xe8_frontendNoCardFrme->x14_loadedFrme, fullscreen);
+           xe8_frontendNoCardFrme->Draw();
+-        else
++        } else {
++          PortFrontEndCamera(xe0_frontendCardFrme->x1c_loadedFrame, fullscreen);
+           xe0_frontendCardFrme->Draw();
++        }
+       } else {
+-        xf0_optionsFrme->Draw();
++        xf0_optionsFrme->Draw(fullscreen);
+       }
+     } else if (IsInScreenNotTransitioning(kS_FusionBonus)) {
+       xe4_fusionBonusFrme->Draw();
+@@ -2864,14 +2896,20 @@ void CFrontEndUI::Draw() const {
+     const int vpH = CGraphics::GetViewport().mHeight;
+     float k = 1.f;
+     int yOff = 0;
+-    if (vpW > 0 && vpW < 640 && vpW * 480 < vpH * 640) {
++    float promptY = 72.f;
++    if (fullscreen && vpW > 0 && vpH > 0) {
++      const float zoom = PortFrontEndLayout::Zoom(static_cast< float >(vpW) / vpH);
++      k = vpH / 480.f * zoom;
++      promptY = PortFrontEndLayout::PromptPosition(72.f, vpH, zoom, height * k);
++    } else if (vpW > 0 && vpW < 640 && vpW * 480 < vpH * 640) {
+       k = static_cast< float >(vpW) / 640.f;
+       yOff = (vpH - static_cast< int >(480.f * k)) / 2;
++      promptY = 72.f * k;
+     }
+     const int w = static_cast< int >(static_cast< float >(width) * k);
+     const int h = static_cast< int >(static_cast< float >(height) * k);
+     CGraphics::Render2D(*tex, vpW / 2 - w / 2,
+-                        yOff + static_cast< int >(72.f * k) - h / 2, w, h, color);
++                        yOff + static_cast< int >(promptY) - h / 2, w, h, color);
+   }
+ 
+   if (GetHasAttractMovies()) {
 diff --git a/src/MetroidPrime/CGameCubeDoll.cpp b/src/MetroidPrime/CGameCubeDoll.cpp
 index 4ea4a716..cd512c8e 100644
 --- a/src/MetroidPrime/CGameCubeDoll.cpp
@@ -6603,8 +7401,25 @@ index 4ea4a716..cd512c8e 100644
 +  }
    CGraphics::DisableAllLights();
  }
+diff --git a/src/MetroidPrime/CPauseScreenFrame.cpp b/src/MetroidPrime/CPauseScreenFrame.cpp
+index bb803219..7a0cbbf5 100644
+--- a/src/MetroidPrime/CPauseScreenFrame.cpp
++++ b/src/MetroidPrime/CPauseScreenFrame.cpp
+@@ -1430,8 +1430,11 @@ bool SOptionsFrontEndFrame::ProcessUserInput(const CFinalInput& input, CSaveGame
+   return !x134_25_exitOptions;
+ }
+ 
+-void SOptionsFrontEndFrame::Draw() const {
++void SOptionsFrontEndFrame::Draw(bool fullscreen) const {
+   if (x1c_loadedFrame != nullptr && x134_24_visible) {
++    if (CGuiCamera* camera = x1c_loadedFrame->GetFrameCamera()) {
++      camera->SetFrontEndFullscreen(fullscreen);
++    }
+     x1c_loadedFrame->Draw(CGuiWidgetDrawParms(x0_uiAlpha, CVector3f::Zero()));
+   }
+ }
 diff --git a/src/MetroidPrime/CStateManager.cpp b/src/MetroidPrime/CStateManager.cpp
-index 8dbfa95d..fd89f86a 100644
+index 8dbfa95d..ae7f8f7f 100644
 --- a/src/MetroidPrime/CStateManager.cpp
 +++ b/src/MetroidPrime/CStateManager.cpp
 @@ -1,3 +1,6 @@
@@ -6635,7 +7450,21 @@ index 8dbfa95d..fd89f86a 100644
    const float deathTime = x84c_player->GetDeathTime();
    if (deathTime > 0.f) {
      x84c_player->DoThink(dt, *this);
-@@ -1581,6 +1591,9 @@ void CStateManager::PortUpdateIceDarkeners(float dt) {
+@@ -1528,6 +1538,13 @@ void CStateManager::PortUpdateIceDarkeners(float dt) {
+   if (sOff) {
+     return;
+   }
++  // Original rooms have no imported darkener metadata. Avoid allocating a
++  // loaded-area vector and scanning the entire world every tick in that case.
++  // Pending state still takes the full path so room unloads retire its timers;
++  // inspect live metadata each time so a later asynchronous import is noticed.
++  if (sPortIceDarkeners.empty() && !PortRoomEnv::HasIceDarkeners()) {
++    return;
++  }
+   std::vector< uint > loaded;
+   for (int i = 0; i < x850_world->GetNumAreas(); ++i) {
+     const CGameArea& area = *x850_world->GetArea(TAreaId(i));
+@@ -1581,6 +1598,9 @@ void CStateManager::PortUpdateIceDarkeners(float dt) {
  #endif
  
  void CStateManager::Update(float dt) {
@@ -6645,7 +7474,7 @@ index 8dbfa95d..fd89f86a 100644
    if (GetWantsToQuit()) return;
  
  #ifdef TARGET_PC
-@@ -3204,7 +3217,15 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, con
+@@ -3204,7 +3224,15 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, con
    float dir[3] = {0.f, 0.f, 0.f};
    float color[3] = {0.f, 0.f, 0.f};
    float distance = 0.f;

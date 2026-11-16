@@ -54,6 +54,22 @@ struct VulkanFunctions {
 
 template<typename T> struct LegacyTracker : ImmediateTracker<T> {
     template<typename P> void OnSetPipeline(P* pipeline) { T::OnSetPipeline(pipeline); }
+    using ImmediateTracker<T>::Apply;
+    void Apply(const VulkanFunctions& vk, VkCommandBuffer commandBuffer) {
+        // This reference intentionally bypasses the Vulkan OnSetPipeline cache.
+        ImmediateTracker<T>::Apply(vk, commandBuffer,
+            ToBackend(this->mLastPipeline)->GetVkLayout(), this->mLastPipeline->GetImmediateMask());
+    }
+};
+
+// The previous Apply path with the already-supported pipeline inheritance.
+// This isolates the new clean-state path from the earlier inheritance change.
+template<typename T> struct PreviousApplyTracker : ImmediateTracker<T> {
+    using ImmediateTracker<T>::Apply;
+    void Apply(const VulkanFunctions& vk, VkCommandBuffer commandBuffer) {
+        ImmediateTracker<T>::Apply(vk, commandBuffer,
+            ToBackend(this->mLastPipeline)->GetVkLayout(), this->mLastPipeline->GetImmediateMask());
+    }
 };
 
 template<typename T>
@@ -103,6 +119,12 @@ void correctness() {
     verifyDraw(before, oldDriver, pipelines[1]); verifyDraw(after, newDriver, pipelines[1]);
     std::mt19937 random(0x108060);
     Pipeline* active = &pipelines[1];
+    PreviousApplyTracker<Base> previousApply;
+    Driver previousDriver;
+    previousDriver.rangeSizes = newDriver.rangeSizes;
+    previousApply.SetClampFragDepth(0.0f, 1.0f);
+    previousApply.OnSetPipeline(active);
+    previousApply.Apply(vk, &previousDriver);
     unsigned draws = 0;
     for (unsigned step = 0; step < 100000; ++step) {
         if (random() % 3 == 0) {
@@ -110,21 +132,32 @@ void correctness() {
             const uint32_t value = random();
             before.SetImmediates(index * 4, reinterpret_cast<const uint8_t*>(&value), 4);
             after.SetImmediates(index * 4, reinterpret_cast<const uint8_t*>(&value), 4);
+            previousApply.SetImmediates(index * 4, reinterpret_cast<const uint8_t*>(&value), 4);
         }
         if (random() % 11 == 0) {
             const float minimum = float(random() % 100) / 100;
             const float maximum = float(random() % 100) / 100;
             before.SetClampFragDepth(minimum, maximum); after.SetClampFragDepth(minimum, maximum);
+            previousApply.SetClampFragDepth(minimum, maximum);
         }
-        if (random() % 17 == 0) { before.DirtyAll(); after.DirtyAll(); }
+        if (random() % 17 == 0) { before.DirtyAll(); after.DirtyAll(); previousApply.DirtyAll(); }
         // Include multiple pipeline changes before a draw, so unconsumed dirty
         // values and mask transitions must remain correct.
         for (unsigned change = random() % 4; change > 0; --change) {
             active = &pipelines[random() % pipelines.size()];
             before.OnSetPipeline(active); after.OnSetPipeline(active);
+            previousApply.OnSetPipeline(active);
         }
+        const auto previousCalls = previousDriver.calls;
+        const auto previousBytes = previousDriver.bytes;
+        const auto afterCalls = newDriver.calls;
+        const auto afterBytes = newDriver.bytes;
+        previousApply.Apply(vk, &previousDriver);
         before.Apply(vk, oldCommand); after.Apply(vk, newCommand);
         verifyDraw(before, oldDriver, *active); verifyDraw(after, newDriver, *active);
+        verifyDraw(previousApply, previousDriver, *active);
+        assert(previousDriver.calls - previousCalls == newDriver.calls - afterCalls);
+        assert(previousDriver.bytes - previousBytes == newDriver.bytes - afterBytes);
         ++draws;
     }
     // Fresh pass/device state cannot inherit words from a previous tracker,

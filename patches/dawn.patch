@@ -318,7 +318,7 @@ index 064b572f5c..57fbc7ccd6 100644
  #else
  #error "Unimplemented Vulkan backend platform"
 diff --git a/src/dawn/native/vulkan/CommandBufferVk.cpp b/src/dawn/native/vulkan/CommandBufferVk.cpp
-index d9ee304571..47efb30836 100644
+index d9ee304571..75f03d343e 100644
 --- a/src/dawn/native/vulkan/CommandBufferVk.cpp
 +++ b/src/dawn/native/vulkan/CommandBufferVk.cpp
 @@ -27,7 +27,12 @@
@@ -472,7 +472,7 @@ index d9ee304571..47efb30836 100644
  };
  
  class RenderImmediatesTracker
-@@ -396,6 +479,25 @@ class ImmediateTracker : public T {
+@@ -396,12 +479,37 @@ class ImmediateTracker : public T {
    public:
      ImmediateTracker() = default;
  
@@ -498,7 +498,20 @@ index d9ee304571..47efb30836 100644
      void DirtyAll() { this->mDirty.set(); }
  
      void Apply(const VulkanFunctions& vk, VkCommandBuffer commandBuffer) {
-@@ -423,6 +525,9 @@ class ImmediateTracker : public T {
+         DAWN_ASSERT(this->mLastPipeline != nullptr);
++        if ((this->mDirty & mPipelineImmediateMask).none()) {
++            // Unused dirty words are discarded after every draw, as on the
++            // normal upload path. A later mask change dirties its own words.
++            this->mDirty.reset();
++            return;
++        }
+         Apply(vk, commandBuffer, ToBackend(this->mLastPipeline)->GetVkLayout(),
+-              this->mLastPipeline->GetImmediateMask());
++              mPipelineImmediateMask);
+     }
+ 
+     void Apply(const VulkanFunctions& vk,
+@@ -423,6 +531,9 @@ class ImmediateTracker : public T {
          // Reset all dirty bits after uploading.
          this->mDirty.reset();
      }
@@ -508,7 +521,7 @@ index d9ee304571..47efb30836 100644
  };
  
  // Records the necessary barriers for a synchronization scope using the resource usage
-@@ -430,6 +535,9 @@ class ImmediateTracker : public T {
+@@ -430,6 +541,9 @@ class ImmediateTracker : public T {
  MaybeError PrepareResourcesForSyncScope(Device* device,
                                          CommandRecordingContext* recordingContext,
                                          const SyncScopeResourceUsage& scope) {
@@ -518,7 +531,7 @@ index d9ee304571..47efb30836 100644
      // Apply pending updates to all resource tables used in usages scope.
      // This has to be done before transitioning resources.
      // TODO(crbug.com/529883743): Consider folding the logic in GatherWritableTextures into the
-@@ -526,7 +634,10 @@ MaybeError PrepareResourcesForSyncScope(Device* device,
+@@ -526,7 +640,10 @@ MaybeError PrepareResourcesForSyncScope(Device* device,
          }
      }
  
@@ -530,7 +543,7 @@ index d9ee304571..47efb30836 100644
          if (!barriers.imageBarriers.empty()) {
              device->fn.CmdPipelineBarrier(recordingContext->commandBuffer, barriers.srcStages,
                                            barriers.dstStages, 0, 0, nullptr, 0, nullptr,
-@@ -1729,6 +1840,9 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+@@ -1729,6 +1846,9 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                                             BeginRenderPassCmd* renderPassCmd,
                                             const RenderPassResourceUsage& usage,
                                             PassIndex renderPassIndex) {
@@ -540,7 +553,7 @@ index d9ee304571..47efb30836 100644
      Device* device = ToBackend(GetDevice());
      VkCommandBuffer commands = recordingContext->commandBuffer;
  
-@@ -1745,7 +1859,12 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+@@ -1745,7 +1865,12 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
      }
  

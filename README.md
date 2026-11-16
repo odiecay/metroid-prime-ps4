@@ -14,6 +14,7 @@ roughly **80 MB**; you add your own game image separately.
 - **DualShock 4 controls and vibration**, with twin-stick aiming, original-style
   buttons and remapping.
 - **PlayStation button prompts** throughout the game.
+- **Fullscreen menus**, with smoother sampling of the original movie backgrounds.
 - **A 3D PS4 in the Options screen**, with the menu's existing lighting and animation.
 - **Persistent saves and settings** that stay in place when updating the application.
 - **Shader caching and loading improvements** to reduce repeated work and stalls.
@@ -24,7 +25,7 @@ roughly **80 MB**; you add your own game image separately.
 
 ## Download — development build
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.41.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.42.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
 This build is still in development. The aim is a smooth 1080p60
