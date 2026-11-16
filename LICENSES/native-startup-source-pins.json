@@ -1,0 +1,20 @@
+[
+  {
+    "path": "external/openorbis-startup-modules/libc.prx",
+    "url": "https://raw.githubusercontent.com/OpenOrbis/OpenOrbis-PS4-Toolchain/b458dfd9d2f5c40aa249b127c9b9b4488afdc686/samples/piglet/sce_module/libc.prx",
+    "sha256": "8ac205d14351edb241238b372b2f1c3350a6385a271483d4867fe9a33bc6e4d3",
+    "upstream_commit": "b458dfd9d2f5c40aa249b127c9b9b4488afdc686",
+    "git_blob": "e49b25d011281d52131a34d5a18106dd49605919",
+    "license": "GPL-3.0-only",
+    "kind": "OpenOrbis native startup shim, not a Sony SDK binary"
+  },
+  {
+    "path": "external/openorbis-startup-modules/libSceFios2.prx",
+    "url": "https://raw.githubusercontent.com/OpenOrbis/OpenOrbis-PS4-Toolchain/b458dfd9d2f5c40aa249b127c9b9b4488afdc686/samples/piglet/sce_module/libSceFios2.prx",
+    "sha256": "905cf6b7c699eccb6b95291fc4dcaf5ce2d2605f450f36496d9b973777afa745",
+    "upstream_commit": "b458dfd9d2f5c40aa249b127c9b9b4488afdc686",
+    "git_blob": "1f83bdc8f1fd0ddf6a56f0d5faa1d914e35095fa",
+    "license": "GPL-3.0-only",
+    "kind": "OpenOrbis native startup shim, not a Sony SDK binary"
+  }
+]

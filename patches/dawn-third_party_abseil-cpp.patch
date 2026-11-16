@@ -1,0 +1,14 @@
+diff --git a/absl/debugging/internal/vdso_support.h b/absl/debugging/internal/vdso_support.h
+index 6562c6c..a5e7fa6 100644
+--- a/absl/debugging/internal/vdso_support.h
++++ b/absl/debugging/internal/vdso_support.h
+@@ -44,7 +44,8 @@
+ #include "absl/base/attributes.h"
+ #include "absl/debugging/internal/elf_mem_image.h"
+ 
+-#ifdef ABSL_HAVE_ELF_MEM_IMAGE
++#if defined(ABSL_HAVE_ELF_MEM_IMAGE) && !defined(__ORBIS__)
++// Orbis has neither the Linux VDSO nor the FreeBSD libc auxv interface.
+ 
+ #ifdef ABSL_HAVE_VDSO_SUPPORT
+ #error ABSL_HAVE_VDSO_SUPPORT cannot be directly set

@@ -1,0 +1,3 @@
+# Raw tool output and patch context preserve upstream whitespace verbatim.
+evidence/*.log -whitespace
+patches/*.patch -whitespace

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "purpose": "Source-derived Vulkan baseline preflight; passing does not establish Dawn or Aurora compatibility",
+  "dawn_commit": "118436b3f8f68583eb86e811ca605dc41637e8cc",
+  "dawn_source": "src/dawn/native/vulkan/PhysicalDeviceVk.cpp",
+  "aurora_source": "extern/aurora/lib/webgpu/gpu.cpp",
+  "minimum_vulkan": [1, 1],
+  "required_features": [
+    "robustBufferAccess", "fragmentStoresAndAtomics", "fullDrawIndexUint32",
+    "shaderUniformBufferArrayDynamicIndexing", "shaderStorageBufferArrayDynamicIndexing",
+    "shaderSampledImageArrayDynamicIndexing", "shaderStorageImageArrayDynamicIndexing"
+  ],
+  "compression_any": [["textureCompressionBC"], ["textureCompressionETC2", "textureCompressionASTC_LDR"]],
+  "core_features": ["depthBiasClamp", "imageCubeArray", "independentBlend", "sampleRateShading"],
+  "required_instance_extensions": ["VK_KHR_surface", "VK_EXT_headless_surface"],
+  "required_device_extensions": ["VK_KHR_swapchain"],
+  "minimum_limits": {"maxImageDimension2D": 2048, "maxPerStageDescriptorStorageBuffers": 2},
+  "preferred_limits": {"maxPerStageDescriptorSampledImages": 17},
+  "unproven_until_device_tests": [
+    "Dawn adapter and device initialization", "WGSL to SPIR-V through Tint and ACO",
+    "Aurora GX shader correctness", "format usage and sample counts", "render-pass and descriptor behavior",
+    "fence and semaphore visibility", "swapchain acquisition and display retirement", "memory pressure and recovery",
+    "depth/stencil and visor effects", "full progression", "1080p60 performance"
+  ]
+}

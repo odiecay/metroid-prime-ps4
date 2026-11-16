@@ -1,0 +1,791 @@
+diff --git a/src/dawn/common/SystemUtils.cpp b/src/dawn/common/SystemUtils.cpp
+index df995f32ac..08ca5574ae 100644
+--- a/src/dawn/common/SystemUtils.cpp
++++ b/src/dawn/common/SystemUtils.cpp
+@@ -47,7 +47,7 @@
+ #include <mach-o/dyld.h>
+ 
+ #include <vector>
+-#elif DAWN_PLATFORM_IS(SWITCH)
++#elif DAWN_PLATFORM_IS(SWITCH) || DAWN_PLATFORM_IS(ORBIS)
+ #include <cstdlib>
+ #endif
+ 
+@@ -152,6 +152,10 @@ std::optional<std::string> GetExecutablePath() {
+     buffer[size] = '\0';
+     return buffer.data();
+ }
++#elif DAWN_PLATFORM_IS(ORBIS)
++std::optional<std::string> GetExecutablePath() {
++    return "/app0/eboot.bin";
++}
+ #elif DAWN_PLATFORM_IS(FUCHSIA)
+ std::optional<std::string> GetExecutablePath() {
+     // UNIMPLEMENTED
+@@ -211,6 +215,10 @@ std::optional<std::string> GetModulePath() {
+     return GetHModulePath(module);
+ #endif
+ }
++#elif DAWN_PLATFORM_IS(ORBIS)
++std::optional<std::string> GetModulePath() {
++    return "/app0/eboot.bin";
++}
+ #elif DAWN_PLATFORM_IS(FUCHSIA)
+ std::optional<std::string> GetModulePath() {
+     return {};
+diff --git a/src/dawn/dawn.json b/src/dawn/dawn.json
+index 65fe897947..fcc0974c9b 100644
+--- a/src/dawn/dawn.json
++++ b/src/dawn/dawn.json
+@@ -4000,6 +4000,13 @@
+             {"name": "window", "type": "uint32_t"}
+         ]
+     },
++    "surface source orbis": {
++        "category": "structure",
++        "chained": "in",
++        "chain roots": ["surface descriptor"],
++        "tags": ["dawn", "native"],
++        "members": []
++    },
+     "surface source switch NWindow": {
+         "category": "structure",
+         "chained": "in",
+@@ -4111,6 +4118,7 @@
+             {"value": 15, "name": "compatibility mode limits"},
+             {"value": 16, "name": "texture binding view dimension"},
+             {"value": 17, "name": "surface source switch NWindow"},
++            {"value": 1000, "name": "surface source orbis", "tags": ["dawn", "native"]},
+ 
+             {"value": 0, "name": "emscripten surface source canvas HTML selector", "tags": ["emscripten"]},
+ 
+diff --git a/src/dawn/native/PassResourceUsageTracker.cpp b/src/dawn/native/PassResourceUsageTracker.cpp
+index 8cf807e179..a5eb5dba89 100644
+--- a/src/dawn/native/PassResourceUsageTracker.cpp
++++ b/src/dawn/native/PassResourceUsageTracker.cpp
+@@ -27,6 +27,8 @@
+ 
+ #include "src/dawn/native/PassResourceUsageTracker.h"
+ 
++#include <cstdlib>
++#include <cstring>
+ #include <utility>
+ 
+ #include "src/dawn/common/MatchVariant.h"
+@@ -39,15 +41,48 @@
+ #include "src/dawn/native/TexelBufferView.h"
+ #include "src/dawn/native/Texture.h"
+ 
++#ifdef __ORBIS__
++extern "C" void prime_ps4_bind_group_usage_counts(uint64_t hits,
++                                                  uint64_t misses) __attribute__((weak));
++#endif
++
+ namespace dawn::native {
+ 
++namespace {
++bool BindGroupUsageReuseEnabled() {
++    static const bool enabled = [] {
++        const char* value = std::getenv("MP_BIND_GROUP_USAGE_REUSE");
++        return value == nullptr || std::strcmp(value, "0") != 0;
++    }();
++    return enabled;
++}
++}  // namespace
++
+ SyncScopeUsageTracker::SyncScopeUsageTracker() = default;
+ 
+-SyncScopeUsageTracker::SyncScopeUsageTracker(SyncScopeUsageTracker&&) = default;
++SyncScopeUsageTracker::SyncScopeUsageTracker(SyncScopeUsageTracker&& other)
++    : mBufferSyncInfos(std::move(other.mBufferSyncInfos)),
++      mTextureSyncInfos(std::move(other.mTextureSyncInfos)),
++      mExternalTextureUsages(std::move(other.mExternalTextureUsages)),
++      mUsedResourceTables(std::move(other.mUsedResourceTables)),
++      mTrackedBindGroups(std::move(other.mTrackedBindGroups)),
++      mBindGroupUsageHits(std::exchange(other.mBindGroupUsageHits, 0)),
++      mBindGroupUsageMisses(std::exchange(other.mBindGroupUsageMisses, 0)) {}
+ 
+ SyncScopeUsageTracker::~SyncScopeUsageTracker() = default;
+ 
+-SyncScopeUsageTracker& SyncScopeUsageTracker::operator=(SyncScopeUsageTracker&&) = default;
++SyncScopeUsageTracker& SyncScopeUsageTracker::operator=(SyncScopeUsageTracker&& other) {
++    if (this != &other) {
++        mBufferSyncInfos = std::move(other.mBufferSyncInfos);
++        mTextureSyncInfos = std::move(other.mTextureSyncInfos);
++        mExternalTextureUsages = std::move(other.mExternalTextureUsages);
++        mUsedResourceTables = std::move(other.mUsedResourceTables);
++        mTrackedBindGroups = std::move(other.mTrackedBindGroups);
++        mBindGroupUsageHits = std::exchange(other.mBindGroupUsageHits, 0);
++        mBindGroupUsageMisses = std::exchange(other.mBindGroupUsageMisses, 0);
++    }
++    return *this;
++}
+ 
+ void SyncScopeUsageTracker::BufferUsedAs(BufferBase* buffer,
+                                          wgpu::BufferUsage usage,
+@@ -124,6 +159,14 @@ void SyncScopeUsageTracker::MergeResourceUsages(const SyncScopeResourceUsage& us
+ }
+ 
+ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
++    const uintptr_t identity = reinterpret_cast<uintptr_t>(group);
++    const size_t cacheSlot = ((identity >> 4) ^ (identity >> 11)) % kBindGroupUsageCacheSize;
++    const bool reuse = BindGroupUsageReuseEnabled();
++    if (reuse && mTrackedBindGroups[cacheSlot].Get() == group) {
++        ++mBindGroupUsageHits;
++        return;
++    }
++    ++mBindGroupUsageMisses;
+     const auto* layout = group->GetLayout();
+ 
+     for (BindingIndex i : layout->GetBufferIndices()) {
+@@ -226,6 +269,15 @@ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
+             mExternalTextureUsages.insert(externalTexture.Get());
+         }
+     }
++    if (reuse) {
++        // Only a fully tracked group can become a hit. Dynamic offsets do not
++        // affect this usage union: buffers are already tracked as whole objects.
++        mTrackedBindGroups[cacheSlot] = group;
++    }
++}
++
++std::array<uint64_t, 2> SyncScopeUsageTracker::GetBindGroupUsageCountsForTesting() const {
++    return {mBindGroupUsageHits, mBindGroupUsageMisses};
+ }
+ 
+ void SyncScopeUsageTracker::AddResourceTableUsage(ResourceTableBase* table) {
+@@ -261,6 +313,21 @@ SyncScopeResourceUsage SyncScopeUsageTracker::AcquireSyncScopeUsage() {
+     }
+     mUsedResourceTables.clear();
+ 
++#ifdef __ORBIS__
++    if ((mBindGroupUsageHits != 0 || mBindGroupUsageMisses != 0) &&
++        prime_ps4_bind_group_usage_counts) {
++        prime_ps4_bind_group_usage_counts(mBindGroupUsageHits, mBindGroupUsageMisses);
++    }
++#endif
++    mBindGroupUsageHits = 0;
++    mBindGroupUsageMisses = 0;
++
++    // A later compute dispatch or reused tracker starts a new scope. Commands
++    // retain their own bind-group references independently of this small cache.
++    for (auto& group : mTrackedBindGroups) {
++        group = nullptr;
++    }
++
+     return result;
+ }
+ 
+diff --git a/src/dawn/native/PassResourceUsageTracker.h b/src/dawn/native/PassResourceUsageTracker.h
+index aed7721f3d..4d98b00e7d 100644
+--- a/src/dawn/native/PassResourceUsageTracker.h
++++ b/src/dawn/native/PassResourceUsageTracker.h
+@@ -28,8 +28,11 @@
+ #ifndef SRC_DAWN_NATIVE_PASSRESOURCEUSAGETRACKER_H_
+ #define SRC_DAWN_NATIVE_PASSRESOURCEUSAGETRACKER_H_
+ 
++#include <array>
++
+ #include "absl/container/flat_hash_map.h"
+ #include "absl/container/flat_hash_set.h"
++#include "src/dawn/common/Ref.h"
+ #include "src/dawn/common/ityp_vector.h"
+ #include "src/dawn/native/IntegerTypes.h"
+ #include "src/dawn/native/PassResourceUsage.h"
+@@ -71,6 +74,8 @@ class SyncScopeUsageTracker {
+     // Walks the bind groups and tracks all its resources.
+     void AddBindGroup(BindGroupBase* group);
+ 
++    std::array<uint64_t, 2> GetBindGroupUsageCountsForTesting() const;
++
+     void AddResourceTableUsage(ResourceTableBase* table);
+ 
+     // Returns the per-pass usage for use by backends for APIs with explicit barriers.
+@@ -83,6 +88,14 @@ class SyncScopeUsageTracker {
+     absl::flat_hash_map<TextureBase*, TextureSubresourceSyncInfo> mTextureSyncInfos;
+     absl::flat_hash_set<ExternalTextureBase*> mExternalTextureUsages;
+     absl::flat_hash_set<ResourceTableBase*> mUsedResourceTables;
++    // A bind group is immutable, so its resource usages need merging once in
++    // this synchronization scope. Bounded, strongly owning identity keys avoid
++    // confusing a freed group's address with a new object. Collisions only
++    // repeat the original walk; they never suppress tracking.
++    static constexpr size_t kBindGroupUsageCacheSize = 64;
++    std::array<Ref<BindGroupBase>, kBindGroupUsageCacheSize> mTrackedBindGroups;
++    uint64_t mBindGroupUsageHits = 0;
++    uint64_t mBindGroupUsageMisses = 0;
+ };
+ 
+ // Helper class to build ComputePassResourceUsages
+diff --git a/src/dawn/native/Queue.cpp b/src/dawn/native/Queue.cpp
+index 4c8c479d48..14a911fd9c 100644
+--- a/src/dawn/native/Queue.cpp
++++ b/src/dawn/native/Queue.cpp
+@@ -28,6 +28,9 @@
+ #include "src/dawn/native/Queue.h"
+ 
+ #include <webgpu/webgpu.h>
++#ifdef __ORBIS__
++#include <prime_dawn_trace.h>
++#endif
+ 
+ #include <algorithm>
+ #include <cstring>
+@@ -619,7 +622,12 @@ MaybeError QueueBase::SubmitInternal(Span<CommandBufferBase* const> commands) {
+     std::move(finishUseBuffers).Invoke();
+ 
+     // Call Tick() to flush pending work.
+-    DAWN_TRY(device->Tick());
++    {
++#ifdef __ORBIS__
++        PrimeDawnScope profileTick(1);
++#endif
++        DAWN_TRY(device->Tick());
++    }
+ 
+     return {};
+ }
+diff --git a/src/dawn/native/Surface.cpp b/src/dawn/native/Surface.cpp
+index 8ebe3104cd..c55907058f 100644
+--- a/src/dawn/native/Surface.cpp
++++ b/src/dawn/native/Surface.cpp
+@@ -85,6 +85,9 @@ absl::FormatConvertResult<absl::FormatConversionCharSet::kString> AbslFormatConv
+         case Surface::Type::SwitchNWindow:
+             s->Append("SwitchNWindow");
+             break;
++        case Surface::Type::Orbis:
++            s->Append("Orbis");
++            break;
+         case Surface::Type::XlibWindow:
+             s->Append("XlibWindow");
+             break;
+@@ -119,9 +122,13 @@ ResultOrError<UnpackedPtr<SurfaceDescriptor>> ValidateSurfaceDescriptor(
+                   Branch<SurfaceSourceWindowsHWND>, Branch<SurfaceDescriptorFromWindowsCoreWindow>,
+                   Branch<SurfaceDescriptorFromWindowsUWPSwapChainPanel>,
+                   Branch<SurfaceDescriptorFromWindowsWinUISwapChainPanel>,
+-                  Branch<SurfaceSourceSwitchNWindow>,
++                  Branch<SurfaceSourceSwitchNWindow>, Branch<SurfaceSourceOrbis>,
+                   Branch<SurfaceSourceXlibWindow>, Branch<SurfaceSourceWaylandSurface>>()));
+     switch (type) {
++#if DAWN_PLATFORM_IS(ORBIS)
++        case wgpu::SType::SurfaceSourceOrbis:
++            return descriptor;
++#endif
+ #if DAWN_PLATFORM_IS(ANDROID)
+         case wgpu::SType::SurfaceSourceAndroidNativeWindow: {
+             auto* subDesc = descriptor.Get<SurfaceSourceAndroidNativeWindow>();
+@@ -316,7 +323,7 @@ Surface::Surface(InstanceBase* instance, const UnpackedPtr<SurfaceDescriptor>& d
+                 Branch<SurfaceSourceWindowsHWND>, Branch<SurfaceDescriptorFromWindowsCoreWindow>,
+                 Branch<SurfaceDescriptorFromWindowsUWPSwapChainPanel>,
+                 Branch<SurfaceDescriptorFromWindowsWinUISwapChainPanel>,
+-                Branch<SurfaceSourceSwitchNWindow>,
++                Branch<SurfaceSourceSwitchNWindow>, Branch<SurfaceSourceOrbis>,
+                 Branch<SurfaceSourceXlibWindow>, Branch<SurfaceSourceWaylandSurface>>()
+             .AcquireSuccess();
+     switch (type) {
+@@ -365,6 +372,9 @@ Surface::Surface(InstanceBase* instance, const UnpackedPtr<SurfaceDescriptor>& d
+             mSwitchNWindow = subDesc->window;
+             break;
+         }
++        case wgpu::SType::SurfaceSourceOrbis:
++            mType = Type::Orbis;
++            break;
+         case wgpu::SType::SurfaceSourceWaylandSurface: {
+             auto* subDesc = descriptor.Get<SurfaceSourceWaylandSurface>();
+             mType = Type::WaylandSurface;
+diff --git a/src/dawn/native/Surface.h b/src/dawn/native/Surface.h
+index 450411b4c9..9831dc5ace 100644
+--- a/src/dawn/native/Surface.h
++++ b/src/dawn/native/Surface.h
+@@ -85,6 +85,7 @@ class Surface final : public ErrorMonad {
+         WindowsUWPSwapChainPanel,
+         WindowsWinUISwapChainPanel,
+         SwitchNWindow,
++        Orbis,
+         XlibWindow,
+     };
+     Type GetType() const;
+diff --git a/src/dawn/native/vulkan/BackendVk.cpp b/src/dawn/native/vulkan/BackendVk.cpp
+index 064b572f5c..57fbc7ccd6 100644
+--- a/src/dawn/native/vulkan/BackendVk.cpp
++++ b/src/dawn/native/vulkan/BackendVk.cpp
+@@ -69,7 +69,7 @@ constexpr char kVulkanLibName[] = "vulkan-1.dll";
+ constexpr char kVulkanLibName[] = "libvulkan.dylib";
+ #elif DAWN_PLATFORM_IS(FUCHSIA)
+ constexpr char kVulkanLibName[] = "libvulkan.so";
+-#elif DAWN_PLATFORM_IS(SWITCH)
++#elif DAWN_PLATFORM_IS(SWITCH) || DAWN_PLATFORM_IS(ORBIS)
+ constexpr char kVulkanLibName[] = "";
+ #else
+ #error "Unimplemented Vulkan backend platform"
+diff --git a/src/dawn/native/vulkan/CommandBufferVk.cpp b/src/dawn/native/vulkan/CommandBufferVk.cpp
+index d9ee304571..47efb30836 100644
+--- a/src/dawn/native/vulkan/CommandBufferVk.cpp
++++ b/src/dawn/native/vulkan/CommandBufferVk.cpp
+@@ -27,7 +27,12 @@
+ 
+ #include "src/dawn/native/vulkan/CommandBufferVk.h"
+ 
++#ifdef __ORBIS__
++#include <prime_dawn_trace.h>
++#endif
++
+ #include <algorithm>
++#include <array>
+ #include <concepts>
+ #include <limits>
+ #include <memory>
+@@ -70,6 +75,11 @@
+ #include "src/utils/compiler.h"
+ #include "src/utils/numeric.h"
+ 
++#ifdef __ORBIS__
++extern "C" void prime_ps4_descriptor_bind_counts(uint64_t calls,
++                                                  uint64_t sets) __attribute__((weak));
++#endif
++
+ namespace dawn::native::vulkan {
+ 
+ namespace {
+@@ -248,6 +258,30 @@ VkRect2D GetAlignedRenderArea(Device* device,
+ 
+ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
+   public:
++    DescriptorSetTracker() = default;
++    DescriptorSetTracker(const DescriptorSetTracker&) = delete;
++    DescriptorSetTracker& operator=(const DescriptorSetTracker&) = delete;
++    DescriptorSetTracker(DescriptorSetTracker&&) = delete;
++    DescriptorSetTracker& operator=(DescriptorSetTracker&&) = delete;
++    ~DescriptorSetTracker() override {
++#ifdef __ORBIS__
++        // One observer call per encoded programmable pass, including early
++        // returns. Never emit an event or call an observer for each draw.
++        if (mDescriptorBindCalls != 0 && prime_ps4_descriptor_bind_counts) {
++            prime_ps4_descriptor_bind_counts(mDescriptorBindCalls, mDescriptorSetsBound);
++        }
++#endif
++    }
++
++    void NoteDescriptorBind(uint32_t setCount) {
++#ifdef __ORBIS__
++        ++mDescriptorBindCalls;
++        mDescriptorSetsBound += setCount;
++#else
++        (void)setCount;
++#endif
++    }
++
+     bool AreLayoutsCompatible() override {
+         return mLastAppliedPipeline != nullptr &&
+                mLastAppliedPipeline->GetLayout() == mPipeline->GetLayout() &&
+@@ -317,6 +351,7 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
+                 vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
+                                          static_cast<uint32_t>(startOfBindGroups), 1,
+                                          &*mFramebufferFetchDescriptorSet, 0, nullptr);
++                NoteDescriptorBind(1);
+             }
+         }
+         if (mFramebufferFetchEnabled) {
+@@ -336,23 +371,65 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
+                 vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
+                                          static_cast<uint32_t>(startOfBindGroups), 1, &*set, 0,
+                                          nullptr);
++                NoteDescriptorBind(1);
+             }
+         }
+         if (mUsesResourceTable) {
+             ++startOfBindGroups;
+         }
+ 
++        // Consecutive dirty sets share this pipeline layout. Bind each contiguous
++        // run together, retaining Vulkan's set-major dynamic-offset order.
++        std::array<VkDescriptorSet, kMaxBindGroups> sets;
++        constexpr uint32_t kOffsetCapacity =
++            kMaxBindGroups * (kMaxDynamicUniformBuffersPerPipelineLayout +
++                             kMaxDynamicStorageBuffersPerPipelineLayout);
++        std::array<uint32_t, kOffsetCapacity> offsets;
++        const uint32_t* offsetData = nullptr;
++        uint32_t firstSet = 0;
++        uint32_t setCount = 0;
++        uint32_t offsetCount = 0;
++        const auto flush = [&] {
++            if (setCount == 0) {
++                return;
++            }
++            vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout, firstSet, setCount,
++                                     AsVkArray(sets.data()), offsetCount, offsetData);
++            NoteDescriptorBind(setCount);
++            setCount = 0;
++            offsetCount = 0;
++            offsetData = nullptr;
++        };
+         for (BindGroupIndex dirtyBGIndex : dirtyBindGroups) {
+-            VkDescriptorSet set = GetDescriptorSet(dirtyBGIndex);
+-            uint32_t setIndex = uint32_t{dirtyBGIndex + startOfBindGroups};
+-
++            const uint32_t setIndex = uint32_t{dirtyBGIndex + startOfBindGroups};
++            if (setCount != 0 && setIndex != firstSet + setCount) {
++                flush();
++            }
++            if (setCount == 0) {
++                firstSet = setIndex;
++            }
++            DAWN_ASSERT(setCount < sets.size());
++            sets[setCount++] = GetDescriptorSet(dirtyBGIndex);
+             const auto dynamicOffsetSpan = GetDynamicOffsets(dirtyBGIndex);
+-            uint32_t count = static_cast<uint32_t>(dynamicOffsetSpan.size());
+-            const uint32_t* dynamicOffset = count > 0 ? dynamicOffsetSpan.data() : nullptr;
+-
+-            vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout, setIndex, 1, &*set, count,
+-                                     dynamicOffset);
++            const uint32_t count = static_cast<uint32_t>(dynamicOffsetSpan.size());
++            DAWN_ASSERT(count <= offsets.size() - offsetCount);
++            if (count != 0) {
++                if (offsetCount == 0) {
++                    // Most draws use dynamic offsets from one group only.
++                    // The tracker storage stays valid throughout this Apply,
++                    // so pass it directly instead of copying a tiny span.
++                    offsetData = dynamicOffsetSpan.data();
++                } else {
++                    if (offsetData != offsets.data()) {
++                        std::copy_n(offsetData, offsetCount, offsets.begin());
++                    }
++                    std::ranges::copy(dynamicOffsetSpan, offsets.begin() + offsetCount);
++                    offsetData = offsets.data();
++                }
++            }
++            offsetCount += count;
+         }
++        flush();
+ 
+         // Update PipelineLayout
+         AfterApply();
+@@ -373,6 +450,12 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
+     VkDescriptorSet mFramebufferFetchDescriptorSet = VK_NULL_HANDLE;
+     uint32_t mLastAppliedImmediateSize = 0;
+     uint32_t mImmediateSize = 0;
++
++  private:
++#ifdef __ORBIS__
++    uint64_t mDescriptorBindCalls = 0;
++    uint64_t mDescriptorSetsBound = 0;
++#endif
+ };
+ 
+ class RenderImmediatesTracker
+@@ -396,6 +479,25 @@ class ImmediateTracker : public T {
+   public:
+     ImmediateTracker() = default;
+ 
++    template <typename VkPipelineType>
++    void OnSetPipeline(VkPipelineType* pipeline) {
++        if (this->mLastPipeline == pipeline) {
++            return;
++        }
++        // Dawn compacts immediate words by mask into one offset-zero range
++        // with kImmediateShaderStages. Identical masks therefore preserve both
++        // the Vulkan push-constant range and every word's position. Keep any
++        // explicitly changed words dirty, without re-uploading unchanged
++        // values merely because the pipeline object changed.
++        const auto& mask = pipeline->GetImmediateMask();
++        if (this->mLastPipeline != nullptr && mPipelineImmediateMask == mask) {
++            this->mLastPipeline = pipeline;
++            return;
++        }
++        T::OnSetPipeline(pipeline);
++        mPipelineImmediateMask = mask;
++    }
++
+     void DirtyAll() { this->mDirty.set(); }
+ 
+     void Apply(const VulkanFunctions& vk, VkCommandBuffer commandBuffer) {
+@@ -423,6 +525,9 @@ class ImmediateTracker : public T {
+         // Reset all dirty bits after uploading.
+         this->mDirty.reset();
+     }
++
++  private:
++    ImmediateMask mPipelineImmediateMask = 0;
+ };
+ 
+ // Records the necessary barriers for a synchronization scope using the resource usage
+@@ -430,6 +535,9 @@ class ImmediateTracker : public T {
+ MaybeError PrepareResourcesForSyncScope(Device* device,
+                                         CommandRecordingContext* recordingContext,
+                                         const SyncScopeResourceUsage& scope) {
++#ifdef __ORBIS__
++    PrimeDawnScope profileResources(3);
++#endif
+     // Apply pending updates to all resource tables used in usages scope.
+     // This has to be done before transitioning resources.
+     // TODO(crbug.com/529883743): Consider folding the logic in GatherWritableTextures into the
+@@ -526,7 +634,10 @@ MaybeError PrepareResourcesForSyncScope(Device* device,
+         }
+     }
+ 
+-    for (const ImageBarriers& barriers : {vertexImageBarriers, nonVertexImageBarriers}) {
++    // Visit the two batches directly. An initializer_list<ImageBarriers>
++    // copies both vectors and allocates while encoding every nonempty scope.
++    for (const ImageBarriers* batch : {&vertexImageBarriers, &nonVertexImageBarriers}) {
++        const ImageBarriers& barriers = *batch;
+         if (!barriers.imageBarriers.empty()) {
+             device->fn.CmdPipelineBarrier(recordingContext->commandBuffer, barriers.srcStages,
+                                           barriers.dstStages, 0, 0, nullptr, 0, nullptr,
+@@ -1729,6 +1840,9 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                                            BeginRenderPassCmd* renderPassCmd,
+                                            const RenderPassResourceUsage& usage,
+                                            PassIndex renderPassIndex) {
++#ifdef __ORBIS__
++    PrimeDawnScope profileReplay(4);
++#endif
+     Device* device = ToBackend(GetDevice());
+     VkCommandBuffer commands = recordingContext->commandBuffer;
+ 
+@@ -1745,7 +1859,12 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+     }
+ 
+-    DAWN_TRY(RecordBeginRenderPass(recordingContext, device, renderPassCmd));
++    {
++#ifdef __ORBIS__
++        PrimeDawnScope profilePassSetup(5);
++#endif
++        DAWN_TRY(RecordBeginRenderPass(recordingContext, device, renderPassCmd));
++    }
+ 
+     RenderPassState state(device->fn, recordingContext);
+ 
+diff --git a/src/dawn/native/vulkan/QueueVk.cpp b/src/dawn/native/vulkan/QueueVk.cpp
+index 9c48d23a1f..72f2c6c50e 100644
+--- a/src/dawn/native/vulkan/QueueVk.cpp
++++ b/src/dawn/native/vulkan/QueueVk.cpp
+@@ -26,6 +26,9 @@
+ // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ #include "src/dawn/native/vulkan/QueueVk.h"
++#ifdef __ORBIS__
++#include <prime_dawn_trace.h>
++#endif
+ 
+ #include <limits>
+ #include <optional>
+@@ -103,9 +106,14 @@ MaybeError Queue::Initialize() {
+ MaybeError Queue::SubmitImpl(Span<CommandBufferBase* const> commands) {
+     TRACE_EVENT_BEGIN0(GetDevice()->GetPlatform(), Recording, "CommandBufferVk::RecordCommands");
+     CommandRecordingContext* recordingContext = GetPendingRecordingContext();
++    {
++#ifdef __ORBIS__
++    PrimeDawnScope profileRecording(0);
++#endif
+     for (CommandBufferBase* commandBuffer : commands) {
+         DAWN_TRY(ToBackend(commandBuffer)->RecordCommands(recordingContext));
+     }
++    }
+     TRACE_EVENT_END0(GetDevice()->GetPlatform(), Recording, "CommandBufferVk::RecordCommands");
+ 
+     DAWN_TRY(SubmitPendingCommandsImpl());
+@@ -298,6 +306,11 @@ MaybeError Queue::SubmitPendingCommandsImpl() {
+     if (!mRecordingContext.needsSubmit) {
+         return {};
+     }
++#ifdef __ORBIS__
++    // Present and device progress can submit pending work without SubmitImpl.
++    // Profile the backend operation once, including its context recycling.
++    PrimeDawnScope profileSubmit(2);
++#endif
+ 
+     Device* device = ToBackend(GetDevice());
+ 
+diff --git a/src/dawn/native/vulkan/SwapChainVk.cpp b/src/dawn/native/vulkan/SwapChainVk.cpp
+index 179453e57e..46084449f2 100644
+--- a/src/dawn/native/vulkan/SwapChainVk.cpp
++++ b/src/dawn/native/vulkan/SwapChainVk.cpp
+@@ -149,6 +149,22 @@ MaybeError SwapChain::Initialize(SwapChainBase* previousSwapChain) {
+         DAWN_INVALID_IF(previousSwapChain->GetDevice() != GetDevice(),
+                         "Vulkan SwapChain cannot switch between devices.");
+ 
++#if defined(__ORBIS__)
++        // Native sceVideoOut allows one connection to the main display. The
++        // Orbis WSI cannot overlap two scanouts during Vulkan's oldSwapchain
++        // transition. Finish real submitted work before transferring ownership;
++        // on timeout leave the old chain and its images intact.
++        if (previousVulkanSwapChain->mSwapChain != VK_NULL_HANDLE) {
++            Queue* queue = ToBackend(device->GetQueue());
++            DAWN_TRY(queue->SubmitPendingCommands());
++            const ExecutionSerial serial = queue->GetLastSubmittedCommandSerial();
++            DAWN_TRY(queue->WaitForQueueSerial(serial, Nanoseconds(5000000000ull)));
++            if (queue->GetCompletedCommandSerial() < serial) {
++                return DAWN_INTERNAL_ERROR("Orbis swapchain retirement timed out waiting for GPU work");
++            }
++        }
++#endif
++
+         // The previous swapchain is a dawn::native::vulkan::SwapChain so we can reuse its
+         // VkSurfaceKHR provided since they are on the same instance.
+         std::swap(previousVulkanSwapChain->mVkSurface, mVkSurface);
+@@ -159,9 +175,18 @@ MaybeError SwapChain::Initialize(SwapChainBase* previousSwapChain) {
+         // allows destroying it immediately after the call to vkCreateSwapChainKHR but tracking
+         // using the fenced deleter makes the code simpler).
+         std::swap(previousVulkanSwapChain->mSwapChain, previousVkSwapChain);
++#if defined(__ORBIS__)
++        if (previousVkSwapChain != VK_NULL_HANDLE) {
++            // The WSI drains pending presentation and closes the native output
++            // before releasing its swapchain images. Keep the VkSurface itself.
++            device->fn.DestroySwapchainKHR(device->GetVkDevice(), previousVkSwapChain, nullptr);
++            previousVkSwapChain = VK_NULL_HANDLE;
++        }
++#else
+         ToBackend(previousSwapChain->GetDevice())
+             ->GetFencedDeleter()
+             ->DeleteWhenUnused(previousVkSwapChain);
++#endif
+     }
+ 
+     if (mVkSurface == VK_NULL_HANDLE) {
+@@ -666,6 +691,23 @@ ResultOrError<VkSurfaceKHR> CreateVulkanSurface(InstanceBase* instance,
+ 
+ #endif  // DAWN_PLATFORM_IS(ANDROID)
+ 
++#if DAWN_PLATFORM_IS(ORBIS)
++        case Surface::Type::Orbis: {
++            // The pinned Orbis RADV routes EXT_headless_surface to its native
++            // sceVideoOut WSI. This must fail when the real extension is absent.
++            if (info.HasExt(InstanceExt::HeadlessSurface)) {
++                VkHeadlessSurfaceCreateInfoEXT createInfo = {};
++                createInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
++                VkSurfaceKHR vkSurface = VK_NULL_HANDLE;
++                DAWN_TRY(CheckVkSuccess(
++                    fn.CreateHeadlessSurfaceEXT(vkInstance, &createInfo, nullptr, &*vkSurface),
++                    "CreateHeadlessSurfaceEXT (Orbis)"));
++                return vkSurface;
++            }
++            break;
++        }
++#endif
++
+ #if DAWN_PLATFORM_IS(SWITCH)
+         case Surface::Type::SwitchNWindow: {
+             if (info.HasExt(InstanceExt::ViSurface)) {
+diff --git a/src/dawn/native/vulkan/VulkanExtensions.cpp b/src/dawn/native/vulkan/VulkanExtensions.cpp
+index a327a83def..a03dd1adad 100644
+--- a/src/dawn/native/vulkan/VulkanExtensions.cpp
++++ b/src/dawn/native/vulkan/VulkanExtensions.cpp
+@@ -50,6 +50,7 @@ static constexpr std::array<InstanceExtInfo, kInstanceExtCount> sInstanceExtInfo
+     {InstanceExt::XlibSurface, "VK_KHR_xlib_surface"},
+     {InstanceExt::AndroidSurface, "VK_KHR_android_surface"},
+     {InstanceExt::ViSurface, "VK_NN_vi_surface"},
++    {InstanceExt::HeadlessSurface, "VK_EXT_headless_surface"},
+ 
+     {InstanceExt::DebugUtils, "VK_EXT_debug_utils"},
+     {InstanceExt::ValidationFeatures, "VK_EXT_validation_features"},
+@@ -104,6 +105,7 @@ InstanceExtSet EnsureDependencies(const InstanceExtSet& advertisedExts) {
+             case InstanceExt::XcbSurface:
+             case InstanceExt::XlibSurface:
+             case InstanceExt::ViSurface:
++            case InstanceExt::HeadlessSurface:
+                 hasDependencies = HasDep(InstanceExt::Surface);
+                 break;
+ 
+diff --git a/src/dawn/native/vulkan/VulkanExtensions.h b/src/dawn/native/vulkan/VulkanExtensions.h
+index 66d3041281..b2e1053e7b 100644
+--- a/src/dawn/native/vulkan/VulkanExtensions.h
++++ b/src/dawn/native/vulkan/VulkanExtensions.h
+@@ -48,6 +48,7 @@ enum class InstanceExt : uint32_t {
+     XlibSurface,
+     AndroidSurface,
+     ViSurface,
++    HeadlessSurface,
+ 
+     // Others
+     DebugUtils,
+diff --git a/src/dawn/native/vulkan/VulkanFunctions.cpp b/src/dawn/native/vulkan/VulkanFunctions.cpp
+index 1dba519788..7be74d81a8 100644
+--- a/src/dawn/native/vulkan/VulkanFunctions.cpp
++++ b/src/dawn/native/vulkan/VulkanFunctions.cpp
+@@ -35,7 +35,7 @@
+ 
+ namespace dawn::native::vulkan {
+ 
+-#if DAWN_PLATFORM_IS(SWITCH)
++#if DAWN_PLATFORM_IS(SWITCH) || DAWN_PLATFORM_IS(ORBIS)
+ extern "C" {
+ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
+ }
+@@ -95,7 +95,7 @@ F AsVkFn(void(VKAPI_PTR* addr)()) {
+     } while (0)
+ 
+ MaybeError VulkanFunctions::LoadGlobalProcs(const DynamicLib& vulkanLib) {
+-#if DAWN_PLATFORM_IS(SWITCH)
++#if DAWN_PLATFORM_IS(SWITCH) || DAWN_PLATFORM_IS(ORBIS)
+     (void)vulkanLib;
+     GetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+         vk_icdGetInstanceProcAddr(VK_NULL_HANDLE, "vkGetInstanceProcAddr"));
+@@ -189,6 +189,9 @@ MaybeError VulkanFunctions::LoadInstanceProcs(VkInstance instance,
+         GET_INSTANCE_PROC(GetPhysicalDeviceSurfaceFormatsKHR);
+         GET_INSTANCE_PROC(GetPhysicalDeviceSurfacePresentModesKHR);
+     }
++    if (globalInfo.HasExt(InstanceExt::HeadlessSurface)) {
++        GET_INSTANCE_PROC(CreateHeadlessSurfaceEXT);
++    }
+ 
+ #if defined(VK_USE_PLATFORM_FUCHSIA)
+     if (globalInfo.HasExt(InstanceExt::FuchsiaImagePipeSurface)) {
+diff --git a/src/dawn/native/vulkan/VulkanFunctions.h b/src/dawn/native/vulkan/VulkanFunctions.h
+index e61a0ba2ca..3a312d18c9 100644
+--- a/src/dawn/native/vulkan/VulkanFunctions.h
++++ b/src/dawn/native/vulkan/VulkanFunctions.h
+@@ -78,6 +78,7 @@ struct VulkanFunctions {
+ 
+     // Initial proc from which we can get all the others
+     PFN_vkGetInstanceProcAddr GetInstanceProcAddr = nullptr;
++    VkFn<PFN_vkCreateHeadlessSurfaceEXT> CreateHeadlessSurfaceEXT = nullptr;
+ 
+     VkFn<PFN_vkCreateInstance> CreateInstance = nullptr;
+     VkFn<PFN_vkEnumerateInstanceExtensionProperties> EnumerateInstanceExtensionProperties = nullptr;
+diff --git a/src/utils/platform.h b/src/utils/platform.h
+index 9eee1aa910..3eefb0e6a9 100644
+--- a/src/utils/platform.h
++++ b/src/utils/platform.h
+@@ -96,6 +96,10 @@
+ #define DAWN_PLATFORM_IS_POSIX 1
+ #include <emscripten/emscripten.h>
+ 
++#elif defined(__ORBIS__)
++#define DAWN_PLATFORM_IS_ORBIS 1
++#define DAWN_PLATFORM_IS_POSIX 1
++
+ #elif defined(__SWITCH__)
+ #define DAWN_PLATFORM_IS_SWITCH 1
+ 
+diff --git a/src/utils/underlying_type.h b/src/utils/underlying_type.h
+index 0be9c277a9..948d7a911a 100644
+--- a/src/utils/underlying_type.h
++++ b/src/utils/underlying_type.h
+@@ -42,7 +42,7 @@ template <typename T, typename Enable = void>
+ struct UnderlyingTypeImpl;
+ 
+ template <typename I>
+-    requires std::integral<I>
++    requires std::is_integral_v<I>
+ struct UnderlyingTypeImpl<I> {
+     using type = I;
+ };
+@@ -67,10 +67,11 @@ template <typename T>
+ using UnderlyingType = typename detail::UnderlyingTypeImpl<T>::type;
+ 
+ template <typename T>
+-concept HasUnderlyingType = std::integral<UnderlyingType<T>>;
++concept HasUnderlyingType = std::is_integral_v<UnderlyingType<T>>;
+ 
+ template <typename T>
+-concept HasUnsignedUnderlyingType = std::unsigned_integral<UnderlyingType<T>>;
++concept HasUnsignedUnderlyingType = std::is_integral_v<UnderlyingType<T>> &&
++                                    !std::is_signed_v<UnderlyingType<T>>;
+ 
+ }  // namespace dawn
+ 
+diff --git a/third_party/abseil-cpp b/third_party/abseil-cpp
+--- a/third_party/abseil-cpp
++++ b/third_party/abseil-cpp
+@@ -1 +1 @@
+-Subproject commit df548c50b2cda67158364d3d23c63043881b391d
++Subproject commit df548c50b2cda67158364d3d23c63043881b391d-dirty

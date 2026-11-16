@@ -1,0 +1,20 @@
+--- a/public/common/TracySystem.cpp
++++ b/public/common/TracySystem.cpp
+@@ -31,6 +31,8 @@
+ #  endif
+ #  include <fcntl.h>
++#elif defined __ORBIS__
++#  include <orbis/libkernel.h>
+ #elif defined __FreeBSD__
+ #  include <sys/thr.h>
+ #elif defined __NetBSD__
+ #  include <lwp.h>
+@@ -86,6 +88,8 @@
+     return (uint32_t)gettid();
+ #elif defined __linux__
+     return (uint32_t)syscall( SYS_gettid );
++#elif defined __ORBIS__
++    return (uint32_t)scePthreadGetthreadid();
+ #elif defined __FreeBSD__
+     long id;
+     thr_self( &id );

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="pfs_unsigned_extent.cs" />
+    <ProjectReference Include="../external/liborbis-pkg/LibOrbisPkg.Core/LibOrbisPkg.Core.csproj" />
+  </ItemGroup>
+</Project>

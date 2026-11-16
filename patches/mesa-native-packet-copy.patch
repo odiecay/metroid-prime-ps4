@@ -1,0 +1,114 @@
+From: Project Prime contributors
+Subject: [PATCH] orbis: bulk-copy native PM4 runs and gate diagnostic replay
+
+Applies to the bundled Mesa 1a59cc147b54e3970814b37313e2f27357672e9d.
+Preserves chains, padding, packet order, fences and all memory/resource policy.
+
+--- a/src/amd/common/ac_orbis_drm.c
++++ b/src/amd/common/ac_orbis_drm.c
+@@ -1282,11 +1282,92 @@
+ }
+ 
+ 
++/* The ordinary submission path copies contiguous packet runs in one operation.
++ * It still decodes every packet boundary: chains replace their source tail,
++ * overrunning padding NOPs are omitted, and malformed tails retain the legacy
++ * behavior. Progress diagnostics use the original per-packet path. */
++static pthread_once_t orbis_copy_options_once = PTHREAD_ONCE_INIT;
++static bool orbis_copy_bulk = true;
++static bool orbis_copy_break_chains;
++static bool orbis_validate_submits;
++
++static void
++orbis_copy_options_init(void)
++{
++   const char *bulk = getenv("ORBIS_BULK_PACKET_COPY");
++   orbis_copy_bulk = !(bulk && !strcmp(bulk, "0"));
++   orbis_copy_break_chains = getenv("ORBIS_SELFTEST_BREAK") != NULL;
++   const char *validate = getenv("ORBIS_VALIDATE_SUBMITS");
++   orbis_validate_submits = validate && !strcmp(validate, "1");
++   mesa_logw("orbis-drm: native packet-copy=%s validation=%s (shader/GPU/resource semantics unchanged)",
++             orbis_copy_bulk ? "bulk-runs" : "legacy", orbis_validate_submits ? "on" : "off");
++}
++
++static uint32_t *
++orbis_copy_packet_run(uint32_t *dst, const uint32_t *dst_end, const uint32_t *src, uint32_t words)
++{
++   if (words > (size_t)(dst_end - dst))
++      return NULL;
++   if (words)
++      memcpy(dst, src, (size_t)words * sizeof(*src));
++   return dst + words;
++}
++
++static uint32_t *
++orbis_copy_ib_bulk(uint32_t *dst, const uint32_t *dst_end, const uint32_t *src, uint32_t n,
++                   unsigned depth, unsigned *chains)
++{
++   uint32_t run = 0;
++   for (uint32_t i = 0; i < n;) {
++      const uint32_t hdr = src[i];
++      if (hdr == 0)
++         return orbis_copy_packet_run(dst, dst_end, src + run, i - run);
++      if ((hdr & 0xc0000000u) != 0xc0000000u)
++         return orbis_copy_packet_run(dst, dst_end, src + run, n - run);
++      const uint32_t op = (hdr >> 8) & 0xffu;
++      const uint32_t words = 2u + ((hdr >> 16) & 0x3fffu);
++      if (op == 0x10 && words > n - i) {
++         dst = orbis_copy_packet_run(dst, dst_end, src + run, i - run);
++         if (!dst)
++            return NULL;
++         run = ++i;
++         continue;
++      }
++      if (words > n - i)
++         return orbis_copy_packet_run(dst, dst_end, src + run, n - run);
++      if (op == 0x3f && words >= 4 && (src[i + 3] & (1u << 20)) && !orbis_copy_break_chains) {
++         const uint64_t addr = (uint64_t)src[i + 1] | ((uint64_t)(src[i + 2] & 0xffffu) << 32);
++         const uint32_t size_dw = src[i + 3] & 0xfffffu;
++         if (depth >= ORBIS_CHAIN_MAX_DEPTH) {
++            mesa_loge("orbis-drm: chain deeper than %d - REFUSING the submission rather than emitting a chain "
++                      "packet the fence cannot survive", ORBIS_CHAIN_MAX_DEPTH);
++            return NULL;
++         }
++         if (size_dw == 0 || addr < orbis_va_base || addr + (uint64_t)size_dw * 4 > orbis_va_end) {
++            mesa_logw("orbis-drm: chain target 0x%" PRIx64 " (%u dw) is outside the arena - not flattened",
++                      addr, size_dw);
++         } else {
++            dst = orbis_copy_packet_run(dst, dst_end, src + run, i - run);
++            if (!dst)
++               return NULL;
++            ++*chains;
++            return orbis_copy_ib_bulk(dst, dst_end, (const uint32_t *)(uintptr_t)addr, size_dw,
++                                      depth + 1, chains);
++         }
++      }
++      i += words;
++   }
++   return orbis_copy_packet_run(dst, dst_end, src + run, n - run);
++}
++
+ static uint32_t *
+ orbis_copy_ib(uint32_t *dst, const uint32_t *dst_end, const uint32_t *src, uint32_t n, unsigned depth,
+               unsigned *chains, const uint32_t *out_base, uint32_t marks, uint32_t *next_mark,
+               bool eop)
+ {
++   pthread_once(&orbis_copy_options_once, orbis_copy_options_init);
++   if (orbis_copy_bulk && marks == 0)
++      return orbis_copy_ib_bulk(dst, dst_end, src, n, depth, chains);
+    uint32_t i = 0;
+    while (i < n) {
+       const uint32_t hdr = src[i];
+@@ -10111,9 +10192,9 @@
+     * packet must end EXACTLY at the size we report. A packet that runs one dword past the end means the CP keeps
+     * fetching into whatever follows - which is precisely the observed shape.
+     *
+-    * CHEAP AND UNCONDITIONAL: one pass over a stream this arm just memcpy'd anyway, and it prints nothing when the
+-    * stream is right. A validator behind a knob is a validator that is off during the run that needed it. */
+-   {
++    * The parser already bounds-checks every copied packet. This additional full-stream
++    * diagnostic replay is explicitly opt-in; it must not scan the ordinary submission twice. */
++   if (orbis_validate_submits) {
+       const uint32_t *const w = (const uint32_t *)dcb[0];
+       const uint32_t        n = dcb_bytes[0] / 4;
+       static unsigned       said;

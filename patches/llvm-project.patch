@@ -1,0 +1,208 @@
+diff --git a/libcxx/include/__config b/libcxx/include/__config
+index 52660bc0..d5bf8054 100644
+--- a/libcxx/include/__config
++++ b/libcxx/include/__config
+@@ -292,7 +292,10 @@ _LIBCPP_HARDENING_MODE_DEBUG
+ //      Use rand_s(), for use on Windows.
+ //      When this option is used, the token passed to `std::random_device`'s
+ //      constructor *must* be "/dev/urandom" -- anything else is an error.
+-#  if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||                     \
++#  if defined(__ORBIS__)
++// Match the existing OpenOrbis libc++ runtime: the native libc has no arc4random.
++#    define _LIBCPP_USING_DEV_RANDOM
++#  elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||                     \
+       defined(__DragonFly__)
+ #    define _LIBCPP_USING_ARC4_RANDOM
+ #  elif defined(__wasi__) || defined(__EMSCRIPTEN__)
+@@ -631,7 +634,7 @@ typedef __char32_t char32_t;
+ #    define _LIBCPP_DECLARE_STRONG_ENUM_EPILOG(x)
+ #  endif // _LIBCPP_CXX03_LANG
+ 
+-#  if defined(__APPLE__) || defined(__FreeBSD__) || defined(_LIBCPP_MSVCRT_LIKE) || defined(__NetBSD__)
++#  if defined(__APPLE__) || (defined(__FreeBSD__) && !defined(_LIBCPP_HAS_MUSL_LIBC)) || defined(_LIBCPP_MSVCRT_LIKE) || defined(__NetBSD__)
+ #    define _LIBCPP_LOCALE__L_EXTENSIONS 1
+ #  endif
+ 
+@@ -667,11 +670,11 @@ typedef __char32_t char32_t;
+ #    define _LIBCPP_HAS_NO_C11_ALIGNED_ALLOC
+ #  endif
+ 
+-#  if defined(__APPLE__) || defined(__FreeBSD__)
++#  if defined(__APPLE__) || (defined(__FreeBSD__) && !defined(_LIBCPP_HAS_MUSL_LIBC))
+ #    define _LIBCPP_HAS_DEFAULTRUNELOCALE
+ #  endif
+ 
+-#  if defined(__APPLE__) || defined(__FreeBSD__)
++#  if defined(__APPLE__) || (defined(__FreeBSD__) && !defined(_LIBCPP_HAS_MUSL_LIBC))
+ #    define _LIBCPP_WCTYPE_IS_MASK
+ #  endif
+ 
+diff --git a/libcxx/include/locale b/libcxx/include/locale
+index 573910a8..1966990b 100644
+--- a/libcxx/include/locale
++++ b/libcxx/include/locale
+@@ -232,7 +232,7 @@ template <class charT> class messages_byname;
+ #    include <__locale_dir/locale_base_api/bsd_locale_fallbacks.h>
+ #  endif
+ 
+-#  if defined(__APPLE__) || defined(__FreeBSD__)
++#  if defined(__APPLE__) || (defined(__FreeBSD__) && !defined(_LIBCPP_HAS_MUSL_LIBC))
+ #    include <xlocale.h>
+ #  endif
+ 
+@@ -245,7 +245,7 @@ _LIBCPP_PUSH_MACROS
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-#  if defined(__APPLE__) || defined(__FreeBSD__)
++#  if defined(__APPLE__) || (defined(__FreeBSD__) && !defined(_LIBCPP_HAS_MUSL_LIBC))
+ #    define _LIBCPP_GET_C_LOCALE 0
+ #  elif defined(__NetBSD__)
+ #    define _LIBCPP_GET_C_LOCALE LC_C_LOCALE
+diff --git a/libcxx/include/math.h b/libcxx/include/math.h
+index 4e6304a7..547af481 100644
+--- a/libcxx/include/math.h
++++ b/libcxx/include/math.h
+@@ -416,14 +416,20 @@ using std::__math::signbit;
+ 
+ // The MSVC runtime already provides these functions as templates
+ #    ifndef _LIBCPP_MSVCRT
++#      ifndef __ORBIS__ // OpenOrbis math.h already declares these exact overloads.
+ using std::__math::isfinite;
++#      endif
+ using std::__math::isgreater;
+ using std::__math::isgreaterequal;
++#      ifndef __ORBIS__
+ using std::__math::isinf;
++#      endif
+ using std::__math::isless;
+ using std::__math::islessequal;
+ using std::__math::islessgreater;
++#      ifndef __ORBIS__
+ using std::__math::isnan;
++#      endif
+ using std::__math::isnormal;
+ using std::__math::isunordered;
+ #    endif // _LIBCPP_MSVCRT
+diff --git a/libcxx/src/atomic.cpp b/libcxx/src/atomic.cpp
+index ae062155..27a71e4a 100644
+--- a/libcxx/src/atomic.cpp
++++ b/libcxx/src/atomic.cpp
+@@ -27,6 +27,10 @@
+ #  endif
+ #  define _LIBCPP_FUTEX(...) syscall(SYS_futex, __VA_ARGS__)
+ 
++#elif defined(__ORBIS__)
++
++#  include <prime_atomic_wait.h>
++
+ #elif defined(__FreeBSD__)
+ 
+ #  include <sys/types.h>
+@@ -85,6 +89,19 @@ static void __libcpp_platform_wake_by_address(__cxx_atomic_contention_t const vo
+       UL_COMPARE_AND_WAIT64 | (__notify_one ? 0 : ULF_WAKE_ALL), const_cast<__cxx_atomic_contention_t*>(__ptr), 0);
+ }
+ 
++#elif defined(__ORBIS__)
++
++static void
++__libcpp_platform_wait_on_address(__cxx_atomic_contention_t const volatile* __ptr, __cxx_contention_t __val) {
++  prime::runtime::atomic_wait(__ptr, [=] {
++    return __cxx_atomic_load(__ptr, memory_order_acquire) == __val;
++  });
++}
++
++static void __libcpp_platform_wake_by_address(__cxx_atomic_contention_t const volatile* __ptr, bool) {
++  prime::runtime::atomic_notify(__ptr);
++}
++
+ #elif defined(__FreeBSD__) && __SIZEOF_LONG__ == 8
+ /*
+  * Since __cxx_contention_t is int64_t even on 32bit FreeBSD
+diff --git a/libcxx/src/filesystem/operations.cpp b/libcxx/src/filesystem/operations.cpp
+index a83c1ae1..669b56bb 100644
+--- a/libcxx/src/filesystem/operations.cpp
++++ b/libcxx/src/filesystem/operations.cpp
+@@ -37,7 +37,8 @@
+ #include <fcntl.h> /* values for fchmodat */
+ #include <time.h>
+ 
+-#if __has_include(<sys/sendfile.h>)
++#if __has_include(<sys/sendfile.h>) && !defined(__ORBIS__)
++// Orbis exposes BSD's seven-argument sendfile, not this Linux signature.
+ #  include <sys/sendfile.h>
+ #  define _LIBCPP_FILESYSTEM_USE_SENDFILE
+ #elif defined(__APPLE__) || __has_include(<copyfile.h>)
+@@ -703,7 +704,8 @@ bool __remove(const path& p, error_code* ec) {
+ //
+ // The second implementation is used on platforms where `openat()` & friends are available,
+ // and it threads file descriptors through recursive calls to avoid such race conditions.
+-#if defined(_LIBCPP_WIN32API) || defined(__MVS__)
++// Orbis rejects the openat-based traversal, including for absent staging paths.
++#if defined(_LIBCPP_WIN32API) || defined(__MVS__) || defined(__ORBIS__)
+ #  define REMOVE_ALL_USE_DIRECTORY_ITERATOR
+ #endif
+ 
+diff --git a/libcxxabi/src/CMakeLists.txt b/libcxxabi/src/CMakeLists.txt
+index 1e06b8cb..38bd686e 100644
+--- a/libcxxabi/src/CMakeLists.txt
++++ b/libcxxabi/src/CMakeLists.txt
+@@ -36,7 +36,7 @@ else()
+   )
+ endif()
+ 
+-if (LIBCXXABI_ENABLE_THREADS AND (UNIX OR FUCHSIA) AND NOT (APPLE OR CYGWIN)
++if (LIBCXXABI_ENABLE_THREADS AND (UNIX OR FUCHSIA OR PS4) AND NOT (APPLE OR CYGWIN)
+     AND NOT (${CMAKE_SYSTEM_NAME} MATCHES "AIX"))
+   list(APPEND LIBCXXABI_SOURCES
+     cxa_thread_atexit.cpp
+diff --git a/libcxxabi/src/cxa_guard_impl.h b/libcxxabi/src/cxa_guard_impl.h
+index 320501cb..299c2dd1 100644
+--- a/libcxxabi/src/cxa_guard_impl.h
++++ b/libcxxabi/src/cxa_guard_impl.h
+@@ -64,6 +64,10 @@
+ #include <limits.h>
+ #include <stdlib.h>
+ 
++#if defined(__ORBIS__)
++extern "C" int scePthreadGetthreadid(void);
++#endif
++
+ #ifndef _LIBCXXABI_HAS_NO_THREADS
+ #  if defined(__ELF__) && defined(_LIBCXXABI_LINK_PTHREAD_LIB)
+ #    pragma comment(lib, "pthread")
+@@ -156,7 +160,13 @@ private:
+ //                       PlatformGetThreadID
+ //===----------------------------------------------------------------------===//
+ 
+-#if defined(__APPLE__) && defined(_LIBCPP_HAS_THREAD_API_PTHREAD)
++#if defined(__ORBIS__) && defined(_LIBCPP_HAS_THREAD_API_PTHREAD)
++uint32_t PlatformThreadID() {
++  // The native SDK aliases SYS_gettid to getpid. Every thread would have the
++  // same owner ID and ordinary contention would be mistaken for recursion.
++  return static_cast<uint32_t>(scePthreadGetthreadid());
++}
++#elif defined(__APPLE__) && defined(_LIBCPP_HAS_THREAD_API_PTHREAD)
+ uint32_t PlatformThreadID() {
+   static_assert(sizeof(mach_port_t) == sizeof(uint32_t), "");
+   return static_cast<uint32_t>(pthread_mach_thread_np(std::__libcpp_thread_get_current_id()));
+diff --git a/libcxxabi/src/cxa_thread_atexit.cpp b/libcxxabi/src/cxa_thread_atexit.cpp
+index c6bd0aa3..d6fdcc94 100644
+--- a/libcxxabi/src/cxa_thread_atexit.cpp
++++ b/libcxxabi/src/cxa_thread_atexit.cpp
+@@ -112,9 +112,15 @@ extern "C" {
+ #ifdef HAVE___CXA_THREAD_ATEXIT_IMPL
+     return __cxa_thread_atexit_impl(dtor, obj, dso_symbol);
+ #else
++#if !defined(__ORBIS__)
+     if (__cxa_thread_atexit_impl) {
+       return __cxa_thread_atexit_impl(dtor, obj, dso_symbol);
+     } else {
++#else
++    // Native Orbis supplies pthread TLS keys, not this optional ELF libc
++    // symbol. Do not leave an unassignable weak import for create-fself.
++    {
++#endif
+       // Initialize the dtors std::__libcpp_tls_key (uses __cxa_guard_*() for
+       // one-time initialization and __cxa_atexit() for destruction)
+       static DtorsManager manager;

@@ -1,0 +1,8 @@
+{
+  "commit": "643477263b2644e0803e0f58b8726ea4e3f3b7d4",
+  "canonical_remote": "https://github.com/maxton/LibOrbisPkg.git",
+  "source": "external/liborbis-pkg",
+  "patch": "patches/liborbis-pkg.patch",
+  "purpose": "verification only; SDK package builder remains unchanged",
+  "patch_sha256": "152f402390bcb7848f83160ae18445928a77d419de385bf9b07931d948e8732a"
+}

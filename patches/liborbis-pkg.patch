@@ -1,0 +1,62 @@
+diff --git a/LibOrbisPkg.Core/LibOrbisPkg.Core.csproj b/LibOrbisPkg.Core/LibOrbisPkg.Core.csproj
+index 5f0fe49..a164bd1 100644
+--- a/LibOrbisPkg.Core/LibOrbisPkg.Core.csproj
++++ b/LibOrbisPkg.Core/LibOrbisPkg.Core.csproj
+@@ -1,7 +1,7 @@
+-﻿<Project Sdk="Microsoft.NET.Sdk">
++<Project Sdk="Microsoft.NET.Sdk">
+ 
+   <PropertyGroup>
+-    <TargetFramework>netcoreapp3.0</TargetFramework>
++    <TargetFramework>net8.0</TargetFramework>
+     <RootNamespace>LibOrbisPkg</RootNamespace>
+     <LangVersion>7.3</LangVersion>
+     <Platforms>AnyCPU</Platforms>
+diff --git a/LibOrbisPkg/PFS/PfsReader.cs b/LibOrbisPkg/PFS/PfsReader.cs
+index 5df9d08..ac2f693 100644
+--- a/LibOrbisPkg/PFS/PfsReader.cs
++++ b/LibOrbisPkg/PFS/PfsReader.cs
+@@ -247,8 +247,19 @@ namespace LibOrbisPkg.PFS
+       {
+         if (!hdr.Mode.HasFlag(PfsMode.Signed))
+         {
+-          throw new Exception("Unsigned PFS images probably shouldn't have noncontiguous blocks");
++          // The unsigned builder explicitly lists the contiguous blocks of
++          // flat_path_table and collision_resolver. A sufficiently large file
++          // catalog crosses one block even though normal data inodes use a
++          // start block followed by -1 sentinels. Verify that complete extent
++          // before using the contiguous reader; do not accept fragmentation.
++          if (dinodes[dinode].Blocks > 12)
++            throw new Exception("Unsupported unsigned explicit block extent");
++          for (var i = 1; i < dinodes[dinode].Blocks; ++i)
++            if (dinodes[dinode].DirectBlocks[i] != dinodes[dinode].StartBlock + i)
++              throw new Exception("Noncontiguous unsigned PFS block extent");
+         }
++        else
++        {
+         blocks = new int[dinodes[dinode].Blocks];
+         var remainingBlocks = (long)dinodes[dinode].Blocks;
+         var sigsPerBlock = hdr.BlockSize / 36;
+@@ -287,6 +298,7 @@ namespace LibOrbisPkg.PFS
+         }
+         if (contiguous)
+           blocks = null;
++        }
+       }
+       return new File(reader)
+       {
+diff --git a/PkgTool.Core/PkgTool.Core.csproj b/PkgTool.Core/PkgTool.Core.csproj
+index 10e4e0b..181ad54 100644
+--- a/PkgTool.Core/PkgTool.Core.csproj
++++ b/PkgTool.Core/PkgTool.Core.csproj
+@@ -1,8 +1,8 @@
+-﻿<Project Sdk="Microsoft.NET.Sdk">
++<Project Sdk="Microsoft.NET.Sdk">
+ 
+   <PropertyGroup>
+     <OutputType>Exe</OutputType>
+-    <TargetFramework>netcoreapp3.0</TargetFramework>
++    <TargetFramework>net8.0</TargetFramework>
+     <StartupObject>PkgTool.Program</StartupObject>
+     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

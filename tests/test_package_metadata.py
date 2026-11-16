@@ -1,0 +1,48 @@
+"""Reject corrupt package metadata before reporting a verified local package."""
+import importlib.util
+from pathlib import Path
+import struct
+import sys
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tools'))
+spec = importlib.util.spec_from_file_location('prime_package', ROOT / 'tools/package.py')
+package = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(package)
+
+def fixture():
+    keys = b'TITLE_ID\0APP_VER\0'
+    value = b'PRME00001\0' + b'00.03\0'
+    header = struct.pack('<5I', 0x46535000, 0x101, 52, 52 + len(keys), 2)
+    return bytearray(header + struct.pack('<HHIII', 0, 0x204, 10, 10, 0) +
+                     struct.pack('<HHIII', 9, 0x204, 6, 6, 10) + keys + value)
+
+class PackageMetadataTests(unittest.TestCase):
+    def test_valid_utf8_fields(self):
+        self.assertEqual(package.sfo_values(fixture()), {'TITLE_ID': 'PRME00001', 'APP_VER': '00.03'})
+
+    def test_corrupt_table_bounds(self):
+        for length in (0, 4, 19, 40, 60):
+            with self.subTest(length=length), self.assertRaises((ValueError, struct.error)):
+                package.sfo_values(fixture()[:length])
+
+    def test_payload_overflow_rejected(self):
+        data = fixture()
+        struct.pack_into('<I', data, 32, 0xffffffff)
+        with self.assertRaises(ValueError):
+            package.sfo_values(data)
+
+    def test_duplicate_keys_rejected(self):
+        data = fixture()
+        struct.pack_into('<H', data, 36, 0)
+        with self.assertRaises(ValueError):
+            package.sfo_values(data)
+
+    def test_extractor_uses_table_index(self):
+        self.assertEqual(package.entry_indices('0x3EB0  0x434  00000000  9       PARAM_SFO\n'
+                                               '0x62F0  0x8927A 00000000 14       ICON0_PNG'),
+                         {'PARAM_SFO': 9, 'ICON0_PNG': 14})
+
+if __name__ == '__main__':
+    unittest.main()

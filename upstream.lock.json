@@ -1,0 +1,287 @@
+{
+  "schema": 1,
+  "components": [
+    {
+      "path": "game/MetroidPrimePort",
+      "commit": "c872da704adde9a7838492aaa56dac73a32053e4",
+      "remote": "https://github.com/timehikari/metroidprimeport.git",
+      "patch": "MetroidPrimePort.patch",
+      "canonical_remote": "https://github.com/Odrannnn/MetroidPrimePort.git",
+      "canonical_fetch_status": "404 on 2026-11-15; exact v0.46.0 commit recovered through the public fork network"
+    },
+    {
+      "path": "external/dawn",
+      "commit": "118436b3f8f68583eb86e811ca605dc41637e8cc",
+      "remote": "https://github.com/google/dawn.git",
+      "patch": "dawn.patch",
+      "canonical_remote": "https://github.com/Odrannnn/dawn.git",
+      "canonical_fetch_status": "404 on 2026-11-15; exact game dependency commit recovered through google/dawn"
+    },
+    {
+      "path": "external/mesa-ps4",
+      "commit": "1a59cc147b54e3970814b37313e2f27357672e9d",
+      "remote": "https://github.com/orbis-ports/mesa-ps4.git",
+      "patch": "mesa-ps4.patch"
+    },
+    {
+      "path": "external/orbis-compat",
+      "commit": "6922a7b6f4291a28edd239f1a4db50ed7aa00359",
+      "remote": "https://github.com/orbis-ports/orbis-compat.git",
+      "patch": "orbis-compat.patch"
+    },
+    {
+      "path": "external/ps4-mesa-docs",
+      "commit": "deb190361652acbc3b0ff49fc8edac1820f16842",
+      "remote": "https://github.com/orbis-ports/ps4-mesa-docs.git",
+      "patch": "ps4-mesa-docs.patch"
+    },
+    {
+      "path": "external/llvm-project",
+      "commit": "cd708029e0b2869e80abe31ddb175f7c35361f90",
+      "remote": "https://github.com/llvm/llvm-project.git",
+      "patch": "llvm-project.patch"
+    }
+  ],
+  "dawn_transitive_git_dependencies": [
+    {
+      "path": "third_party/EGL-Registry/src",
+      "patch": null,
+      "commit": "3d7796b3721d93976b6bfe536aa97bbc4bce8667",
+      "remote": null,
+      "fetch_source": "3d7796b3721d93976b6bfe536aa97bbc4bce8667\t\t'3d7796b3721d93976b6bfe536aa97bbc4bce8667' of https://chromium.googlesource.com/external/github.com/KhronosGroup/EGL-Registry"
+    },
+    {
+      "path": "third_party/OpenGL-Registry/src",
+      "patch": null,
+      "commit": "e8f7cd0e35ac8d6f5667a021ff83d04b1fec41ef",
+      "remote": null,
+      "fetch_source": "e8f7cd0e35ac8d6f5667a021ff83d04b1fec41ef\t\t'e8f7cd0e35ac8d6f5667a021ff83d04b1fec41ef' of https://chromium.googlesource.com/external/github.com/KhronosGroup/OpenGL-Registry"
+    },
+    {
+      "path": "third_party/abseil-cpp",
+      "patch": "dawn-third_party_abseil-cpp.patch",
+      "commit": "df548c50b2cda67158364d3d23c63043881b391d",
+      "remote": null,
+      "fetch_source": "df548c50b2cda67158364d3d23c63043881b391d\t\t'df548c50b2cda67158364d3d23c63043881b391d' of https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp"
+    },
+    {
+      "path": "third_party/directx-headers/src",
+      "patch": null,
+      "commit": "980971e835876dc0cde415e8f9bc646e64667bf7",
+      "remote": null,
+      "fetch_source": "980971e835876dc0cde415e8f9bc646e64667bf7\t\t'980971e835876dc0cde415e8f9bc646e64667bf7' of https://chromium.googlesource.com/external/github.com/microsoft/DirectX-Headers"
+    },
+    {
+      "path": "third_party/directx-shader-compiler/src",
+      "patch": null,
+      "commit": "13730886e6a9019e4e0823746470f3ab75341d6b",
+      "remote": null,
+      "fetch_source": "13730886e6a9019e4e0823746470f3ab75341d6b\t\t'13730886e6a9019e4e0823746470f3ab75341d6b' of https://chromium.googlesource.com/external/github.com/microsoft/DirectXShaderCompiler"
+    },
+    {
+      "path": "third_party/glfw3/src",
+      "patch": null,
+      "commit": "92dcf4ce74f2e2554a98fea09be7c705c17daa5a",
+      "remote": null,
+      "fetch_source": "92dcf4ce74f2e2554a98fea09be7c705c17daa5a\t\t'92dcf4ce74f2e2554a98fea09be7c705c17daa5a' of https://chromium.googlesource.com/external/github.com/glfw/glfw"
+    },
+    {
+      "path": "third_party/glslang/src",
+      "patch": null,
+      "commit": "90afccfbd49dff0349d86a41762e9de24e1df811",
+      "remote": null,
+      "fetch_source": "90afccfbd49dff0349d86a41762e9de24e1df811\t\t'90afccfbd49dff0349d86a41762e9de24e1df811' of https://chromium.googlesource.com/external/github.com/KhronosGroup/glslang"
+    },
+    {
+      "path": "third_party/google_benchmark/src",
+      "patch": null,
+      "commit": "8abf1e701fbd88c8170f48fe0558247e2e5f8e7d",
+      "remote": null,
+      "fetch_source": "8abf1e701fbd88c8170f48fe0558247e2e5f8e7d\t\t'8abf1e701fbd88c8170f48fe0558247e2e5f8e7d' of https://chromium.googlesource.com/external/github.com/google/benchmark"
+    },
+    {
+      "path": "third_party/googletest/src",
+      "patch": null,
+      "commit": "4fe3307fb2d9f86d19777c7eb0e4809e9694dde7",
+      "remote": null,
+      "fetch_source": "4fe3307fb2d9f86d19777c7eb0e4809e9694dde7\t\t'4fe3307fb2d9f86d19777c7eb0e4809e9694dde7' of https://chromium.googlesource.com/external/github.com/google/googletest"
+    },
+    {
+      "path": "third_party/jinja2",
+      "patch": null,
+      "commit": "c3027d884967773057bf74b957e3fea87e5df4d7",
+      "remote": null,
+      "fetch_source": "c3027d884967773057bf74b957e3fea87e5df4d7\t\t'c3027d884967773057bf74b957e3fea87e5df4d7' of https://chromium.googlesource.com/chromium/src/third_party/jinja2"
+    },
+    {
+      "path": "third_party/libprotobuf-mutator/src",
+      "patch": null,
+      "commit": "c1c950eae0440c3808f2b8bd7c57d0c6a42c1a90",
+      "remote": null,
+      "fetch_source": "c1c950eae0440c3808f2b8bd7c57d0c6a42c1a90\t\t'c1c950eae0440c3808f2b8bd7c57d0c6a42c1a90' of https://chromium.googlesource.com/external/github.com/google/libprotobuf-mutator"
+    },
+    {
+      "path": "third_party/markupsafe",
+      "patch": null,
+      "commit": "4256084ae14175d38a3ff7d739dca83ae49ccec6",
+      "remote": null,
+      "fetch_source": "4256084ae14175d38a3ff7d739dca83ae49ccec6\t\t'4256084ae14175d38a3ff7d739dca83ae49ccec6' of https://chromium.googlesource.com/chromium/src/third_party/markupsafe"
+    },
+    {
+      "path": "third_party/protobuf",
+      "patch": null,
+      "commit": "f4b110307a4845dfe04c4fc5458d514eb8fc7d66",
+      "remote": null,
+      "fetch_source": "f4b110307a4845dfe04c4fc5458d514eb8fc7d66\t\t'f4b110307a4845dfe04c4fc5458d514eb8fc7d66' of https://chromium.googlesource.com/chromium/src/third_party/protobuf"
+    },
+    {
+      "path": "third_party/spirv-headers/src",
+      "patch": null,
+      "commit": "942fe4b988359a0750b79f0ae7ed735994d3147d",
+      "remote": null,
+      "fetch_source": "942fe4b988359a0750b79f0ae7ed735994d3147d\t\t'942fe4b988359a0750b79f0ae7ed735994d3147d' of https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Headers"
+    },
+    {
+      "path": "third_party/spirv-tools/src",
+      "patch": null,
+      "commit": "5b5a25231a3543559b4f2cb27fe725a08b76b5d0",
+      "remote": null,
+      "fetch_source": "5b5a25231a3543559b4f2cb27fe725a08b76b5d0\t\t'5b5a25231a3543559b4f2cb27fe725a08b76b5d0' of https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Tools"
+    },
+    {
+      "path": "third_party/vulkan-headers/src",
+      "patch": null,
+      "commit": "f9973cd97e6f3584707e7ef1c425e336f1b92a5b",
+      "remote": null,
+      "fetch_source": "f9973cd97e6f3584707e7ef1c425e336f1b92a5b\t\t'f9973cd97e6f3584707e7ef1c425e336f1b92a5b' of https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Headers"
+    },
+    {
+      "path": "third_party/vulkan-loader/src",
+      "patch": null,
+      "commit": "e5715c8a3959f2a40a6bc13a3a88a3862843b105",
+      "remote": null,
+      "fetch_source": "e5715c8a3959f2a40a6bc13a3a88a3862843b105\t\t'e5715c8a3959f2a40a6bc13a3a88a3862843b105' of https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Loader"
+    },
+    {
+      "path": "third_party/vulkan-utility-libraries/src",
+      "patch": null,
+      "commit": "6673ca41d73d36c3c838451e66dd30dd1ec46a97",
+      "remote": null,
+      "fetch_source": "6673ca41d73d36c3c838451e66dd30dd1ec46a97\t\t'6673ca41d73d36c3c838451e66dd30dd1ec46a97' of https://chromium.googlesource.com/external/github.com/KhronosGroup/Vulkan-Utility-Libraries"
+    },
+    {
+      "path": "third_party/webgpu-headers/src",
+      "patch": null,
+      "commit": "01addc4ba8a2915a061b7095a6768b512071ab96",
+      "remote": null,
+      "fetch_source": "01addc4ba8a2915a061b7095a6768b512071ab96\t\t'01addc4ba8a2915a061b7095a6768b512071ab96' of https://chromium.googlesource.com/external/github.com/webgpu-native/webgpu-headers"
+    }
+  ],
+  "sdl": {
+    "path": "external/SDL-release-3.4.10",
+    "url": "https://github.com/libsdl-org/SDL/archive/refs/tags/release-3.4.10.tar.gz",
+    "sha256": "0dc11d980ba17250200718fa4e28011da293f27ed92f92203afffe396811f307",
+    "patch": "SDL-release-3.4.10.patch"
+  },
+  "nod_headers_and_host_reference": {
+    "url": "https://github.com/encounter/nod/releases/download/v2.0.0-alpha.12/libnod-linux-x86_64.tar.gz",
+    "sha256": "920adb1d2386c8728e0521f8d52809057c04bd46913433a0000ee0931d08d69f"
+  },
+  "nodtool": {
+    "url": "https://github.com/encounter/nod/releases/download/v2.0.0-alpha.12/nodtool-linux-x86_64",
+    "sha256": "ee8345c004248eb82a86dd0c6068e0fcf3dc75baf68d18fe949bf4589822f5a5"
+  },
+  "cmake_python_package": "cmake==3.31.10",
+  "aurora_archive_dependencies": [
+    {
+      "name": "abseil-cpp",
+      "source_path": "build/game-native/_deps/abseil-cpp-src",
+      "url": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz",
+      "archive_sha256": "f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3",
+      "source_tree_sha256": "cf763a623f6d083fb2801724d3e70d7cbbf3017ce213e51c5c37f6146f963ab4"
+    },
+    {
+      "name": "fmt",
+      "source_path": "build/game-native/_deps/fmt-src",
+      "url": "https://github.com/fmtlib/fmt/archive/refs/tags/12.1.0.tar.gz",
+      "archive_sha256": "ea7de4299689e12b6dddd392f9896f08fb0777ac7168897a244a6d6085043fea",
+      "source_tree_sha256": "073e194d9b001682a3af0b75d3fadb1492a7f04d7c5b30dead5c08b0a7985574"
+    },
+    {
+      "name": "freetype",
+      "source_path": "build/game-native/_deps/freetype-src",
+      "url": "https://files.twilitrealm.dev/freetype-2.14.3.tar.gz;https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz;https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.gz",
+      "archive_sha256": "e61b31ab26358b946e767ed7eb7f4bb2e507da1cfefeb7a8861ace7fd5c899a1",
+      "source_tree_sha256": "f705140435e91c2a43a817257303cc09044988bebe594ba4aae5d3d9b17693d4"
+    },
+    {
+      "name": "imgui",
+      "source_path": "build/game-native/_deps/imgui-src",
+      "url": "https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b-docking.tar.gz",
+      "archive_sha256": "466fdef9b18de15f0bb6e288e3d00ffa3d82200ec458ce5e4f724a161d9528a5",
+      "source_tree_sha256": "7f6b2696d3ed3887826ad5e27cc8c9cab73a48eeda936df30d4ba7b8984f6670"
+    },
+    {
+      "name": "png",
+      "source_path": "build/game-native/_deps/png-src",
+      "url": "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.58.tar.gz",
+      "archive_sha256": "A9D4DF463D36A6E5F9C29BD6F4967312D17E996C1854F3511F833924EB1993CF",
+      "source_tree_sha256": "327aa6926a647bd978d8b3f67106490c78bfa4c188d57c8ea94712856787336b"
+    },
+    {
+      "name": "sqlite3",
+      "source_path": "build/game-native/_deps/sqlite3-src",
+      "url": "https://sqlite.org/2026/sqlite-amalgamation-3510300.zip",
+      "archive_sha256": "acb1e6f5d832484bf6d32b681e858c38add8b2acdfd42ac5df24b8afb46552b4",
+      "source_tree_sha256": "2d16c718d78b8b5baf02b9d45aec6eabe8df54cc3a6ac3e6e2f44d8ba433aefb"
+    },
+    {
+      "name": "tracy",
+      "source_path": "build/game-native/_deps/tracy-src",
+      "url": "https://github.com/wolfpld/tracy/archive/refs/tags/v0.14.1.zip",
+      "archive_sha256": "908f3a2917fa86a247abfcf85dcf04bad1db6986a4d40f94b70512f3e9e98d5b",
+      "source_tree_sha256": "0f3f6bb6dccb4c8069b1723815a64ecbaf33bfaf842f17f8c7ba12a35d7f327c"
+    },
+    {
+      "name": "xxhash",
+      "source_path": "build/game-native/_deps/xxhash-src",
+      "url": "https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.3.tar.gz",
+      "archive_sha256": "aae608dfe8213dfd05d909a57718ef82f30722c392344583d3f39050c7f29a80",
+      "source_tree_sha256": "db9795bfe7643525e51a9618ba9db1cfef19988be0c4d9aff4158c6e710de9bc"
+    },
+    {
+      "name": "zlib",
+      "source_path": "build/game-native/_deps/zlib-src",
+      "url": "https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.3.3.tar.gz",
+      "archive_sha256": "f9c65aa9c852eb8255b636fd9f07ce1c406f061ec19a2e7d508b318ca0c907d1",
+      "source_tree_sha256": "b0de4ce82af04baa1c4479b6ca93fc72b70ec85d707e0194a4819cc63327f4c1"
+    },
+    {
+      "name": "zstd",
+      "source_path": "build/game-native/_deps/zstd-src",
+      "url": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+      "archive_sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+      "source_tree_sha256": "470116a56d6030cd3d2de913af2ca99ac5ae140f70167ebbd5f9b1cf8e82e198"
+    }
+  ],
+  "native_startup_modules": [
+    {
+      "path": "external/openorbis-startup-modules/libc.prx",
+      "url": "https://raw.githubusercontent.com/OpenOrbis/OpenOrbis-PS4-Toolchain/b458dfd9d2f5c40aa249b127c9b9b4488afdc686/samples/piglet/sce_module/libc.prx",
+      "sha256": "8ac205d14351edb241238b372b2f1c3350a6385a271483d4867fe9a33bc6e4d3",
+      "upstream_commit": "b458dfd9d2f5c40aa249b127c9b9b4488afdc686",
+      "git_blob": "e49b25d011281d52131a34d5a18106dd49605919",
+      "license": "GPL-3.0-only",
+      "kind": "OpenOrbis native startup shim, not a Sony SDK binary"
+    },
+    {
+      "path": "external/openorbis-startup-modules/libSceFios2.prx",
+      "url": "https://raw.githubusercontent.com/OpenOrbis/OpenOrbis-PS4-Toolchain/b458dfd9d2f5c40aa249b127c9b9b4488afdc686/samples/piglet/sce_module/libSceFios2.prx",
+      "sha256": "905cf6b7c699eccb6b95291fc4dcaf5ce2d2605f450f36496d9b973777afa745",
+      "upstream_commit": "b458dfd9d2f5c40aa249b127c9b9b4488afdc686",
+      "git_blob": "1f83bdc8f1fd0ddf6a56f0d5faa1d914e35095fa",
+      "license": "GPL-3.0-only",
+      "kind": "OpenOrbis native startup shim, not a Sony SDK binary"
+    }
+  ]
+}

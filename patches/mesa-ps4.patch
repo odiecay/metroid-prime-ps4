@@ -1,0 +1,509 @@
+diff --git a/src/amd/common/ac_orbis_drm.c b/src/amd/common/ac_orbis_drm.c
+index e4055c6..f2296bf 100644
+--- a/src/amd/common/ac_orbis_drm.c
++++ b/src/amd/common/ac_orbis_drm.c
+@@ -24,6 +24,8 @@
+ 
+ #include "ac_linux_drm.h"
+ #include "ac_gpu_info.h"
++#include "va_statistics.h"
++#include "submit_watchdog.h"
+ #include "orbis_tile_tables.h"
+ 
+ #include "util/log.h"
+@@ -1282,11 +1284,92 @@ orbis_emit_eop(uint32_t *dw, uint64_t va, uint32_t value, uint32_t sel)
+ }
+ 
+ 
++/* The ordinary submission path copies contiguous packet runs in one operation.
++ * It still decodes every packet boundary: chains replace their source tail,
++ * overrunning padding NOPs are omitted, and malformed tails retain the legacy
++ * behavior. Progress diagnostics use the original per-packet path. */
++static pthread_once_t orbis_copy_options_once = PTHREAD_ONCE_INIT;
++static bool orbis_copy_bulk = true;
++static bool orbis_copy_break_chains;
++static bool orbis_validate_submits;
++
++static void
++orbis_copy_options_init(void)
++{
++   const char *bulk = getenv("ORBIS_BULK_PACKET_COPY");
++   orbis_copy_bulk = !(bulk && !strcmp(bulk, "0"));
++   orbis_copy_break_chains = getenv("ORBIS_SELFTEST_BREAK") != NULL;
++   const char *validate = getenv("ORBIS_VALIDATE_SUBMITS");
++   orbis_validate_submits = validate && !strcmp(validate, "1");
++   mesa_logw("orbis-drm: native packet-copy=%s validation=%s (shader/GPU/resource semantics unchanged)",
++             orbis_copy_bulk ? "bulk-runs" : "legacy", orbis_validate_submits ? "on" : "off");
++}
++
++static uint32_t *
++orbis_copy_packet_run(uint32_t *dst, const uint32_t *dst_end, const uint32_t *src, uint32_t words)
++{
++   if (words > (size_t)(dst_end - dst))
++      return NULL;
++   if (words)
++      memcpy(dst, src, (size_t)words * sizeof(*src));
++   return dst + words;
++}
++
++static uint32_t *
++orbis_copy_ib_bulk(uint32_t *dst, const uint32_t *dst_end, const uint32_t *src, uint32_t n,
++                   unsigned depth, unsigned *chains)
++{
++   uint32_t run = 0;
++   for (uint32_t i = 0; i < n;) {
++      const uint32_t hdr = src[i];
++      if (hdr == 0)
++         return orbis_copy_packet_run(dst, dst_end, src + run, i - run);
++      if ((hdr & 0xc0000000u) != 0xc0000000u)
++         return orbis_copy_packet_run(dst, dst_end, src + run, n - run);
++      const uint32_t op = (hdr >> 8) & 0xffu;
++      const uint32_t words = 2u + ((hdr >> 16) & 0x3fffu);
++      if (op == 0x10 && words > n - i) {
++         dst = orbis_copy_packet_run(dst, dst_end, src + run, i - run);
++         if (!dst)
++            return NULL;
++         run = ++i;
++         continue;
++      }
++      if (words > n - i)
++         return orbis_copy_packet_run(dst, dst_end, src + run, n - run);
++      if (op == 0x3f && words >= 4 && (src[i + 3] & (1u << 20)) && !orbis_copy_break_chains) {
++         const uint64_t addr = (uint64_t)src[i + 1] | ((uint64_t)(src[i + 2] & 0xffffu) << 32);
++         const uint32_t size_dw = src[i + 3] & 0xfffffu;
++         if (depth >= ORBIS_CHAIN_MAX_DEPTH) {
++            mesa_loge("orbis-drm: chain deeper than %d - REFUSING the submission rather than emitting a chain "
++                      "packet the fence cannot survive", ORBIS_CHAIN_MAX_DEPTH);
++            return NULL;
++         }
++         if (size_dw == 0 || addr < orbis_va_base || addr + (uint64_t)size_dw * 4 > orbis_va_end) {
++            mesa_logw("orbis-drm: chain target 0x%" PRIx64 " (%u dw) is outside the arena - not flattened",
++                      addr, size_dw);
++         } else {
++            dst = orbis_copy_packet_run(dst, dst_end, src + run, i - run);
++            if (!dst)
++               return NULL;
++            ++*chains;
++            return orbis_copy_ib_bulk(dst, dst_end, (const uint32_t *)(uintptr_t)addr, size_dw,
++                                      depth + 1, chains);
++         }
++      }
++      i += words;
++   }
++   return orbis_copy_packet_run(dst, dst_end, src + run, n - run);
++}
++
+ static uint32_t *
+ orbis_copy_ib(uint32_t *dst, const uint32_t *dst_end, const uint32_t *src, uint32_t n, unsigned depth,
+               unsigned *chains, const uint32_t *out_base, uint32_t marks, uint32_t *next_mark,
+               bool eop)
+ {
++   pthread_once(&orbis_copy_options_once, orbis_copy_options_init);
++   if (orbis_copy_bulk && marks == 0)
++      return orbis_copy_ib_bulk(dst, dst_end, src, n, depth, chains);
+    uint32_t i = 0;
+    while (i < n) {
+       const uint32_t hdr = src[i];
+@@ -2871,8 +2954,9 @@ static volatile uint32_t *orbis_fence_label = &orbis_host_label;
+  * ring of the last few streams therefore always contains it, keyed by nothing but arithmetic.
+  *
+  * COST: one memcpy of the flattened stream per submission - a few hundred dwords typically, 7136 at the largest
+- * measured - and ORBIS_HUNG_RING slots of .bss. Enabled by DEFAULT, and that is deliberate: a hang that produces no
+- * dump has cost this project more than half a megabyte of memory ever will. ORBIS_DUMP_HUNG=0 turns it off. */
++ * measured - and ORBIS_HUNG_RING slots of .bss. Full capture/dumping is an explicit
++ * ORBIS_DUMP_HUNG=1 diagnostic. Normal play retains a concise elapsed-time
++ * fence-progress watchdog without copying or synchronously logging full streams. */
+ #define ORBIS_HUNG_RING 8
+ 
+ struct orbis_hung_slot {
+@@ -2913,6 +2997,9 @@ int      orbis_api_on = -1;
+  * it in the same log. */
+ void orbis_api_count(unsigned id, uint64_t n);
+ void orbis_api_time(unsigned id, uint64_t ns);
++/* Optional application observer; set once before GPU worker creation.
++ * Records CPU call durations only, without entering Dawn or taking driver locks. */
++void (*prime_orbis_profile_callback)(unsigned, uint64_t);
+ 
+ void
+ orbis_api_count(unsigned id, uint64_t n)
+@@ -2926,6 +3013,8 @@ orbis_api_count(unsigned id, uint64_t n)
+ void
+ orbis_api_time(unsigned id, uint64_t ns)
+ {
++   if (prime_orbis_profile_callback && id >= 45 && id <= 50)
++      prime_orbis_profile_callback(id, ns);
+    if (orbis_api_on == 1 && id < 64)
+       orbis_api_nanos[id] += ns;
+ }
+@@ -3033,7 +3122,7 @@ orbis_dump_hung_enabled(void)
+    static int cached = -1;
+    if (cached < 0) {
+       const char *const e = getenv("ORBIS_DUMP_HUNG");
+-      cached = (e != NULL && e[0] == '0' && e[1] == '\0') ? 0 : 1;
++      cached = prime_submit_full_dump_requested(e) ? 1 : 0;
+    }
+    return cached == 1;
+ }
+@@ -6264,7 +6353,12 @@ orbis_query_dev_info(struct drm_amdgpu_info_device *d)
+    d->virtual_address_offset = orbis_va_base;
+    d->virtual_address_max = orbis_va_end;
+    d->virtual_address_alignment = (uint32_t)orbis_page_size();
+-   d->pte_fragment_size = 0x200000;
++   /* This flat arena is mapped once; BO suballocations do not create Linux
++    * PTE fragments. Advertising a 2 MiB fragment makes RADV align every
++    * sufficiently large BO to 2 MiB, stranding nearly 2 MiB after its pad and
++    * guard pages. Use the actual native page granularity while preserving any
++    * larger explicit resource alignment passed by the caller. */
++   d->pte_fragment_size = (uint32_t)orbis_page_size();
+    d->gart_page_size = (uint32_t)orbis_page_size();
+    /* NO HIGH RANGE, and that is load-bearing rather than a placeholder: RADV asks for AMDGPU_VA_RANGE_HIGH
+     * on EVERY buffer (radv_amdgpu_bo.c's va_flags), so the arm's va_range_alloc has to know that honouring
+@@ -7508,8 +7602,6 @@ orbis_retire_ranges(void)
+       }
+       link = &va->next;
+    }
+-   simple_mtx_unlock(&orbis_va_lock);
+-
+    /* ⚠ ONE SYSCALL PER RANGE WAS THE OTHER HALF, and task #20 predicted it when the scheme was
+     * built: "cost: one syscall per freed range, on a path that runs often. Measure before
+     * shipping." It was never measured, and the CTS measured it the hard way.
+@@ -7561,6 +7653,11 @@ orbis_retire_ranges(void)
+    if (run_end != 0)
+       orbis_protect_now(run_addr, run_end - run_addr);
+    simple_mtx_unlock(&orbis_retire_lock);
++   /* The retired VA entries were removed above, but another allocator must
++    * not reuse their addresses until the old backing restoration/protection
++    * is complete. Otherwise this drain can revoke a newly mapped tenant.
++    * No GPU wait is performed while the allocation lock is held. */
++   simple_mtx_unlock(&orbis_va_lock);
+ #endif
+ }
+ 
+@@ -8285,6 +8382,24 @@ orbis_align_up(uint64_t v, uint64_t a)
+    return a > 1 ? (v + a - 1) & ~(a - 1) : v;
+ }
+ 
++bool
++prime_orbis_va_snapshot(struct PrimeOrbisVaStats *out)
++{
++   if (!out)
++      return false;
++   struct PrimeOrbisVaWalk walk;
++   simple_mtx_lock(&orbis_va_lock);
++   bool valid = prime_va_begin(&walk, orbis_va_base, orbis_va_end);
++   for (const struct amdgpu_va *va = orbis_va_list; va && valid; va = va->next)
++      valid = prime_va_add(&walk, va->base, va->size, va->retired);
++   if (valid) {
++      prime_va_finish(&walk);
++      *out = walk.stats;
++   }
++   simple_mtx_unlock(&orbis_va_lock);
++   return valid;
++}
++
+ int
+ ac_drm_va_range_alloc(ac_drm_device *dev, enum amdgpu_gpu_va_range va_range_type, uint64_t size,
+                       uint64_t va_base_alignment, uint64_t va_base_required,
+@@ -8306,6 +8421,8 @@ ac_drm_va_range_alloc(ac_drm_device *dev, enum amdgpu_gpu_va_range va_range_type
+    /* THE PAGE SIZE IS A FLOOR ON THE ALIGNMENT, not a formality: RADV rounds a mapping up to it, so two VA
+     * ranges closer together than one page would be mapped on top of each other. */
+    const uint64_t align = MAX2(va_base_alignment, orbis_page_size());
++   const char *const no_gap = getenv("ORBIS_NO_VA_GAP");
++   const uint64_t gap = no_gap != NULL ? 0 : orbis_page_size();
+    /* 32-bit requests are a HARD constraint, not a preference: address32_hi is reported as 0. */
+    /* A 32-bit request must land in the 4 GiB window amdgpu_sw_info_address32_hi names, which is the one the
+     * arena's base lives in - not "below 4 GiB", which was only true while this port chose its own window. */
+@@ -8317,6 +8434,8 @@ ac_drm_va_range_alloc(ac_drm_device *dev, enum amdgpu_gpu_va_range va_range_type
+       return -ENOMEM;
+    va->size = size;
+ 
++   bool pressure_retried = false;
++retry_after_retirement:
+    simple_mtx_lock(&orbis_va_lock);
+ 
+    /* ⚠ NEVER HAND BACK AN ADDRESS, TO ASK WHETHER RECYCLING THEM IS WHAT MAKES THIS PORT RANDOM.
+@@ -8366,7 +8485,8 @@ ac_drm_va_range_alloc(ac_drm_device *dev, enum amdgpu_gpu_va_range va_range_type
+    if (va_base_required) {
+       /* A replay address (VK_KHR_buffer_device_address's capture/replay). It is satisfied EXACTLY or not at
+        * all - moving it would make a captured trace address different memory than it captured. */
+-      if (va_base_required < orbis_va_base || va_base_required + size > limit ||
++      if (va_base_required < orbis_va_base || va_base_required > limit ||
++          size > limit - va_base_required ||
+           (va_base_required & (align - 1))) {
+          simple_mtx_unlock(&orbis_va_lock);
+          free(va);
+@@ -8379,7 +8499,12 @@ ac_drm_va_range_alloc(ac_drm_device *dev, enum amdgpu_gpu_va_range va_range_type
+       while (*link && (*link)->base + (*link)->size <= candidate)
+          link = &(*link)->next;
+ 
+-      const bool clash = *link && candidate + size > (*link)->base;
++      /* The guard is part of the reservation, so it must fit BEFORE the next
++       * live range too. Checking only size lets a reused hole's new guard
++       * overlap its neighbour, which also breaks retirement protection. */
++      const bool clash = *link &&
++         (candidate >= (*link)->base || size > (*link)->base - candidate ||
++          gap > (*link)->base - candidate - size);
+       if (!clash)
+          break;
+ 
+@@ -8393,11 +8518,32 @@ ac_drm_va_range_alloc(ac_drm_device *dev, enum amdgpu_gpu_va_range va_range_type
+       link = &(*link)->next;
+    }
+ 
+-   if (candidate + size > limit) {
++   if (candidate > limit || size > limit - candidate) {
+       simple_mtx_unlock(&orbis_va_lock);
++      /* A room/effect transition can retire hundreds of MiB between frame
++       * callbacks. Retry once after a bounded native fence wait, with the VA
++       * lock dropped. Calling Dawn from inside vkAllocateMemory would reenter
++       * its device lock. The native gate instead serializes actual submission
++       * and never releases ranges on a timeout or an incomplete fence. */
++      struct PrimeOrbisVaStats pressure;
++      if (!pressure_retried && !no_reuse && !va_base_required &&
++          prime_orbis_va_snapshot(&pressure) && pressure.retired != 0) {
++         pressure_retried = true;
++         if (prime_orbis_reclaim_for_allocation(500000000ull))
++            goto retry_after_retirement;
++      }
+       free(va);
+-      mesa_loge("orbis-drm: out of %s VA for %" PRIu64 " bytes%s",
+-                (flags & AMDGPU_VA_RANGE_32_BIT) ? "32-bit" : "device", size,
++      struct PrimeOrbisVaStats stats;
++      if (prime_orbis_va_snapshot(&stats))
++         mesa_loge("prime: VA exhaustion: capacity=%" PRIu64 " KiB live=%" PRIu64
++                   " KiB retired=%" PRIu64 " KiB free=%" PRIu64 " KiB largest=%" PRIu64
++                   " KiB ranges=%" PRIu64 " retired_ranges=%" PRIu64,
++                   stats.capacity / 1024, stats.live / 1024, stats.retired / 1024,
++                   stats.free / 1024, stats.largest_free / 1024, stats.ranges, stats.retired_ranges);
++      mesa_loge("orbis-drm: out of %s VA for %" PRIu64 " bytes (alignment=%" PRIu64
++                ", requested_alignment=%" PRIu64 ", guard=%" PRIu64 ", required=0x%" PRIx64 ")%s",
++                (flags & AMDGPU_VA_RANGE_32_BIT) ? "32-bit" : "device", size, align,
++                va_base_alignment, gap, va_base_required,
+                 no_reuse ? " - with ORBIS_VA_NO_REUSE set, so this is the window being consumed rather than "
+                            "fragmented, and everything measured before this line still stands"
+                          : "");
+@@ -8437,9 +8583,7 @@ ac_drm_va_range_alloc(ac_drm_device *dev, enum amdgpu_gpu_va_range va_range_type
+     * THE GAP IS RESERVED, NOT MERELY SKIPPED: it is part of this range's recorded size, so the first-fit walk below
+     * cannot hand it to anybody, and freeing this range returns the gap with it. */
+    {
+-      const char *const off = getenv("ORBIS_NO_VA_GAP");
+-      const uint64_t    gap = off != NULL ? 0 : orbis_page_size();
+-      if (gap != 0 && candidate + size + gap <= limit) {
++      if (gap != 0 && size <= limit - candidate && gap <= limit - candidate - size) {
+          va->size = size + gap;
+          static unsigned said;
+          if (orbis_budget(&said, 1)) {
+@@ -9290,6 +9434,36 @@ ac_drm_cs_ctx_stable_pstate(ac_drm_device *dev, uint32_t ctx_id, uint32_t op, ui
+  */
+ static simple_mtx_t orbis_submit_lock = SIMPLE_MTX_INITIALIZER;
+ 
++bool
++prime_orbis_reclaim_completed(void)
++{
++   if (!orbis_fence_label)
++      return false;
++   simple_mtx_lock(&orbis_submit_lock);
++   const bool complete = (int32_t)(*orbis_fence_label - (uint32_t)orbis_submit_seq_no) >= 0;
++   if (complete)
++      orbis_retire_ranges();
++   simple_mtx_unlock(&orbis_submit_lock);
++   return complete;
++}
++
++bool
++prime_orbis_reclaim_for_allocation(uint64_t timeout_ns)
++{
++   if (!orbis_fence_label)
++      return false;
++   simple_mtx_lock(&orbis_submit_lock);
++   /* No later submission may overtake this wait/check/drain. Keep every
++    * reservation when the wait fails, even if the caller will report OOM. */
++   const bool complete = ac_orbis_wait_gpu_idle(timeout_ns) &&
++      (int32_t)(*orbis_fence_label - (uint32_t)orbis_submit_seq_no) >= 0;
++   if (complete)
++      orbis_retire_ranges();
++   simple_mtx_unlock(&orbis_submit_lock);
++   return complete;
++}
++
++
+ /* RADV's own bound is MAX_RINGS_PER_TYPE-independent: it chains within a CS and submits preamble, body and
+  * postamble as separate chunks, so three is the floor and a few more is the realistic ceiling. 16 is far past
+  * anything measured, and exceeding it is a loud refusal rather than a silent truncation. */
+@@ -9313,66 +9487,26 @@ orbis_chunk_name(uint32_t id)
+    }
+ }
+ 
+-int
+-ac_drm_cs_submit_raw2(ac_drm_device *dev, uint32_t ctx_id, uint32_t bo_list_handle, int num_chunks,
+-                      struct drm_amdgpu_cs_chunk *chunks, uint64_t *seq_no)
++/* Called with orbis_submit_lock held, including the fence-slot poll. */
++static void
++orbis_observe_fence_progress(uint64_t queued)
+ {
+-   /* End to end, because Sony's call and the three waits inside are already measured and small - so whatever else
+-    * this function costs shows up as the difference. */
+-   const uint64_t orbis_submit_t0 = os_time_get_nano();
+-   orbis_api_count(ORBIS_ID_ARM_SUBMIT, 1);
+-   /* How many tickets have been handed out before this call - a relaxed read for the hang detector below, which
+-    * runs before the lock on purpose. The ticket itself is taken further down; see the note there. */
+-   const uint64_t queued = orbis_submit_seq_no;
+-
+-   /* STAGE MARKERS, and they exist because two runs could only say "somewhere in the submit". Every stage of
+-    * this function logs once per submit for the first few, mesa_log flushes per line, so the LAST line printed
+-    * names the stage that blocked. Cheaper than another hypothesis: three of mine died on this one bug. */
+-   /* ⚠ AND THE BOUND IS A KNOB NOW, because a run died on submission 36 and the bound was 8.
+-    *
+-    * OpenGothic reached its frame loop and the log stops immediately after "#36: flattened" - so the death is in
+-    * the Sony call or in what follows it, and every line that would name which was suppressed by this bound. The
+-    * first eight submissions of a boot are no longer the interesting ones.
+-    *
+-    * ORBIS_TRACE_SUBMITS=<n> traces the first n; 0 traces every submission, which at 30-odd lines each is a large
+-    * log and exactly what a hang 36 submits in needs. Default stays 8 so a normal run is readable. */
+-   const uint64_t stage_limit = orbis_trace_submits();
+-#define ORBIS_SUBMIT_STAGE(what)                                                                   \
+-   do {                                                                                            \
+-      if (orbis_trace() && (stage_limit == 0 || orbis_submit_seq_no <= stage_limit))                \
+-         mesa_logi("orbis-drm: submit #%" PRIu64 " stage: %s", orbis_submit_seq_no, what);          \
+-   } while (0)
+-
+-   /* ⚠ IS THE PREVIOUS SUBMISSION STILL RUNNING? Asked here, on the way IN, because this is the last moment this
+-    * process reliably gets: the hang has already happened, Sony's driver is already counting, and the kill comes
+-    * about a second later.
+-    *
+-    * The label lags a submission or two in normal operation - measured, and read as a defect once already - so a
+-    * single lagging read means nothing. What means something is a label that does not move at all while
+-    * submissions keep arriving. Four consecutive submits with an unchanged label is far outside the normal lag and
+-    * far inside the second the kernel gives us.
+-    *
+-    * Then `label + 1` names the submission that never wrote its end-of-pipe, the ring holds its bytes, and the
+-    * dump is everything four runs of guessing from PM4 headers could not produce: that draw's own registers. */
+-   if (orbis_dump_hung_enabled() && queued > 2) {
+-      static uint32_t last_label;
+-      static unsigned stall;
+-      static bool     reported;
+-      const uint32_t  label = *orbis_fence_label;
+-
+-      if (label == last_label)
+-         ++stall;
+-      else
+-         stall = 0;
+-      last_label = label;
+-
+-      if (stall >= 4 && !reported) {
+-         const uint64_t              hung = (uint64_t)label + 1;
+-         struct orbis_hung_slot *const hs = &orbis_hung_ring[hung % ORBIS_HUNG_RING];
+-         reported = true;
+-         mesa_logw("orbis-drm: THE GPU HAS NOT FINISHED submit #%" PRIu64 " - the fence label has been stuck at %u "
+-                   "for %u submissions while %" PRIu64 " were queued. Dumping the stream it is stuck in.",
+-                   hung, label, stall, queued + 1 - hung);
++   static struct PrimeSubmitWatchdog watch;
++   if (!orbis_fence_label)
++      return;
++   const uint32_t label = *orbis_fence_label;
++   const uint64_t now = os_time_get_nano();
++   if (!prime_submit_watchdog_poll(&watch, label, queued, now))
++      return;
++   const uint64_t hung = queued - (uint32_t)((uint32_t)queued-label) + 1;
++   mesa_logw("orbis-drm: GPU fence progress warning: label %u unchanged for %" PRIu64
++             " ms with %u submission(s) outstanding; next sequence %" PRIu64
++             ". This is a progress observation, not proof of a GPU hang.",
++             label, (now-watch.pending_since_ns)/1000000,
++             (unsigned)((uint32_t)queued-label), hung);
++   if (!orbis_dump_hung_enabled())
++      return;
++   struct orbis_hung_slot *const hs = &orbis_hung_ring[hung % ORBIS_HUNG_RING];
+          if (hs->seq == hung && hs->dwords > 0) {
+             orbis_dump_ib(hung, hs->stream, hs->dwords, "HUNG", true);
+ 
+@@ -9566,8 +9700,35 @@ ac_drm_cs_submit_raw2(ac_drm_device *dev, uint32_t ctx_id, uint32_t bo_list_hand
+             mesa_logw("orbis-drm: submit #%" PRIu64 " is no longer in the %d-slot ring (it holds #%" PRIu64
+                       ") - raise ORBIS_HUNG_RING",
+                       hung, ORBIS_HUNG_RING, hs->seq);
+-      }
+-   }
++}
++
++int
++ac_drm_cs_submit_raw2(ac_drm_device *dev, uint32_t ctx_id, uint32_t bo_list_handle, int num_chunks,
++                      struct drm_amdgpu_cs_chunk *chunks, uint64_t *seq_no)
++{
++   /* End to end, because Sony's call and the three waits inside are already measured and small - so whatever else
++    * this function costs shows up as the difference. */
++   const uint64_t orbis_submit_t0 = os_time_get_nano();
++   orbis_api_count(ORBIS_ID_ARM_SUBMIT, 1);
++
++   /* STAGE MARKERS, and they exist because two runs could only say "somewhere in the submit". Every stage of
++    * this function logs once per submit for the first few, mesa_log flushes per line, so the LAST line printed
++    * names the stage that blocked. Cheaper than another hypothesis: three of mine died on this one bug. */
++   /* ⚠ AND THE BOUND IS A KNOB NOW, because a run died on submission 36 and the bound was 8.
++    *
++    * OpenGothic reached its frame loop and the log stops immediately after "#36: flattened" - so the death is in
++    * the Sony call or in what follows it, and every line that would name which was suppressed by this bound. The
++    * first eight submissions of a boot are no longer the interesting ones.
++    *
++    * ORBIS_TRACE_SUBMITS=<n> traces the first n; 0 traces every submission, which at 30-odd lines each is a large
++    * log and exactly what a hang 36 submits in needs. Default stays 8 so a normal run is readable. */
++   const uint64_t stage_limit = orbis_trace_submits();
++#define ORBIS_SUBMIT_STAGE(what)                                                                   \
++   do {                                                                                            \
++      if (orbis_trace() && (stage_limit == 0 || orbis_submit_seq_no <= stage_limit))                \
++         mesa_logi("orbis-drm: submit #%" PRIu64 " stage: %s", orbis_submit_seq_no, what);          \
++   } while (0)
++
+ 
+    /* ⚠ ONE SUBMIT AT A TIME, and the lock is not paranoia: the fence command buffer is a single shared
+     * allocation, so two threads building it concurrently would each submit the other's sequence number. RADV
+@@ -9584,6 +9745,7 @@ ac_drm_cs_submit_raw2(ac_drm_device *dev, uint32_t ctx_id, uint32_t bo_list_hand
+    ORBIS_SUBMIT_STAGE("entered");
+    simple_mtx_lock(&orbis_submit_lock);
+    ORBIS_SUBMIT_STAGE("took the submit lock");
++   orbis_observe_fence_progress(orbis_submit_seq_no);
+ 
+    /* +1 for the arm's own fence command buffer, which goes LAST so that its end-of-pipe event follows every
+     * IB in the submission. */
+@@ -9833,6 +9995,9 @@ ac_drm_cs_submit_raw2(ac_drm_device *dev, uint32_t ctx_id, uint32_t bo_list_hand
+          const int64_t slot_deadline = orbis_deadline(OS_TIMEOUT_INFINITE, "fence-slot");
+          bool slot_free = true;
+          while ((int32_t)(*orbis_fence_label - owner) < 0) {
++            /* seq is reserved, not submitted: observe only its predecessors.
++             * A full ring can stop new calls before the 250 ms warning fires. */
++            orbis_observe_fence_progress(seq-1);
+             if (os_time_get_nano() >= (uint64_t)slot_deadline) {
+                slot_free = false;
+                break;
+@@ -10111,9 +10276,9 @@ ac_drm_cs_submit_raw2(ac_drm_device *dev, uint32_t ctx_id, uint32_t bo_list_hand
+     * packet must end EXACTLY at the size we report. A packet that runs one dword past the end means the CP keeps
+     * fetching into whatever follows - which is precisely the observed shape.
+     *
+-    * CHEAP AND UNCONDITIONAL: one pass over a stream this arm just memcpy'd anyway, and it prints nothing when the
+-    * stream is right. A validator behind a knob is a validator that is off during the run that needed it. */
+-   {
++    * The parser already bounds-checks every copied packet. This additional full-stream
++    * diagnostic replay is explicitly opt-in; it must not scan the ordinary submission twice. */
++   if (orbis_validate_submits) {
+       const uint32_t *const w = (const uint32_t *)dcb[0];
+       const uint32_t        n = dcb_bytes[0] / 4;
+       static unsigned       said;
+@@ -10679,12 +10844,20 @@ ac_drm_cs_query_fence_status(ac_drm_device *dev, uint32_t ctx_id, uint32_t ip_ty
+     * the other is how a 1 ms wait becomes a wait until the heat death of the console. */
+    struct orbis_wait_watch watch;
+    orbis_wait_begin(&watch, (flags & 0x1) ? timeout_ns : os_time_get_absolute_timeout(timeout_ns), "fence");
++   struct PrimeSubmitWatchdog progress = {0};
+ 
+    for (;;) {
+-      if ((int32_t)(*orbis_fence_label - want) >= 0) {
++      const uint32_t label = *orbis_fence_label;
++      if ((int32_t)(label - want) >= 0) {
+          *expired = 1;
+          return 0;
+       }
++      /* Local diagnostic state needs no submit lock. Completion and the
++       * caller's timeout below are unchanged, even after this warning. */
++      if (timeout_ns != 0 && prime_submit_watchdog_poll(&progress, label, fence_seq_no, os_time_get_nano()))
++         mesa_logw("orbis-drm: fence wait for %u: label %u has made no progress for %" PRIu64
++                   " ms; continuing under the caller's existing deadline", want, label,
++                   (progress.last_ns-progress.pending_since_ns)/1000000);
+       if (timeout_ns == 0 || !orbis_wait_continue(&watch)) {
+          if (timeout_ns != 0)
+             mesa_logw("orbis-drm: fence %u never reached - label is %u, the GPU did not finish",
