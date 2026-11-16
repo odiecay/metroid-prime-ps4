@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <aurora/frame_trace.hpp>
+#include "../platform/ps4/compat/prime_dawn_call_profile.h"
 #include <cstdlib>
 #include <thread>
 #include <array>
@@ -15,6 +16,7 @@ void prime_ps4_bind_group_usage_counts(uint64_t,uint64_t);
 int main(int argc,char** argv) {
     if(argc!=2) return 1;
     setenv("MP_PS4_PROFILE_LOG",argv[1],1);
+    setenv("MP_DAWN_CALL_PROFILE","1",1);
     prime_ps4_trace_start();
     using namespace aurora::trace;
     for(uint64_t id=1;id<=2;++id) {
@@ -47,6 +49,9 @@ int main(int argc,char** argv) {
             prime_ps4_dawn_duration(3,300000);
             prime_ps4_dawn_duration(4,1500000);
             prime_ps4_dawn_duration(5,100000);
+            const PrimeDawnCallStats calls[]={
+                {128,2,1000,0},{64,1,200,0},{1,0,0,0},{32,1,50,id==2?1ull:0ull}};
+            prime_ps4_dawn_call_stats(calls,4);
             prime_ps4_descriptor_bind_counts(2,3);
             prime_ps4_bind_group_usage_counts(5,2);
             emit({id,id*100000000,3000000,"Dawn encoding (inclusive)",Render,Inclusive});

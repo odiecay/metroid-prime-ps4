@@ -45,3 +45,8 @@ python3 tools/build_game_prep.py --output artifacts/game-prep
 Its compiler inputs and downloads are pinned in
 `tools/game_prep_build_inputs.json`. Player downloads contain the resulting EXE;
 players do not install Python. [INSTALLING.md](INSTALLING.md) covers setup.
+
+Detailed Vulkan call timing is off by default. For a profiling session,
+`/data/project-prime/release/benchmark-v2.cfg` can contain
+`dawn_call_profile=1`; use `0` or remove the file to disable it. The normal
+five-second frame summaries remain available without this extra sampling.

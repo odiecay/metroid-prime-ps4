@@ -143,3 +143,41 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn('not a pooled percentile',text)
         self.assertIn('2 dropped events',text)
         self.assertIn('8 / 0 / 0 / 0',text)
+
+class VulkanCallAnalysisTests(unittest.TestCase):
+    @staticmethod
+    def call_window():
+        values={'Vulkan call profiled submissions':2,'Vulkan call invalid wall clocks':1}
+        for prefix,name,_ in m.VULKAN_CALL_FAMILIES:
+            values[name]=128
+            values[f'Vulkan {prefix} wall samples']=2
+            values[f'Vulkan {prefix} observed sampled wall ns']=1000
+            values[f'Vulkan {prefix} cap skipped samples']=0
+        values['Vulkan pipeline wall samples']=0
+        values['Vulkan pipeline observed sampled wall ns']=0
+        values['Vulkan draw cap skipped samples']=3
+        values['Vulkan call observation checksum']=sum(values.values()) & ((1<<64)-1)
+        return dict(stages=[dict(lane='render',kind=2,stage=k,counter=v)for k,v in values.items()])
+
+    def test_only_observed_wall_means_and_explicit_cap_are_reported(self):
+        text='\n'.join(m.vulkan_call_report([self.call_window()]))
+        self.assertIn('| Draw / indexed / indirect | 128 | 2 | 3 | 0.500 |',text)
+        self.assertIn('| Pipeline binds | 128 | 0 | 0 | unavailable |',text)
+        self.assertIn('Invalid wall-clock intervals excluded:1'.replace(':1',': 1'),text)
+        self.assertIn('not complete category cost',text)
+        self.assertIn('possible early-region bias',text)
+
+    def test_split_missing_or_dropped_bundles_are_rejected(self):
+        row=self.call_window();split=dict(row)
+        split['stages']=row['stages'][:-1]
+        ending=dict(stages=row['stages'][-1:])
+        text='\n'.join(m.vulkan_call_report([split,ending]))
+        self.assertIn('Excluded2'.replace('2',' 2'),text)
+        self.assertNotIn('0.500',text)
+        row['dropped_events']=1
+        self.assertIn('No complete valid','\n'.join(m.vulkan_call_report([row])))
+
+    def test_disabled_old_logs_have_no_fake_call_report(self):
+        self.assertEqual(m.vulkan_call_report([dict(stages=[])]),[])
+        text='\n'.join(m.vulkan_call_report([dict(stages=[],vulkan_call_sampling={'enabled':True})]))
+        self.assertIn('no call timing is available',text)

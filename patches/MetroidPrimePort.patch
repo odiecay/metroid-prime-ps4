@@ -3916,7 +3916,7 @@ index 00000000..56ebcab5
 +};
 +}
 diff --git a/extern/aurora/lib/window.cpp b/extern/aurora/lib/window.cpp
-index 99bf0f79..a491d33e 100644
+index 99bf0f79..0155fc6e 100644
 --- a/extern/aurora/lib/window.cpp
 +++ b/extern/aurora/lib/window.cpp
 @@ -314,6 +314,12 @@ void process_event(SDL_Event& event) {
@@ -3932,7 +3932,60 @@ index 99bf0f79..a491d33e 100644
    g_events.clear();
    g_eventStrings.clear();
  
-@@ -674,6 +680,12 @@ void set_fullscreen(bool fullscreen) {
+@@ -496,6 +502,37 @@ void shutdown() {
+ }
+ 
+ namespace {
++#if defined(__ORBIS__)
++// The game's logical width remains even for GX. In Auto, do not turn that
++// two-pixel quantization into a tiny native-target resize and unused output columns.
++// Both the logical quantum and a strict relative bound must fit; intentional
++// aspect changes (including 4:3 on a widescreen display) keep their letterbox.
++static bool native_auto_quantization_fit(int nativeWidth, int nativeHeight, uint32_t logicalWidth,
++                                         uint32_t logicalHeight, int fittedWidth, int fittedHeight) noexcept {
++  if (nativeWidth <= 0 || nativeHeight <= 0 || logicalWidth == 0 || logicalHeight == 0 ||
++      fittedWidth <= 0 || fittedHeight <= 0 || fittedWidth > nativeWidth || fittedHeight > nativeHeight) {
++    return false;
++  }
++  const uint64_t widthError = uint64_t(nativeWidth - fittedWidth);
++  const uint64_t heightError = uint64_t(nativeHeight - fittedHeight);
++  // Less than 0.2 percent in either native dimension, even for tiny/invalid
++  // logical modes where a two-pixel tolerance alone would permit stretching.
++  if (widthError * 512 > uint64_t(nativeWidth) || heightError * 512 > uint64_t(nativeHeight)) {
++    return false;
++  }
++  if (widthError * logicalWidth > uint64_t(nativeWidth) * 2 ||
++      heightError * logicalHeight > uint64_t(nativeHeight) * 2) {
++    return false;
++  }
++  // ApplyAspectMode quantizes width, not height. Bound that original width
++  // discrepancy directly as well, using products that fit in uint64_t.
++  const uint64_t nativeCross = uint64_t(nativeWidth) * logicalHeight;
++  const uint64_t logicalCross = uint64_t(nativeHeight) * logicalWidth;
++  const uint64_t crossError = nativeCross > logicalCross ? nativeCross - logicalCross : logicalCross - nativeCross;
++  return crossError <= uint64_t(nativeHeight) * 2;
++}
++#endif
++
+ // The frame buffer size a render scale gives for a window of native_fb_w x native_fb_h pixels.
+ Vec2<int> frame_buffer_size_for_scale(int native_fb_w, int native_fb_h, float frameBufferScale) {
+   int fb_w = native_fb_w;
+@@ -515,6 +552,14 @@ Vec2<int> frame_buffer_size_for_scale(int native_fb_w, int native_fb_h, float fr
+           fit_frame_buffer_to_aspect(fb_w, fb_h, static_cast<float>(baseW) / static_cast<float>(baseH));
+       fb_w = fitW;
+       fb_h = fitH;
++#if defined(__ORBIS__)
++      static const bool nativeAutoEfb = env_flag("MP_PS4_NATIVE_EFB", true);
++      if (frameBufferScale == 0.f && nativeAutoEfb &&
++          native_auto_quantization_fit(native_fb_w, native_fb_h, baseW, baseH, fitW, fitH)) {
++        fb_w = native_fb_w;
++        fb_h = native_fb_h;
++      }
++#endif
+     }
+   }
+   // A high scale in a wide window can pass the device's texture size limit, which the EFB
+@@ -674,6 +719,12 @@ void set_fullscreen(bool fullscreen) {
  bool get_fullscreen() { return (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN) != 0u; }
  
  void set_window_size(uint32_t width, uint32_t height) {

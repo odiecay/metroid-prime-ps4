@@ -12,7 +12,7 @@ class DawnDescriptorBatchTests(unittest.TestCase):
         end = source.index("        // Update PipelineLayout", start)
         out = ROOT / "build/dawn-descriptor-batch-host"
         out.mkdir(exist_ok=True)
-        (out / "actual_descriptor_batch.inc").write_text(source[start:end])
+        (out / "actual_descriptor_batch.inc").write_text("#define PRIME_DAWN_VK_CALL(category, function, ...) function(__VA_ARGS__)\n"+source[start:end])
         program = out / "run"
         subprocess.run(["g++-14", "-std=c++20", "-O2", "-fsanitize=address,undefined",
                         "-I" + str(out), str(ROOT / "tests/dawn_descriptor_batch.cpp"),

@@ -29,6 +29,27 @@ int main(int argc,char** argv) {
     write(p.root/"benchmark.cfg","command_storage_reuse=1\n");
     apply_candidate_environment(p);
     assert(std::string(getenv("AURORA_COMMAND_STORAGE_REUSE"))=="1");
+    unsetenv("MP_DAWN_CALL_PROFILE");
+    const auto legacyBenchmark=std::string("command_storage_reuse=1\n");
+    write(p.root/"benchmark-v2.cfg","dawn_call_profile=1\n");
+    apply_candidate_environment(p);
+    assert(std::string(getenv("MP_DAWN_CALL_PROFILE"))=="1");
+    assert(std::string(getenv("AURORA_COMMAND_STORAGE_REUSE"))=="1");
+    {
+        std::ifstream old(p.root/"benchmark.cfg");
+        assert(std::string((std::istreambuf_iterator<char>(old)),{})==legacyBenchmark);
+    }
+    write(p.root/"benchmark-v2.cfg","dawn_call_profile=0\n");
+    apply_candidate_environment(p);
+    assert(std::string(getenv("MP_DAWN_CALL_PROFILE"))=="0");
+    for(const char* bad:{"dawn_call_profile=2\n","dawn_call_profile=1\ndawn_call_profile=0\n",
+                        "command_storage_reuse=1\n","\n",""}) {
+        write(p.root/"benchmark-v2.cfg",bad);
+        bool badConfig=false;try{apply_candidate_environment(p);}catch(...){badConfig=true;}
+        assert(badConfig);
+        assert(std::string(getenv("MP_DAWN_CALL_PROFILE"))=="0");
+    }
+    fs::remove(p.root/"benchmark-v2.cfg");
     write(desc,"PROJECT_PRIME_PROFILE_V1\n../../user\n");
     bool rejected=false;try { read_candidate_profile(desc,root); } catch(...) { rejected=true; }assert(rejected);
     write(desc,"PROJECT_PRIME_PROFILE_V1\nremastered-lite-v0023\n");

@@ -24,8 +24,10 @@ public:
         over_[0]+=ns>16666667;over_[1]+=ns>20000000;over_[2]+=ns>25000000;over_[3]+=ns>33333333;
     }
     FrameSummary summary() const {
-        auto sorted=times_;
+        if (!count_) return {};
         const size_t n=std::min<uint64_t>(count_,times_.size());
+        std::array<uint64_t,1024> sorted;
+        std::copy_n(times_.begin(),n,sorted.begin());
         std::sort(sorted.begin(),sorted.begin()+n);
         const auto percentile=[&](size_t p) { return n?sorted[(n*p+99)/100-1]:0; };
         return {count_,n,count_-n,sum_,worst_,percentile(50),percentile(95),percentile(99),over_[0],over_[1],over_[2],over_[3]};

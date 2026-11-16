@@ -318,15 +318,17 @@ index 064b572f5c..57fbc7ccd6 100644
  #else
  #error "Unimplemented Vulkan backend platform"
 diff --git a/src/dawn/native/vulkan/CommandBufferVk.cpp b/src/dawn/native/vulkan/CommandBufferVk.cpp
-index d9ee304571..301fe3379f 100644
+index d9ee304571..d90eac25f0 100644
 --- a/src/dawn/native/vulkan/CommandBufferVk.cpp
 +++ b/src/dawn/native/vulkan/CommandBufferVk.cpp
-@@ -27,7 +27,12 @@
+@@ -27,7 +27,14 @@
  
  #include "src/dawn/native/vulkan/CommandBufferVk.h"
  
 +#ifdef __ORBIS__
 +#include <prime_dawn_trace.h>
++#else
++#define PRIME_DAWN_VK_CALL(category, function, ...) function(__VA_ARGS__)
 +#endif
 +
  #include <algorithm>
@@ -334,7 +336,7 @@ index d9ee304571..301fe3379f 100644
  #include <concepts>
  #include <limits>
  #include <memory>
-@@ -70,6 +75,11 @@
+@@ -70,6 +77,11 @@
  #include "src/utils/compiler.h"
  #include "src/utils/numeric.h"
  
@@ -346,7 +348,7 @@ index d9ee304571..301fe3379f 100644
  namespace dawn::native::vulkan {
  
  namespace {
-@@ -248,9 +258,34 @@ VkRect2D GetAlignedRenderArea(Device* device,
+@@ -248,9 +260,34 @@ VkRect2D GetAlignedRenderArea(Device* device,
  
  class DescriptorSetTracker : public BindGroupTrackerBase<true> {
    public:
@@ -382,16 +384,24 @@ index d9ee304571..301fe3379f 100644
                 mLastAppliedImmediateSize == mImmediateSize;
      }
  
-@@ -317,6 +352,7 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
-                 vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
+@@ -314,9 +351,10 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
+ 
+             if (mFramebufferFetchEnabled) {
+                 DAWN_ASSERT(mFramebufferFetchDescriptorSet != VK_NULL_HANDLE);
+-                vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
++                PRIME_DAWN_VK_CALL(Descriptor, vk.CmdBindDescriptorSets, commandBuffer, bindPoint, layout,
                                           static_cast<uint32_t>(startOfBindGroups), 1,
                                           &*mFramebufferFetchDescriptorSet, 0, nullptr);
 +                NoteDescriptorBind(1);
              }
          }
          if (mFramebufferFetchEnabled) {
-@@ -336,23 +372,65 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
-                 vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
+@@ -333,26 +371,68 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
+             if (mUsesResourceTable) {
+                 DAWN_ASSERT(mResourceTable != nullptr);
+                 VkDescriptorSet set = mResourceTable->GetHandle();
+-                vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout,
++                PRIME_DAWN_VK_CALL(Descriptor, vk.CmdBindDescriptorSets, commandBuffer, bindPoint, layout,
                                           static_cast<uint32_t>(startOfBindGroups), 1, &*set, 0,
                                           nullptr);
 +                NoteDescriptorBind(1);
@@ -416,7 +426,7 @@ index d9ee304571..301fe3379f 100644
 +            if (setCount == 0) {
 +                return;
 +            }
-+            vk.CmdBindDescriptorSets(commandBuffer, bindPoint, layout, firstSet, setCount,
++            PRIME_DAWN_VK_CALL(Descriptor, vk.CmdBindDescriptorSets, commandBuffer, bindPoint, layout, firstSet, setCount,
 +                                     AsVkArray(sets.data()), offsetCount, offsetData);
 +            NoteDescriptorBind(setCount);
 +            setCount = 0;
@@ -464,7 +474,7 @@ index d9ee304571..301fe3379f 100644
  
          // Update PipelineLayout
          AfterApply();
-@@ -373,6 +451,12 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
+@@ -373,6 +453,12 @@ class DescriptorSetTracker : public BindGroupTrackerBase<true> {
      VkDescriptorSet mFramebufferFetchDescriptorSet = VK_NULL_HANDLE;
      uint32_t mLastAppliedImmediateSize = 0;
      uint32_t mImmediateSize = 0;
@@ -477,7 +487,7 @@ index d9ee304571..301fe3379f 100644
  };
  
  class RenderImmediatesTracker
-@@ -396,12 +480,37 @@ class ImmediateTracker : public T {
+@@ -396,12 +482,37 @@ class ImmediateTracker : public T {
    public:
      ImmediateTracker() = default;
  
@@ -516,7 +526,7 @@ index d9ee304571..301fe3379f 100644
      }
  
      void Apply(const VulkanFunctions& vk,
-@@ -423,6 +532,9 @@ class ImmediateTracker : public T {
+@@ -423,6 +534,9 @@ class ImmediateTracker : public T {
          // Reset all dirty bits after uploading.
          this->mDirty.reset();
      }
@@ -526,7 +536,7 @@ index d9ee304571..301fe3379f 100644
  };
  
  // Records the necessary barriers for a synchronization scope using the resource usage
-@@ -430,6 +542,9 @@ class ImmediateTracker : public T {
+@@ -430,6 +544,9 @@ class ImmediateTracker : public T {
  MaybeError PrepareResourcesForSyncScope(Device* device,
                                          CommandRecordingContext* recordingContext,
                                          const SyncScopeResourceUsage& scope) {
@@ -536,7 +546,7 @@ index d9ee304571..301fe3379f 100644
      // Apply pending updates to all resource tables used in usages scope.
      // This has to be done before transitioning resources.
      // TODO(crbug.com/529883743): Consider folding the logic in GatherWritableTextures into the
-@@ -526,7 +641,10 @@ MaybeError PrepareResourcesForSyncScope(Device* device,
+@@ -526,9 +643,12 @@ MaybeError PrepareResourcesForSyncScope(Device* device,
          }
      }
  
@@ -546,9 +556,30 @@ index d9ee304571..301fe3379f 100644
 +    for (const ImageBarriers* batch : {&vertexImageBarriers, &nonVertexImageBarriers}) {
 +        const ImageBarriers& barriers = *batch;
          if (!barriers.imageBarriers.empty()) {
-             device->fn.CmdPipelineBarrier(recordingContext->commandBuffer, barriers.srcStages,
+-            device->fn.CmdPipelineBarrier(recordingContext->commandBuffer, barriers.srcStages,
++            PRIME_DAWN_VK_CALL(Barrier, device->fn.CmdPipelineBarrier, recordingContext->commandBuffer, barriers.srcStages,
                                            barriers.dstStages, 0, 0, nullptr, 0, nullptr,
-@@ -1729,6 +1847,9 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                                           checked_cast<uint32_t>(barriers.imageBarriers.size()),
+                                           barriers.imageBarriers.data());
+@@ -645,7 +765,7 @@ struct ProgrammablePassState : public StackAllocated {
+                 return RunWithSpecialization(DoOperation);
+             }
+ 
+-            vk.CmdBindPipeline(commands, PipelineBindPoint, lastPipeline->GetHandle());
++            PRIME_DAWN_VK_CALL(Pipeline, vk.CmdBindPipeline, commands, PipelineBindPoint, lastPipeline->GetHandle());
+             lastPipeline->ApplyDynamicState(commands, lastAppliedPipeline);
+             lastAppliedPipeline = lastPipeline;
+         }
+@@ -745,7 +865,7 @@ struct ProgrammablePassState : public StackAllocated {
+         // Reapply all the state and run the operation.
+         VkCommandBuffer commands = recordingContext->commandBuffer;
+ 
+-        vk.CmdBindPipeline(commands, PipelineBindPoint, pipelineHandles.pipeline);
++        PRIME_DAWN_VK_CALL(Pipeline, vk.CmdBindPipeline, commands, PipelineBindPoint, pipelineHandles.pipeline);
+         descriptorSets.Apply(vk, commands, PipelineBindPoint, pipelineHandles.layout,
+                              [&](BindGroupIndex i) { return newDescriptorSets[i]->GetHandle(); });
+         immediates.Apply(vk, commands, pipelineHandles.layout, lastPipeline->GetImmediateMask());
+@@ -1729,6 +1849,9 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                                             BeginRenderPassCmd* renderPassCmd,
                                             const RenderPassResourceUsage& usage,
                                             PassIndex renderPassIndex) {
@@ -558,7 +589,7 @@ index d9ee304571..301fe3379f 100644
      Device* device = ToBackend(GetDevice());
      VkCommandBuffer commands = recordingContext->commandBuffer;
  
-@@ -1745,7 +1866,12 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+@@ -1745,7 +1868,12 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
      }
  
@@ -572,8 +603,98 @@ index d9ee304571..301fe3379f 100644
  
      RenderPassState state(device->fn, recordingContext);
  
+@@ -1804,7 +1932,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                 if (draw->vertexCount > 0 && draw->instanceCount > 0) {
+                     DAWN_TRY(
+                         state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
+-                            vk.CmdDraw(commands, draw->vertexCount, draw->instanceCount,
++                            PRIME_DAWN_VK_CALL(Draw, vk.CmdDraw, commands, draw->vertexCount, draw->instanceCount,
+                                        draw->firstVertex, draw->firstInstance);
+                         }));
+                 }
+@@ -1818,7 +1946,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                 if (draw->indexCount > 0 && draw->instanceCount > 0) {
+                     DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk,
+                                                   VkCommandBuffer commands) {
+-                        vk.CmdDrawIndexed(commands, draw->indexCount, draw->instanceCount,
++                        PRIME_DAWN_VK_CALL(Draw, vk.CmdDrawIndexed, commands, draw->indexCount, draw->instanceCount,
+                                           draw->firstIndex, draw->baseVertex, draw->firstInstance);
+                     }));
+                 }
+@@ -1836,7 +1964,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                 DAWN_ASSERT(indirectBuffer != nullptr);
+ 
+                 DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
+-                    vk.CmdDrawIndirect(commands, indirectBuffer->GetHandle(),
++                    PRIME_DAWN_VK_CALL(Draw, vk.CmdDrawIndirect, commands, indirectBuffer->GetHandle(),
+                                        validatedDraw.indirectOffset, 1, 0);
+                 }));
+                 break;
+@@ -1853,7 +1981,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                 DAWN_ASSERT(indirectBuffer != nullptr);
+ 
+                 DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
+-                    vk.CmdDrawIndexedIndirect(commands, indirectBuffer->GetHandle(),
++                    PRIME_DAWN_VK_CALL(Draw, vk.CmdDrawIndexedIndirect, commands, indirectBuffer->GetHandle(),
+                                               validatedDraw.indirectOffset, 1, 0);
+                 }));
+                 break;
+@@ -1871,11 +1999,11 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+ 
+                 DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
+                     if (countBuffer == nullptr) {
+-                        vk.CmdDrawIndirect(commands, indirectBuffer->GetHandle(),
++                        PRIME_DAWN_VK_CALL(Draw, vk.CmdDrawIndirect, commands, indirectBuffer->GetHandle(),
+                                            static_cast<VkDeviceSize>(cmd->indirectOffset),
+                                            cmd->maxDrawCount, kDrawIndirectSize);
+                     } else {
+-                        vk.CmdDrawIndirectCountKHR(commands, indirectBuffer->GetHandle(),
++                        PRIME_DAWN_VK_CALL(Draw, vk.CmdDrawIndirectCountKHR, commands, indirectBuffer->GetHandle(),
+                                                    static_cast<VkDeviceSize>(cmd->indirectOffset),
+                                                    countBuffer->GetHandle(),
+                                                    static_cast<VkDeviceSize>(cmd->drawCountOffset),
+@@ -1896,11 +2024,11 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+ 
+                 DAWN_TRY(state.SyncAndRun([&](const VulkanFunctions& vk, VkCommandBuffer commands) {
+                     if (countBuffer == nullptr) {
+-                        vk.CmdDrawIndexedIndirect(commands, indirectBuffer->GetHandle(),
++                        PRIME_DAWN_VK_CALL(Draw, vk.CmdDrawIndexedIndirect, commands, indirectBuffer->GetHandle(),
+                                                   static_cast<VkDeviceSize>(cmd->indirectOffset),
+                                                   cmd->maxDrawCount, kDrawIndexedIndirectSize);
+                     } else {
+-                        vk.CmdDrawIndexedIndirectCountKHR(
++                        PRIME_DAWN_VK_CALL(Draw, vk.CmdDrawIndexedIndirectCountKHR,
+                             commands, indirectBuffer->GetHandle(),
+                             static_cast<VkDeviceSize>(cmd->indirectOffset),
+                             countBuffer->GetHandle(),
+diff --git a/src/dawn/native/vulkan/CommandRecordingContextVk.cpp b/src/dawn/native/vulkan/CommandRecordingContextVk.cpp
+index 33b9ebeea8..be7bbd855f 100644
+--- a/src/dawn/native/vulkan/CommandRecordingContextVk.cpp
++++ b/src/dawn/native/vulkan/CommandRecordingContextVk.cpp
+@@ -26,6 +26,12 @@
+ // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ 
+ #include "src/dawn/native/vulkan/CommandRecordingContextVk.h"
++#ifdef __ORBIS__
++#include <prime_dawn_call_profile.h>
++#else
++#define PRIME_DAWN_VK_CALL(category, function, ...) function(__VA_ARGS__)
++#endif
++
+ 
+ #include "src/dawn/native/vulkan/DeviceVk.h"
+ #include "vulkan/vulkan_core.h"
+@@ -51,7 +57,7 @@ void CommandRecordingContext::EmitBufferBarrierIfNecessary(Device* device,
+     vkBarrier.srcAccessMask = barrier.srcAccessMask;
+     vkBarrier.dstAccessMask = barrier.dstAccessMask;
+ 
+-    device->fn.CmdPipelineBarrier(commandBuffer, barrier.srcStages, barrier.dstStages, 0, 1,
++    PRIME_DAWN_VK_CALL(Barrier, device->fn.CmdPipelineBarrier, commandBuffer, barrier.srcStages, barrier.dstStages, 0, 1,
+                                   &vkBarrier, 0, nullptr, 0, nullptr);
+ }
+ 
 diff --git a/src/dawn/native/vulkan/QueueVk.cpp b/src/dawn/native/vulkan/QueueVk.cpp
-index 9c48d23a1f..72f2c6c50e 100644
+index 9c48d23a1f..8adbd70020 100644
 --- a/src/dawn/native/vulkan/QueueVk.cpp
 +++ b/src/dawn/native/vulkan/QueueVk.cpp
 @@ -26,6 +26,9 @@
@@ -586,13 +707,14 @@ index 9c48d23a1f..72f2c6c50e 100644
  
  #include <limits>
  #include <optional>
-@@ -103,9 +106,14 @@ MaybeError Queue::Initialize() {
+@@ -103,9 +106,15 @@ MaybeError Queue::Initialize() {
  MaybeError Queue::SubmitImpl(Span<CommandBufferBase* const> commands) {
      TRACE_EVENT_BEGIN0(GetDevice()->GetPlatform(), Recording, "CommandBufferVk::RecordCommands");
      CommandRecordingContext* recordingContext = GetPendingRecordingContext();
 +    {
 +#ifdef __ORBIS__
 +    PrimeDawnScope profileRecording(0);
++    prime::dawn_call_profile::Batch profileCalls;
 +#endif
      for (CommandBufferBase* commandBuffer : commands) {
          DAWN_TRY(ToBackend(commandBuffer)->RecordCommands(recordingContext));
@@ -601,7 +723,7 @@ index 9c48d23a1f..72f2c6c50e 100644
      TRACE_EVENT_END0(GetDevice()->GetPlatform(), Recording, "CommandBufferVk::RecordCommands");
  
      DAWN_TRY(SubmitPendingCommandsImpl());
-@@ -298,6 +306,11 @@ MaybeError Queue::SubmitPendingCommandsImpl() {
+@@ -298,6 +307,11 @@ MaybeError Queue::SubmitPendingCommandsImpl() {
      if (!mRecordingContext.needsSubmit) {
          return {};
      }

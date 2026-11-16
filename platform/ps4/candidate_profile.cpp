@@ -134,6 +134,19 @@ void apply_candidate_environment(const CandidateProfile& p) {
             throw std::runtime_error("Benchmark configuration accepts command_storage_reuse=0 or 1 only");
         setenv("AURORA_COMMAND_STORAGE_REUSE",row.back()=='1'?"1":"0",1);
     }
+    // Versioned optional diagnostics: older packages ignore this file. Never
+    // put new options in benchmark.cfg, whose old parser is intentionally strict.
+    const auto diagnostics=p.root/"benchmark-v2.cfg";
+    if(fs::exists(diagnostics)) {
+        if(fs::is_symlink(diagnostics) || !fs::is_regular_file(diagnostics) || fs::file_size(diagnostics)>128)
+            throw std::runtime_error("Invalid candidate diagnostic configuration");
+        std::ifstream config(diagnostics);std::string row,extra;
+        if(!std::getline(config,row) || std::getline(config,extra) || config.bad() ||
+           (row!="dawn_call_profile=0" && row!="dawn_call_profile=1"))
+            throw std::runtime_error("Diagnostic configuration accepts dawn_call_profile=0 or 1 only");
+        if(setenv("MP_DAWN_CALL_PROFILE",row.back()=='1'?"1":"0",1))
+            throw std::runtime_error("Could not apply Vulkan call profiling option");
+    }
     setenv("MP_PS4_CANDIDATE",p.key.c_str(),1);
     setenv("MP_PS4_LOG_ROOT",(p.root/"logs").c_str(),1);
     const auto log=p.root/"logs/frame-profile.jsonl";

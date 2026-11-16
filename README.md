@@ -10,7 +10,8 @@ roughly **80 MB**; you add your own game image separately.
 
 ## What's included
 
-- **1080p output and widescreen HUD**, with adjustable graphics and display settings.
+- **1920×1080 rendering in Auto mode and a widescreen HUD**, with adjustable
+  graphics and display settings.
 - **DualShock 4 controls and vibration**, with twin-stick aiming, original-style
   buttons and remapping.
 - **PlayStation button prompts** throughout the game.
@@ -24,16 +25,17 @@ roughly **80 MB**; you add your own game image separately.
 
 ![DualShock 4 quick guide: original-style buttons with twin-stick aim](docs/images/ps4-controls.svg)
 
-## Download — development build
+## Download — Release Candidate 1
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.43.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.44-RC1.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
-This build is still in development. The aim is a smooth 1080p60
-experience. Lighter views reach 60 FPS on the Slim; demanding views can still
-drop below that. Performance improvements and wider gameplay testing are
-continuing, so please include the room and what you were doing when reporting
-a problem.
+RC1 brings together the renderer, loading and reliability improvements, with
+less repeated draw setup and a lighter profiler. Earlier builds have been played
+on a PS4 Slim at around 55–60 FPS in the scenes tested. RC1 has passed the native
+build and host checks; its console test is next. A locked 60 FPS and a complete
+playthrough have not been verified. Please include the room and what you were
+doing when reporting a problem.
 
 ## Getting it running
 

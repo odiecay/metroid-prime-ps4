@@ -13,7 +13,7 @@ class DawnBarrierBatchTests(unittest.TestCase):
         end = source.index("    recordingContext->EmitBufferBarrierIfNecessary", start)
         output = ROOT / "build/dawn-barrier-batch-host"
         output.mkdir(exist_ok=True)
-        (output / "actual_barrier_batch.inc").write_text(source[start:end])
+        (output / "actual_barrier_batch.inc").write_text("#define PRIME_DAWN_VK_CALL(category, function, ...) function(__VA_ARGS__)\n"+source[start:end])
         program = output / "run"
         subprocess.run(["g++-14", "-std=c++20", "-O2", "-fsanitize=address,undefined",
                         "-I" + str(output), str(ROOT / "tests/dawn_barrier_batch.cpp"),

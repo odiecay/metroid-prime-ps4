@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <chrono>
+#include "prime_dawn_call_profile.h"
 #include <stdint.h>
 extern "C" void prime_ps4_dawn_duration(unsigned, uint64_t) __attribute__((weak));
 class PrimeDawnScope {

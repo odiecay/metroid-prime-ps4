@@ -82,6 +82,62 @@ def decoder_report(rows):
     return lines
 
 
+VULKAN_CALL_FAMILIES = (
+    ('draw', 'Vulkan draw calls', 'Draw / indexed / indirect'),
+    ('descriptor', 'Vulkan descriptor binds', 'Descriptor binds'),
+    ('pipeline', 'Vulkan pipeline binds', 'Pipeline binds'),
+    ('barrier', 'Vulkan pipeline barriers', 'Pipeline barriers'),
+)
+
+
+def vulkan_call_report(rows):
+    """Summarise only coherent sampled-wall bundles, never complete CPU/GPU cost."""
+    totals=defaultdict(int); rejected=0; configured=False; observed=False
+    for window in rows:
+        configured |= window.get('vulkan_call_sampling',{}).get('enabled',False)
+        counters=defaultdict(int)
+        for stage in window.get('stages',[]):
+            if stage.get('kind')==2 and stage.get('lane')=='render' and stage.get('stage','').startswith('Vulkan '):
+                counters[stage['stage']]+=stage.get('counter',0)
+        if not counters: continue
+        observed=True
+        submissions=counters['Vulkan call profiled submissions']
+        invalid=counters['Vulkan call invalid wall clocks']
+        checksum=submissions+invalid
+        valid=all(isinstance(v,int) and v>=0 for v in counters.values()) and submissions>0
+        valid &= not(window.get('dropped_events',0) or window.get('unknown_stages',0))
+        for prefix,call_name,_ in VULKAN_CALL_FAMILIES:
+            calls=counters[call_name]
+            samples=counters[f'Vulkan {prefix} wall samples']
+            duration=counters[f'Vulkan {prefix} observed sampled wall ns']
+            capped=counters[f'Vulkan {prefix} cap skipped samples']
+            valid &= samples+capped<=calls and (samples>0 or duration==0)
+            checksum+=calls+samples+duration+capped
+        valid &= (checksum & ((1<<64)-1))==counters['Vulkan call observation checksum']
+        if not valid: rejected+=1;continue
+        for name,value in counters.items(): totals[name]+=value
+    if not observed and not configured: return []
+    lines=['','Vulkan driver calls (observed sampled CPU-side wall):']
+    if totals['Vulkan call profiled submissions']:
+        lines+=['| Call family | Calls | Valid samples | Cap-skipped samples | Observed mean us |',
+                '|---|---:|---:|---:|---:|']
+        for prefix,call_name,label in VULKAN_CALL_FAMILIES:
+            samples=totals[f'Vulkan {prefix} wall samples']
+            mean=(f"{totals[f'Vulkan {prefix} observed sampled wall ns']/samples/1000:.3f}" if samples else 'unavailable')
+            lines.append(f"| {label} | {totals[call_name]} | {samples} | {totals[f'Vulkan {prefix} cap skipped samples']} | {mean} |")
+        if totals['Vulkan call invalid wall clocks']:
+            lines.append(f"Invalid wall-clock intervals excluded: {totals['Vulkan call invalid wall clocks']}.")
+    else:
+        lines.append('No complete valid call observations; no call timing is available.')
+    if rejected:
+        lines.append(f'Excluded {rejected} incomplete/damaged counter windows; separate events can straddle polls.')
+    lines.append('Sampling rotates through one of every64 calls and is capped at64 attempts per category/submission. '
+                 'Cap-skipped counts expose possible early-region bias above4096 calls. '
+                 'These are observed sample means, not complete category cost, whole-thread CPU time, GPU time or frame percentiles. '
+                 'Scheduling and clock resolution remain part of each wall interval; no missing timings are extrapolated.')
+    return lines
+
+
 DRAW_PREP_STAGES = (
     ('vertex index', 'Vertex/index preparation'),
     ('arrays', 'Resident arrays and uploads'),
@@ -203,6 +259,7 @@ def report(rows):
         work=sum(v.get('unattributed_ns',0) for v in values)
         if work: background.append(f"{lane}: {name} = {work/1e6:.3f} ms")
     if counters: lines+=['','Observed counters:']+['- '+x for x in counters]
+    lines+=vulkan_call_report(rows)
     lines+=decoder_report(rows)
     lines+=draw_prep_report(rows)
     if background: lines+=['','Work without a main/render frame ID (not a per-frame cost):']+['- '+x for x in background]
