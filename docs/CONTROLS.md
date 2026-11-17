@@ -73,6 +73,11 @@ hold.
 These map controls apply to both layouts. Custom map bindings take precedence;
 the on-screen prompts follow them.
 
+## Port settings
+
+The port-settings menu is included, but has not been fully tested. Hold the
+touchpad button for about 0.8 seconds to open or close it.
+
 ## Adjusting the feel
 
 The port settings include aim sensitivity, camera inversion and stick/trigger

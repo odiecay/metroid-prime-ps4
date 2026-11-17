@@ -25,11 +25,8 @@ No Python installation is needed. If that output folder already exists, GamePrep
 keeps it and creates `ProjectPrimeData-2` (or the next available number). The
 window shows progress and the finished file's location.
 
-RVZ is a lossless compressed disc format used by Dolphin, which recommends it
-for compressed dumps. The PS4 port reads a raw ISO, so RVZ needs conversion
-first. Renaming an RVZ to `.iso` does not convert it.
-[Dolphin's format notes](https://dolphin-emu.org/docs/faq/#what-dump-formats-are-supported-by-dolphin)
-explain the difference.
+RVZ is a lossless compressed disc format. The PS4 port reads a raw ISO, so RVZ
+needs conversion first. Renaming an RVZ to `.iso` does not convert it.
 
 A ZIP must contain one supported ISO, GCM or RVZ. GamePrep preserves the input
 and writes into a fresh output folder. It also produces an import receipt with

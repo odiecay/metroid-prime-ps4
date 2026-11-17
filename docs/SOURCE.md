@@ -20,8 +20,7 @@ projects behind that work. Those acknowledgements and licence boundaries are
 preserved in [the upstream notices](../LICENSES/port-notice.txt).
 
 The canonical project identities are
-[PrimeDecomp/prime](https://github.com/PrimeDecomp/prime) and
-[Odrannnn/MetroidPrimePort](https://github.com/Odrannnn/MetroidPrimePort).
+`PrimeDecomp/prime` and `Odrannnn/MetroidPrimePort`.
 Those repository URLs were unavailable when checked for this documentation.
 The pinned native-port revision
 `c872da704adde9a7838492aaa56dac73a32053e4` is available through the
@@ -55,8 +54,7 @@ that the reconstructed source still matches those inputs.
 ## Which build this source describes
 
 Current source matches the frozen native 1.0 package (`MPRM00001`, Native99) inputs, with portable
-build-path adaptations recorded separately. The `v0.1.0-rc1` tag preserves the
-previous `00.44` source. The game source is pinned to `c872da704adde9a7838492aaa56dac73a32053e4`.
+build-path adaptations recorded separately. Development commits remain in the repository history. The game source is pinned to `c872da704adde9a7838492aaa56dac73a32053e4`.
 [SOURCE-RECEIPT.json](../SOURCE-RECEIPT.json) identifies the frozen game-package
 inputs and separately records PC helper and portable build-path adaptations.
 The documentation may explain earlier hardware captures or be revised after

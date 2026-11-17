@@ -389,24 +389,6 @@
       "source": "Actual user PS4 Slim capture",
       "pixels_unchanged": true
     },
-    "docs/images/screenshots/phendrana-shorelines-wide.jpg": {
-      "sha256": "35085fc0c936141336e9a41f5630b3012cacdfee873f608da8c7680e444a4cdb",
-      "dimensions": [
-        1920,
-        1080
-      ],
-      "source": "Actual user PS4 Slim capture",
-      "pixels_unchanged": true
-    },
-    "docs/images/screenshots/chozo-courtyard.jpg": {
-      "sha256": "df0ca6432be64e4c77bff7a1cf54f42828d1e1fca20459df09cc7012c50a1d3c",
-      "dimensions": [
-        1920,
-        1080
-      ],
-      "source": "Actual user PS4 Slim capture",
-      "pixels_unchanged": true
-    },
     "docs/images/screenshots/magmoor-lava-channel.jpg": {
       "sha256": "2cff4a842b3508ab845b3ca786c9f837975462b0b3e4fa4eb382252161a85379",
       "dimensions": [
@@ -423,6 +405,24 @@
         1080
       ],
       "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/inventory.jpg": {
+      "sha256": "8e8828149e0331a50351586215f283fa620b90232b84eba1b7df62181606beb3",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 capture; earlier development installation",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/port-settings.jpg": {
+      "sha256": "3c59d554b2a51eafee0bbc99af9ad69b1183f052bd935cf51c078b217605a4c7",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 capture; earlier development installation",
       "pixels_unchanged": true
     }
   }
