@@ -17,6 +17,7 @@ class BenchmarkTourTests(unittest.TestCase):
         cmd=[os.environ.get('CXX','/usr/lib/llvm-19/bin/clang++'),'-std=c++20','-O2',
              '-DPRIME_BENCHMARK_TEST','-Wall','-Wextra','-Werror',
              '-I'+str(ROOT/'platform/ps4'),str(ROOT/'tests/benchmark_tour.cpp'),
+             '-I'+str(ROOT/'game/MetroidPrimePort/extern/aurora/include'),
              str(ROOT/'platform/ps4/benchmark_tour.cpp'),'-o',str(cls.exe)]
         cls.sanitized=os.environ.get('PRIME_BENCHMARK_SANITIZE')=='1'
         if cls.sanitized:
@@ -66,21 +67,48 @@ class BenchmarkTourTests(unittest.TestCase):
     def test_full_queue_aborts(self):
         rows,_=self.run_mode('queue_failure');self.assertEqual(rows[-1]['event'],'aborted')
         self.assertFalse(any(r['event']=='complete' for r in rows))
+    def test_shader_gate_drains_queued_background_and_installing_work(self):
+        rows,_=self.run_mode('shader_busy')
+        begins=[r for r in rows if r['event']=='measure_begin']
+        self.assertEqual(len(begins),48)
+        self.assertGreaterEqual(begins[0]['monotonic_ns'],11_000_000_000)
+        for row in begins:
+            self.assertTrue(row['shader_gate_required'])
+            self.assertGreaterEqual(row['shader_stable_frames'],8)
+            self.assertEqual(row['shader_completed'],6)
+            self.assertTrue(all(row[k]==0 for k in ('shaders_queued','shaders_background','shaders_active','shaders_pending','shader_drop_pending','shader_failures','shader_prefetch_queued','shader_prefetch_active')))
+    def test_compile_during_measure_cancels_and_retries_without_pooling(self):
+        rows,_=self.run_mode('shader_retry')
+        failed=[r for r in rows if r['event']=='measure_end' and r['status']=='pipeline_compile_during_measure']
+        self.assertEqual(len(failed),1);self.assertEqual(failed[0]['measure_attempt'],0)
+        success=next(r for r in rows if r['event']=='measure_end' and r['visit']==1 and r['view']==0 and r['status']=='ok')
+        self.assertEqual(success['measure_attempt'],1)
+        self.assertEqual(rows[-1]['event'],'complete')
+    def test_unstable_failed_or_timed_out_shaders_never_report_complete(self):
+        for mode,status in (('shader_unstable','shader_unstable'),('shader_failure','shader_compile_failed'),('shader_timeout','shader_timeout')):
+            with self.subTest(mode=mode):
+                rows,_=self.run_mode(mode)
+                self.assertEqual(rows[-1]['event'],'incomplete')
+                self.assertTrue(any(r['status']==status for r in rows))
+                self.assertFalse(any(r['event']=='complete' for r in rows))
     def test_v2_prefers_separate_optin_and_requires_observed_actions(self):
         rows,_=self.run_mode('play_complete')
         ends=[r for r in rows if r['event']=='measure_end']
-        self.assertEqual(len(ends),48);self.assertEqual(rows[-1]['event'],'complete')
+        self.assertEqual(len(ends),24);self.assertEqual(rows[-1]['event'],'complete')
         self.assertTrue(all(r['tour_version']==2 and r['dawn_call_profile'] for r in rows))
         self.assertTrue(all(r['movement_distance_m']>=1 for r in ends))
         self.assertTrue(all(r['aim_degrees']>=5 for r in ends if r['view']==0))
         self.assertTrue(all(r['power_projectiles']>0 and r['airborne_frames']>0 for r in ends if r['view']==1))
         self.assertTrue(all(r['missile_projectiles']>0 for r in ends if r['view']==2))
         self.assertTrue(all(r['bomb_objects']>0 and r['morphed_frames']>=30 for r in ends if r['view']==3))
+        self.assertEqual(sum(r['event']=='rehearse_begin' for r in rows),24)
+        self.assertEqual(sum(r['event']=='rehearse_end' for r in rows),24)
+        self.assertTrue(all(r['pass']==1 for r in ends))
     def test_v2_queued_inputs_cannot_substitute_for_observed_actions(self):
         rows,_=self.run_mode('play_no_actions')
         self.assertEqual(rows[-1]['event'],'incomplete')
         self.assertFalse(any(r['event']=='complete' for r in rows))
-        self.assertTrue(any(r['status']=='insufficient_action' for r in rows))
+        self.assertTrue(any(r['status']=='prewarm_insufficient_action' for r in rows))
     def test_v2_no_safe_terrain_never_reaches_measurement(self):
         rows,_=self.run_mode('play_bad_pose')
         self.assertEqual(rows[-1]['event'],'incomplete')
@@ -88,7 +116,8 @@ class BenchmarkTourTests(unittest.TestCase):
     def test_v2_guard_failure_invalidates_phase(self):
         rows,_=self.run_mode('play_guard')
         self.assertEqual(rows[-1]['event'],'incomplete')
-        self.assertTrue(any(r['event']=='measure_end' and r['status']=='route_guard' for r in rows))
+        self.assertTrue(any(r['event']=='scene_error' and r['status']=='route_guard' for r in rows))
+        self.assertFalse(any(r['event']=='measure_begin' for r in rows))
     def test_v2_invalid_marker_cannot_modify_paths(self):self.assertEqual(self.run_mode('play_invalid')[0],[])
     def test_failed_marker_write_stops_without_acceptance(self):
         rows,err=self.run_mode('log_failure')

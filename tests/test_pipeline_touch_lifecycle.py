@@ -56,6 +56,7 @@ std::vector<int> g_pipelineQueue,g_backgroundPipelineQueue,g_pipelineUseQueue,g_
 std::vector<std::thread> g_pipelineThreads;
 std::condition_variable g_pipelineQueueCv,g_pipelineReadyCv;
 bool g_hasPipelineThread=false,g_pipelineCacheBroken=false;unsigned g_pipelinesPerFrame=0;
+uint32_t g_activePipelineBuilds=0,g_activePipelinePrefetches=0;
 unsigned queuedPipelines=0,createdPipelines=0,useCalls=0,promotions=0;
 enum class PipelinePriority {Normal};
 void touch_pending_pipeline(PipelineRef,PipelinePriority){++promotions;}

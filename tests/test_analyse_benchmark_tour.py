@@ -179,6 +179,27 @@ class BenchmarkTourAnalysisTests(unittest.TestCase):
         self.assertIn('never pooled frame percentiles', m.report(result))
         self.assertNotIn('locked', m.report(result))
 
+    def test_only_final_successful_shader_attempt_contributes_windows(self):
+        rows=[marker('start',0),marker('measure_begin',1),
+              marker('measure_end',13,status='pipeline_compile_during_measure',observed_frames=0),
+              marker('measure_begin',21,measure_attempt=1),marker('measure_end',33,measure_attempt=1),marker('complete',34)]
+        result=m.analyse([window(5,10,duration=80),window(25,30,duration=16)],rows,1)
+        visit=result['runs'][0]['visits'][0]
+        self.assertEqual(visit['status'],'accepted')
+        self.assertEqual(visit['main']['mean_ms'],16)
+        self.assertEqual(visit['views'][0]['attempt'],1)
+        self.assertEqual(len(visit['views'][0]['discarded_attempts']),1)
+        self.assertEqual(result['counts']['selected_windows'],1)
+
+    def test_shader_gate_metadata_must_prove_empty_stable_and_unchanged(self):
+        gate=dict(shader_gate_required=True,shaders_queued=0,shaders_background=0,shaders_active=0,shader_prefetch_queued=0,shader_prefetch_active=0,
+                  shaders_pending=0,shader_drop_pending=0,shader_failures=0,shader_epoch=1,shader_completed=15,shader_stable_frames=8)
+        for change in ({},{'shaders_active':1},{'shaders_background':1},{'shader_prefetch_queued':1},{'shader_prefetch_active':1},{'shader_completed':16},{'shader_epoch':2}):
+            rows=[marker('start',0),marker('measure_begin',1,**gate),
+                  marker('measure_end',13,**(gate|change)),marker('complete',14)]
+            result=m.analyse([window(5,10)],rows,1)
+            self.assertEqual(result['counts']['accepted_visits'],int(not change))
+
     def test_waiting_and_queue_aborted_visits_are_visible_without_measurements(self):
         rows = [marker('start', 0), marker('wait_ready', 0),
                 marker('scene_error', 120, status='timeout'),

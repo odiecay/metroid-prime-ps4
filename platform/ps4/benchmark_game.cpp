@@ -28,7 +28,7 @@ namespace prime {
 namespace {
 using namespace benchmark_play;
 struct Adapter {
-    unsigned visit{},view{},unmorphTicks{};bool prepared{},measuring{},controls{},toEnd=true;
+    unsigned visit{},view{},unmorphTicks{};bool prepared{},measuring{},controls{},placing{},toEnd=true;
     Route route;std::bitset<65536> seen;
 } adapter;
 Point point(const CVector3f& p){return {p.GetX(),p.GetY(),p.GetZ()};}
@@ -132,14 +132,13 @@ void drive(CStateManager& mgr,const BenchmarkPlayControl& control) {
     if(action.morph)pad.button|=PAD_BUTTON_X;
     if(action.lock){pad.button|=PAD_TRIGGER_L;pad.triggerLeft=255;}
     if(action.move) {
-        const float along=(pos.x-adapter.route.start.x)*adapter.route.dx+(pos.y-adapter.route.start.y)*adapter.route.dy;
-        if(along>=3.f)adapter.toEnd=false;else if(along<=1.f)adapter.toEnd=true;
-        const float sign=adapter.toEnd?1.f:-1.f;
-        const CVector3f goal(adapter.route.dx*sign,adapter.route.dy*sign,0);
-        const auto forward=player.GetTransform().GetForward(),right=player.GetTransform().GetRight();
-        const float travel=morphed?64.f:127.f;
-        pad.stickX=static_cast<s8>(std::clamp(CVector3f::Dot(goal,right)*travel,-127.f,127.f));
-        pad.stickY=static_cast<s8>(std::clamp(CVector3f::Dot(goal,forward)*travel,-127.f,127.f));
+        const Point goal=patrol(adapter.route,pos,point(player.GetVelocityWR()),adapter.toEnd);
+        // Direct aim strafes in the body frame even with retail movement physics.
+        // Morph Ball instead uses its camera-derived, interpolated control frame
+        // (CMorphBall::ComputeMarioMovement), never the rolling body's transform.
+        const auto forward=morphed?player.PortControlDirFlat():player.GetTransform().GetForward();
+        const auto sticks=stick_for_world(goal,point(forward),morphed?.55f:1.f);
+        pad.stickX=static_cast<s8>(sticks.x);pad.stickY=static_cast<s8>(sticks.y);
     }
     PADSetVirtualStatus(0,&pad);
 }
@@ -151,13 +150,16 @@ void benchmark_game_tick(CStateManager& mgr) {
     const auto* player=mgr.GetPlayer();const bool play=benchmark_play_enabled();
     if(play&&!adapter.controls){
         // Fixed diagnostic input semantics, saved only in the isolated play-v2 user folder.
-        PortDebug::SetTwinStick(true);PortDebug::SetFlickStick(false);adapter.controls=true;
+        PortDebug::SetTwinStick(true);PortDebug::SetFlickStick(false);
+        // Both direct-aim presets strafe; preserve the original movement/jump
+        // force laws for this benchmark instead of switching to Remastered.
+        PortDebug::SetRemasteredMovement(false);adapter.controls=true;
     }
     bool ready=area&&area->IsPostConstructed()&&!mgr.GetWantsToQuit()&&mgr.GetGameState()==CStateManager::kGS_Running&&
         player&&!mgr.GetCameraManager()->IsInCinematicCamera()&&player->GetCameraState()!=CPlayer::kCS_Spawned;
     if(!play)ready=ready&&!player->GetDisableInput()&&mgr.GetCameraManager()->IsInFPCamera();
     auto before=benchmark_play_control();
-    if(play&&before.measuring) {
+    if(play&&(before.measuring||before.rehearsing)) {
         aurora::trace::Scope observer("benchmark gameplay observation",aurora::trace::Main);
         benchmark_play_observe(observe(mgr,false));
     }
@@ -166,9 +168,11 @@ void benchmark_game_tick(CStateManager& mgr) {
     if(!play)return;
     auto control=benchmark_play_control();
     if(!control.active){PADClearVirtualStatus(0);return;}
+    const bool newPlacement=control.placing&&!adapter.placing;
+    adapter.placing=control.placing;
     if(control.placing&&ready) {
         neutral();
-        if(adapter.visit!=control.visit||adapter.view!=control.view){
+        if(newPlacement||adapter.visit!=control.visit||adapter.view!=control.view){
             adapter.visit=control.visit;adapter.view=control.view;adapter.prepared=false;adapter.unmorphTicks=0;
         }
         if(player->GetMorphballTransitionState()!=CPlayer::kMS_Unmorphed) {
@@ -183,7 +187,7 @@ void benchmark_game_tick(CStateManager& mgr) {
             std::atan2(-adapter.route.dx,adapter.route.dy));
         return;
     }
-    if(control.measuring&&ready&&adapter.prepared) {
+    if((control.measuring||control.rehearsing)&&ready&&adapter.prepared) {
         if(!adapter.measuring){adapter.measuring=true;adapter.seen.reset();observe(mgr,true);}
         drive(mgr,control);
         if(!benchmark_play_enabled())PADClearVirtualStatus(0);

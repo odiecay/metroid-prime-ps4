@@ -17,9 +17,9 @@ class MenuConsoleModelTests(unittest.TestCase):
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         mesh=module.build_mesh();data,bounds=module.encode(mesh)
         self.assertEqual(module.header(data),(ROOT/'platform/ps4/menu_console_model_data.hpp').read_text())
-        self.assertEqual(len(data),85920)
-        self.assertEqual(sum(map(len,mesh.triangles))//3,1164)
-        self.assertEqual(len(mesh.vertices),2302)
+        self.assertEqual(len(data),377408)
+        self.assertEqual(sum(map(len,mesh.triangles))//3,6908)
+        self.assertEqual(len(mesh.vertices),9019)
         self.assertLess(max(abs(x)for x in bounds),1.6)
         self.assertTrue(all(vertex[2][3]==255 for vertex in mesh.vertices))
         for position,normal,colour in mesh.vertices:
@@ -30,6 +30,34 @@ class MenuConsoleModelTests(unittest.TestCase):
                 a,b,c=(mesh.vertices[indices[offset+i]]for i in range(3))
                 normal=module.normal(a[0],b[0],c[0])
                 self.assertGreater(sum(normal[i]*a[1][i]for i in range(3)),.99999)
+
+    def test_authentic_marks_face_outward_and_preserve_outline_holes(self):
+        spec=importlib.util.spec_from_file_location('menu_mesh',ROOT/'tools/generate_menu_console.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        mesh=module.build_mesh()
+        sony=(117,121,130,255);ps4=(10,13,18,255);ps=(143,150,161,255)
+        for colour in (sony,ps4,ps):
+            vertices=[v for v in mesh.vertices if v[2]==colour]
+            self.assertGreater(len(vertices),100)
+            for position,normal,c in vertices:
+                self.assertGreater(normal[2] if colour==ps else -normal[1],.85)
+        def covered(colour,point):
+            for indices in mesh.triangles:
+                for offset in range(0,len(indices),3):
+                    vertices=[mesh.vertices[indices[offset+i]]for i in range(3)]
+                    if vertices[0][2]!=colour:continue
+                    a,b,c=[(v[0][0],v[0][2])for v in vertices]
+                    def cross(a,b,p):return(b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0])
+                    signs=[cross(a,b,point),cross(b,c,point),cross(c,a,point)]
+                    if min(signs)>=-1e-14 or max(signs)<=1e-14:return True
+            return False
+        def sony_point(x,y):return(-1.255+(x-.00015754749)*.235/(1280-.00015754749),.195-y*.235/(1280-.00015754749))
+        def ps4_point(x,y):return(.855+(x-180.798)*.350/(482.265-180.798),.193-(y-24.062)*.350/(482.265-180.798))
+        # The authentic Sony O and PS4 numeral 4 must have genuine open counters.
+        self.assertFalse(covered(sony,sony_point(456,112)))
+        self.assertTrue(covered(sony,sony_point(335,112)))
+        self.assertFalse(covered(ps4,ps4_point(440,62)))
+        self.assertTrue(covered(ps4,ps4_point(430,78)))
 
     @unittest.skipUnless((HOST/'compile_commands.json').exists(),'populated host game build required')
     def test_actual_model_load_surface_fetches_and_lifetime(self):

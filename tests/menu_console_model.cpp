@@ -35,13 +35,13 @@ int main(){
       CHECK(n%3==0 && surface.GetDisplayListSize()>=3+n*6);
       for(unsigned i=0;i<n;++i){
         auto v=dl+3+i*6;unsigned p=(unsigned(v[0])<<8)|v[1];
-        CHECK(p<2302 && v[0]==v[2]&&v[1]==v[3]&&v[0]==v[4]&&v[1]==v[5]);
+        CHECK(p<9019 && v[0]==v[2]&&v[1]==v[3]&&v[0]==v[4]&&v[1]==v[5]);
       }
       indices+=n;++count;surface=surface.GetNextSurface();
     }
-    CHECK(count==2&&indices==1164*3);
+    CHECK(count==2&&indices==6908*3);
     CHECK(!model->GetCubeModel()->GetAlphaSurfaces().IsValid());
-    CHECK(std::fabs(model->GetBoundingBox().GetMinPoint().GetX()+1.383f)<1e-6f);
+    CHECK(std::fabs(model->GetBoundingBox().GetMinPoint().GetX()+1.375f)<1e-6f);
     CHECK(std::fabs(model->GetBoundingBox().GetMaxPoint().GetZ()-.268f)<1e-6f);
     CHECK(CModel::GetTotalMemory()>initial);
     // Exercise the actual geometry/material-vertex decode into the real GX FIFO.
@@ -61,5 +61,5 @@ int main(){
     CHECK(CModel::GetTotalMemory()==initial);
   }
   CHECK(store.requests==0);
-  std::printf("Actual CModel loader:100 create/load/surface-walk/destroy cycles; actual DrawFlat geometry recorded;1164 triangles,2 materials,0 texture requests; deferred deletion flushed; memory returns to baseline.\n");
+  std::printf("Actual CModel loader:100 create/load/surface-walk/destroy cycles; actual DrawFlat geometry recorded;6908 triangles,2 materials,0 texture requests; deferred deletion flushed; memory returns to baseline.\n");
 }

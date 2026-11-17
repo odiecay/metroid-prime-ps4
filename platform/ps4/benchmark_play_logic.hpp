@@ -56,6 +56,35 @@ inline bool inside_route(const Route& r,Point p) {
     const float z=r.start.z+(r.end.z-r.start.z)*std::clamp(along/r.length,0.f,1.f);
     return along>=-.65f&&along<=5.6f&&std::fabs(side)<=.65f&&p.z>=z-.65f&&p.z<=z+4.5f;
 }
+// Closed-loop patrol: steer back to the validated centre line and anticipate
+// momentum at each turnaround. No collision queries or guard changes per frame.
+inline Point patrol(const Route& r,Point p,Point velocity,bool& toEnd) {
+    if(!finite(p)||!finite(velocity)||!(r.length>0))return {};
+    const float x=p.x-r.start.x,y=p.y-r.start.y;
+    const float along=x*r.dx+y*r.dy,side=-x*r.dy+y*r.dx;
+    const float va=velocity.x*r.dx+velocity.y*r.dy;
+    const float vs=-velocity.x*r.dy+velocity.y*r.dx;
+    const float predicted=along+.18f*va;
+    if(predicted>=3.f)toEnd=false;else if(predicted<=1.f)toEnd=true;
+    const float a=std::clamp(((toEnd?3.5f:.5f)-along)*1.6f-.22f*va,-1.f,1.f);
+    const float b=std::clamp(-3.f*side-.35f*vs,-1.f,1.f);
+    const float scale=std::max(1.f,std::hypot(a,b));
+    return {(a*r.dx-b*r.dy)/scale,(a*r.dy+b*r.dx)/scale,0};
+}
+// PADClamp subtracts 15 on each axis before octagonal clamping. Compensate
+// that deadzone before rounding, otherwise a shallow correction is erased.
+inline int pad_axis(float value) {
+    if(!std::isfinite(value)||std::fabs(value)<.001f)return 0;
+    return int(std::copysign(std::round(15.f+112.f*std::min(1.f,std::fabs(value))),value));
+}
+struct Stick { int x{},y{}; };
+inline Stick stick_for_world(Point desired,Point forward,float scale=1.f) {
+    const float length=std::hypot(forward.x,forward.y);
+    if(!finite(desired)||!finite(forward)||!(length>1e-5f)||!std::isfinite(scale))return {};
+    const float fx=forward.x/length,fy=forward.y/length;
+    return {pad_axis((desired.x*fy-desired.y*fx)*scale),
+            pad_axis((desired.x*fx+desired.y*fy)*scale)};
+}
 struct Input { bool fire{},missile{},jump{},morph{},lock{},move{}; };
 inline Input input(unsigned phase,unsigned tick,bool morphed,bool jumpSafe,bool enemyTarget) {
     Input out;out.move=true;

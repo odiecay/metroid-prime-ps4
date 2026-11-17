@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "benchmark_tour.hpp"
+#include <aurora/gfx.h>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -20,6 +21,8 @@ bool PortConsoleRun(std::string_view text) {
     return true;
 }
 extern "C" const char* prime_ps4_trace_session_id() noexcept { return "host-contract-session"; }
+static AuroraPipelineReadiness shaders=[] { AuroraPipelineReadiness out{};out.epoch=1;return out; }();
+extern "C" void aurora_get_pipeline_readiness(AuroraPipelineReadiness* out) { *out=shaders; }
 static std::string read(const fs::path& p) {
     std::ifstream input(p,std::ios::binary);
     return {std::istreambuf_iterator<char>(input),{}};
@@ -62,8 +65,22 @@ int main(int argc,char** argv) {
     uint64_t tick=0,ns=1000000000ull;bool interrupted=false;
     while(prime::benchmark_tour_enabled()&&tick<100000) {
         auto control=prime::benchmark_play_control();
+        if(mode=="shader_busy") {
+            shaders.queued=tick<450?3:0;shaders.background=tick<600?2:0;
+            shaders.prefetchQueued=tick<630?1:0;
+            shaders.prefetchActive=tick>=630&&tick<650?1:0;
+            shaders.active=tick>=600&&tick<620?1:0;
+            shaders.pending=shaders.queued+shaders.background+(shaders.active&&tick<610?1:0);
+            shaders.completed=tick>=620?6:0;
+        }
+        if(mode=="shader_failure")shaders.failures=1;
+        if(mode=="shader_timeout")shaders.active=1;
+        if(control.measuring&&control.inputTick==100&&
+           (mode=="shader_unstable"||(mode=="shader_retry"&&!interrupted))) {
+            ++shaders.completed;interrupted=true;
+        }
         if(control.placing)prime::benchmark_play_placement(mode!="play_bad_pose",0,0,0,4,20,true,100);
-        if(control.measuring) {
+        if(control.measuring || control.rehearsing) {
             prime::BenchmarkPlayObservation sample;sample.valid=true;
             if(mode!="play_no_actions") {
                 sample.x=control.inputTick*.01f;sample.yaw=std::sin(control.inputTick*.03f)*.15f;

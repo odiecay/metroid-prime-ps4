@@ -187,7 +187,8 @@ def analyse(frame_rows, marker_rows, expected_views=4):
                 visit['issues'].append('changed_visit_identity')
             if not isinstance(visit['scene'], str) or not visit['scene'] or not integer(visit['pass']) or visit['pass'] < 1:
                 visit['issues'].append('invalid_visit_metadata')
-            if event in FAIL_EVENTS or marker.get('status', 'ok') != 'ok':
+            retry_end = event == 'measure_end' and marker.get('status') == 'pipeline_compile_during_measure'
+            if event in FAIL_EVENTS or (marker.get('status', 'ok') != 'ok' and not retry_end):
                 status = marker.get('status')
                 visit['issues'].append('scene_error:' + str(status if status and status != 'ok' else event))
                 continue
@@ -196,19 +197,51 @@ def analyse(frame_rows, marker_rows, expected_views=4):
             if any(field in marker and marker[field] != marker.get(target)
                    for field, target in (('actual_world', 'world'), ('actual_mrea', 'mrea'))):
                 visit['issues'].append('observed_room_mismatch')
-            if event == 'measure_end' and 'observed_frames' in marker and not marker['observed_frames']:
+            if event == 'measure_end' and not retry_end and 'observed_frames' in marker and not marker['observed_frames']:
                 visit['issues'].append('no_observed_frames')
             view = marker.get('view')
             if not integer(view) or view >= expected_views:
                 visit['issues'].append('invalid_view')
                 continue
-            pair = visit['views'].setdefault(view, {})
+            attempt = marker.get('measure_attempt', 0)
+            if not integer(attempt) or attempt > 2:
+                visit['issues'].append('invalid_measure_attempt')
+                continue
+            pair = visit['views'].setdefault(view, {}).setdefault(attempt, {'attempt': attempt})
+            if retry_end:
+                pair['failed_status'] = marker['status']
+            if marker.get('shader_gate_required'):
+                pair['shader_gate_required'] = True
+                gate = {name: marker.get(name) for name in
+                        ('shaders_queued', 'shaders_background', 'shaders_active', 'shaders_pending', 'shader_prefetch_queued', 'shader_prefetch_active',
+                         'shader_drop_pending', 'shader_failures', 'shader_epoch', 'shader_completed', 'shader_stable_frames')}
+                pair['shader_begin' if event == 'measure_begin' else 'shader_end'] = gate
             endpoint = 'begin_ns' if event == 'measure_begin' else 'end_ns'
             if endpoint in pair:
                 visit['issues'].append('duplicate_' + event)
             pair[endpoint] = marker['monotonic_ns']
         for visit in run['visits'].values():
-            for view, pair in visit['views'].items():
+            for view, attempts in list(visit['views'].items()):
+                # Only the final attempt is eligible; never cherry-pick an old
+                # success or pool windows from a cancelled compilation interval.
+                last = max(attempts)
+                pair = attempts[last]
+                pair['discarded_attempts'] = [dict(attempt=number, begin_ns=old.get('begin_ns'),
+                    end_ns=old.get('end_ns'), status=old.get('failed_status', 'superseded'))
+                    for number, old in sorted(attempts.items()) if number != last]
+                visit['views'][view] = pair
+                if pair.get('failed_status'):
+                    visit['issues'].append('failed_final_attempt:' + pair['failed_status'])
+                if pair.get('shader_gate_required'):
+                    begin, end = pair.get('shader_begin', {}), pair.get('shader_end', {})
+                    zeros = ('shaders_queued', 'shaders_background', 'shaders_active', 'shaders_pending', 'shader_prefetch_queued', 'shader_prefetch_active',
+                             'shader_drop_pending', 'shader_failures')
+                    valid = all(integer(row.get(name)) and row[name] == 0 for row in (begin, end) for name in zeros)
+                    valid &= integer(begin.get('shader_stable_frames')) and begin.get('shader_stable_frames', 0) >= 8
+                    valid &= all(integer(begin.get(name)) and begin.get(name) == end.get(name)
+                                 for name in ('shader_epoch', 'shader_completed'))
+                    if not valid:
+                        visit['issues'].append('shader_gate_unverified')
                 if 'begin_ns' not in pair or 'end_ns' not in pair or pair.get('end_ns', 0) <= pair.get('begin_ns', 0):
                     visit['issues'].append('incomplete_measurement')
                     continue

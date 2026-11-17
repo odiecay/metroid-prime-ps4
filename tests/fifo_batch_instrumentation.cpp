@@ -7,6 +7,24 @@
 #include <cstdio>
 #include <map>
 #include <string>
+#include <vector>
+#include <thread>
+#include <chrono>
+#include <cstdlib>
+
+
+#ifdef PRIME_FIFO_RESERVE_TEST
+static std::atomic<bool> failReserve{false},holdDecoder{false},decoderEntered{false},releaseDecoder{false};
+static std::atomic<unsigned> reserveAttempts{0},growths{0};
+static bool wholeBatch=false;
+extern "C" void* __real_malloc(size_t);
+extern "C" void* __real_realloc(void*,size_t);
+extern "C" void* __wrap_malloc(size_t n) {
+  if(n==4*1024*1024) { ++reserveAttempts;if(failReserve.exchange(false))return nullptr; }
+  return __real_malloc(n);
+}
+extern "C" void* __wrap_realloc(void* p,size_t n) { ++growths;return __real_realloc(p,n); }
+#endif
 
 namespace aurora {
 AuroraConfig g_config{};
@@ -18,7 +36,19 @@ auto fmt::formatter<AuroraLogLevel>::format(AuroraLogLevel level, format_context
 namespace aurora::gx::fifo {
 // Controlled decoding boundary; thread, buffers, publication, completion,
 // profiling and frame reset all use the actual production FIFO worker.
-ProcessResult process(const uint8_t*, uint32_t bytes) noexcept { return {std::min(bytes, 3u), false}; }
+ProcessResult process(const uint8_t* data, uint32_t bytes) noexcept {
+#ifdef PRIME_FIFO_RESERVE_TEST
+  if(holdDecoder.exchange(false)) {
+    decoderEntered.store(true,std::memory_order_release);decoderEntered.notify_all();
+    releaseDecoder.wait(false,std::memory_order_acquire);
+    for(unsigned i=0;i<bytes;++i)assert(data[i]==0x5a);
+  }
+  if(wholeBatch)return {bytes,false};
+#else
+  (void)data;
+#endif
+  return {std::min(bytes,3u),false};
+}
 void clear_draw_cache() noexcept {}
 }
 
@@ -56,8 +86,49 @@ static std::map<std::string, uint64_t> RunFrame(uint64_t frame, uint64_t (*clock
   return counters;
 }
 
+#ifdef PRIME_FIFO_RESERVE_TEST
+static void ReserveChecks() {
+  namespace fifo=aurora::gx::fifo;
+  wholeBatch=true;
+  fifo::init();assert(fifo::detail::sBufferCapacity==4*1024*1024);
+  const auto* initial=fifo::get_buffer_data();const auto before=growths.load();
+  const std::vector<uint8_t> typical(2*1024*1024,0x5a);
+  for(unsigned frame=0;frame<33;++frame) {
+    fifo::begin_frame();fifo::write_data(typical.data(),typical.size());fifo::publish();fifo::drain();fifo::end_frame();
+    assert(fifo::get_buffer_data()==initial&&fifo::detail::sBufferCapacity==4*1024*1024);
+  }
+  assert(growths.load()==before);
+  // Typical append is nonblocking even while the real decoder owns its mutex.
+  fifo::begin_frame();const uint8_t first[8]={0x5a,0x5a,0x5a,0x5a,0x5a,0x5a,0x5a,0x5a};
+  fifo::write_data(first,sizeof(first));holdDecoder=true;releaseDecoder=false;decoderEntered=false;fifo::publish();
+  decoderEntered.wait(false,std::memory_order_acquire);
+  fifo::write_data(typical.data(),typical.size());assert(growths.load()==before);
+  // Oversize still uses existing grow ownership: it cannot realloc a buffer
+  // while that decoder holds a pointer into it.
+  const std::vector<uint8_t> oversize(5*1024*1024,0x5a);
+  std::atomic<bool> starting{false},finished{false};
+  std::thread writer{[&]{starting=true;starting.notify_all();fifo::write_data(oversize.data(),oversize.size());finished=true;}};
+  starting.wait(false);std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  assert(!finished.load());assert(growths.load()==before);
+  releaseDecoder.store(true,std::memory_order_release);releaseDecoder.notify_all();writer.join();
+  assert(finished.load()&&growths.load()==before+1);assert(fifo::detail::sBufferCapacity>=typical.size()+oversize.size()+sizeof(first));
+  fifo::drain();fifo::end_frame();fifo::shutdown();
+  // Fail only the bounded reserve, before a worker starts; preserve the prior
+  // 64KiB allocation and normal growth path when memory is constrained.
+  const auto attempts=reserveAttempts.load();failReserve=true;fifo::init();
+  assert(reserveAttempts.load()==attempts+1&&!failReserve.load());assert(fifo::detail::sBufferCapacity==64*1024);
+  const auto fallbackGrowth=growths.load();fifo::begin_frame();fifo::write_data(typical.data(),typical.size());
+  assert(growths.load()==fallbackGrowth+1);fifo::drain();fifo::end_frame();fifo::shutdown();wholeBatch=false;
+  std::puts("native4MiB FIFO reserve:33x2MiB frames no growth; busy-worker append no wait; oversize ownership held; allocation-failure64KiB fallback passed");
+}
+#endif
 int main() {
   namespace fifo = aurora::gx::fifo;
+#ifdef PRIME_FIFO_RESERVE_TEST
+  ReserveChecks();
+  for(unsigned thread=0;thread<aurora::trace::MaxThreads;++thread)
+    aurora::trace::drain(thread,[](const aurora::trace::Event&){});
+#endif
   fifo::init();
   const auto supported = RunFrame(1, AvailableClock);
   assert(supported.at("GX FIFO decoder CPU samples") == 3);

@@ -14,5 +14,7 @@ No game image, keys, saves, SDK binaries or promotional artwork are included.
 
 The original controller diagram in `docs/images/ps4-controls.svg` is CC0-1.0.
 
-The original PS4 menu console geometry and its generator retain their MIT
-terms; see their SPDX headers and `LICENSES/port-license.txt`.
+The authored PS4 case geometry and generator retain their MIT terms; see
+their SPDX headers and `LICENSES/port-license.txt`. The embedded Sony, PS and
+PS4 marks use the source-linked PD-textlogo vector outlines identified in
+`tools/generate_menu_console.py`.

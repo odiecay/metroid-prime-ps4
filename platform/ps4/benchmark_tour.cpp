@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "benchmark_tour.hpp"
+#include <aurora/gfx.h>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -33,9 +34,12 @@ constexpr std::array<Scene, 6> Scenes{{
     {"Research Lab Hydra",  0xA8BE6291, 0x43E4CC25},
     {"Main Quarry",         0xB1AC4D65, 0x643D038F},
 }};
-enum class Phase { Waiting, ViewSettle, Measuring, Finished };
+enum class Phase { Waiting, ViewSettle, Rehearsing, ShaderWait, Measuring, Finished };
 struct State {
-    bool enabled{}, started{}, inventory{}, play{}, placementReady{}, jumpSafe{}, havePosition{};
+    bool enabled{}, started{}, inventory{}, play{}, placementReady{}, jumpSafe{}, havePosition{}, rehearsed{};
+    unsigned shaderRetries{}, shaderStableFrames{};
+    uint64_t lastShaderFrame{};
+    AuroraPipelineReadiness shaders{}, measuredShaders{};
     unsigned inputTick{}, power{}, charged{}, missiles{}, bombs{}, airFrames{}, morphFrames{}, lockFrames{}, guardStops{}, warps{};
     double distance{}, aimDegrees{}; float lastX{}, lastY{}, lastZ{}, lastYaw{}, routeYaw{}, routeLength{}, openness{};
     uint64_t setupNs{}, lastNs{}, lastTick{}, lastFrame{}; uint32_t lastWorld{}, lastArea{};
@@ -84,12 +88,24 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         "\"missile_projectiles\":%u,\"bomb_objects\":%u,\"airborne_frames\":%u,"
         "\"morphed_frames\":%u,\"enemy_lock_frames\":%u,\"guard_stops\":%u,"
         "\"unexpected_warps\":%u,\"route_length_m\":%.4f,\"openness_m\":%.4f,"
-        "\"jump_safe\":%s,\"setup_ns\":%llu,\"position\":[%.5f,%.5f,%.5f],\"route_yaw_degrees\":%.4f}\n",
+        "\"jump_safe\":%s,\"setup_ns\":%llu,\"position\":[%.5f,%.5f,%.5f],\"route_yaw_degrees\":%.4f",
         state.play ? "virtual_gamecube_pad" : "none", state.play ? 2u : 1u, state.play ? kinds[state.view < 4 ? state.view : 3] : "fixed_yaw",
         state.play ? "true" : "false", state.distance, state.aimDegrees, state.power, state.charged, state.missiles,
         state.bombs, state.airFrames, state.morphFrames, state.lockFrames, state.guardStops,
         state.warps, state.routeLength, state.openness, state.jumpSafe ? "true" : "false",
         static_cast<unsigned long long>(state.setupNs),state.lastX,state.lastY,state.lastZ,state.routeYaw*57.295779513);
+    std::fprintf(state.log, ",\"measure_attempt\":%u,\"shader_gate_required\":true,"
+        "\"shaders_queued\":%u,\"shaders_background\":%u,\"shaders_active\":%u,"
+        "\"shaders_pending\":%u,\"shader_drop_pending\":%u,\"shader_prefetch_queued\":%u,\"shader_prefetch_active\":%u,\"shader_epoch\":%llu,"
+        "\"shader_completed\":%llu,\"shader_failures\":%llu,\"shader_stable_frames\":%u,"
+        "\"steering\":\"%s\",\"movement_basis\":\"%s\","
+        "\"twin_stick\":%s,\"remastered_movement\":%s}\n",
+        state.shaderRetries,state.shaders.queued,state.shaders.background,state.shaders.active,state.shaders.pending,
+        state.shaders.dropPending,state.shaders.prefetchQueued,state.shaders.prefetchActive,static_cast<unsigned long long>(state.shaders.epoch),
+        static_cast<unsigned long long>(state.shaders.completed),static_cast<unsigned long long>(state.shaders.failures),
+        state.shaderStableFrames,state.play ? "closed_loop_route_v3" : "none",
+        state.play ? "body_direct_aim_or_ball_control_flat" : "none",
+        state.play ? "true" : "null",state.play ? "false" : "null");
     if (std::ferror(state.log) || std::fflush(state.log) != 0) {
         std::fprintf(stderr, "[benchmark-tour] marker write failed; stopped without acceptance (run %s)\n", state.runId.c_str());
         state.phase = Phase::Finished; ++state.errors;
@@ -118,9 +134,10 @@ void next_scene(uint64_t ns, uint64_t tick, uint64_t frame) {
     if (state.phase == Phase::Finished) return;
     if (++state.scene == Scenes.size()) {
         state.scene = 0;
-        if (++state.pass == Passes) {
+        const unsigned passes = state.play ? 1u : Passes;
+        if (++state.pass == passes) {
             // Keep the final marker's visit/scene identity within the actual tour.
-            state.pass = Passes - 1; state.scene = Scenes.size() - 1;
+            state.pass = passes - 1; state.scene = Scenes.size() - 1;
             finish(ns, tick, frame); return;
         }
     }
@@ -153,12 +170,33 @@ bool grant_inventory() {
     }
     return true;
 }
-bool begin_view(uint64_t ns, uint64_t tick, uint64_t frame) {
-    char command[32]; std::snprintf(command, sizeof(command), "face %u", state.view * 90);
-    if (!state.play && !queue(command)) return false;
-    state.placementReady = !state.play; state.havePosition = false; state.inputTick = 0;
+void reset_actions(uint64_t frame) {
+    state.havePosition = false; state.inputTick = 0; state.frames = 0; state.lastMeasuredFrame = frame;
     state.power = state.charged = state.missiles = state.bombs = state.airFrames = state.morphFrames = 0;
     state.lockFrames = state.guardStops = state.warps = 0; state.distance = 0; state.aimDegrees = 0;
+}
+bool action_complete() {
+    const bool moved = state.distance >= (state.view == 0 ? 2.0 : 1.0);
+    const bool action = state.view == 0 ? state.aimDegrees >= 5 : (state.view == 1 ? state.power > 0 && (!state.jumpSafe || state.airFrames > 0) :
+        state.view == 2 ? state.missiles > 0 : state.morphFrames >= 30 && state.bombs > 0);
+    return moved && action && !state.warps;
+}
+bool shaders_idle(const AuroraPipelineReadiness& s) {
+    return !s.queued && !s.background && !s.active && !s.pending && !s.dropPending && !s.failures &&
+        !s.prefetchQueued && !s.prefetchActive;
+}
+void shader_wait(uint64_t ns,uint64_t tick,uint64_t frame) {
+    state.phase = Phase::ShaderWait; state.deadline = ns + RoomTimeoutNs;
+    state.shaderStableFrames = 0; state.lastShaderFrame = 0;
+    aurora_get_pipeline_readiness(&state.shaders);
+    marker("shader_wait_begin","ok",ns,tick,frame);
+}
+bool begin_view(uint64_t ns, uint64_t tick, uint64_t frame, bool retry = false) {
+    char command[32]; std::snprintf(command, sizeof(command), "face %u", state.view * 90);
+    if (!state.play && !queue(command)) return false;
+    state.placementReady = !state.play; state.rehearsed = false;
+    if (!retry) state.shaderRetries = 0;
+    reset_actions(frame);
     state.phase = Phase::ViewSettle; state.settled = 0; state.deadline = ns + RoomTimeoutNs;
     return marker("warm_begin", "ok", ns, tick, frame);
 }
@@ -173,21 +211,50 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
     const auto& scene = Scenes[state.scene];
     const bool here = world == scene.world && area == scene.area;
     if (state.phase != Phase::Measuring && ns >= state.deadline) {
-        scene_error("timeout", ns, tick, frame, world, area); return;
+        scene_error(state.phase == Phase::ShaderWait ? "shader_timeout" : "timeout", ns, tick, frame, world, area); return;
+    }
+    if (state.phase == Phase::Rehearsing) {
+        if (!ready || !here) { scene_error("lost_ready",ns,tick,frame,world,area); return; }
+        ++state.inputTick;
+        if (ns - state.phaseStart < MeasureNs) return;
+        if (!action_complete()) { scene_error("prewarm_insufficient_action",ns,tick,frame,world,area); return; }
+        if (!marker("rehearse_end","ok",ns,tick,frame,world,area)) return;
+        // Start the measured action sequence from the same validated pose.
+        state.rehearsed = true; state.placementReady = false; state.phase = Phase::ViewSettle;
+        state.settled = 0; state.deadline = ns + RoomTimeoutNs; reset_actions(frame);
+        return;
+    }
+    if (state.phase == Phase::ShaderWait) {
+        if (!ready || !here) { scene_error("lost_ready",ns,tick,frame,world,area); return; }
+        AuroraPipelineReadiness current{}; aurora_get_pipeline_readiness(&current);
+        const bool unchanged = current.epoch == state.shaders.epoch && current.completed == state.shaders.completed;
+        state.shaders = current;
+        if (current.failures) { scene_error("shader_compile_failed",ns,tick,frame,world,area); return; }
+        if (!shaders_idle(current) || !unchanged) state.shaderStableFrames = 0;
+        else if (frame != state.lastShaderFrame) ++state.shaderStableFrames;
+        state.lastShaderFrame = frame;
+        if (state.shaderStableFrames < 8) return;
+        if (!marker("shaders_ready","ok",ns,tick,frame,world,area)) return;
+        state.phase = Phase::Measuring; state.phaseStart = ns; reset_actions(frame);
+        state.measuredShaders = current;
+        marker("measure_begin","ok",ns,tick,frame,world,area); return;
     }
     if (state.phase == Phase::Measuring) {
         if (!ready || !here) { scene_error("lost_ready", ns, tick, frame, world, area); return; }
+        aurora_get_pipeline_readiness(&state.shaders);
+        if (!shaders_idle(state.shaders) || state.shaders.completed != state.measuredShaders.completed ||
+            state.shaders.epoch != state.measuredShaders.epoch) {
+            if (!marker("measure_end","pipeline_compile_during_measure",ns,tick,frame,world,area)) return;
+            state.phase = Phase::ViewSettle;
+            if (++state.shaderRetries > 2) { scene_error("shader_unstable",ns,tick,frame,world,area); return; }
+            if (!marker("compile_retry","ok",ns,tick,frame,world,area)) return;
+            if (!begin_view(ns,tick,frame,true)) scene_error("queue_full",ns,tick,frame,world,area);
+            return;
+        }
         ++state.inputTick;
         if (frame != state.lastMeasuredFrame) { ++state.frames; state.lastMeasuredFrame = frame; }
         if (ns - state.phaseStart < MeasureNs) return;
-        if (state.play) {
-            const bool moved = state.distance >= (state.view == 0 ? 2.0 : 1.0);
-            const bool action = state.view == 0 ? state.aimDegrees >= 5 : (state.view == 1 ? state.power > 0 && (!state.jumpSafe || state.airFrames > 0) :
-                state.view == 2 ? state.missiles > 0 : state.morphFrames >= 30 && state.bombs > 0);
-            if (!moved || !action || state.warps) {
-                scene_error("insufficient_action", ns, tick, frame, world, area); return;
-            }
-        }
+        if (state.play && !action_complete()) { scene_error("insufficient_action",ns,tick,frame,world,area); return; }
         if (!marker("measure_end", "ok", ns, tick, frame, world, area)) return;
         if (++state.view == 4) next_scene(ns, tick, frame);
         else if (!begin_view(ns, tick, frame)) scene_error("queue_full", ns, tick, frame, world, area);
@@ -203,9 +270,10 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
         if (!marker("ready", "ok", ns, tick, frame, world, area)) return;
         if (!begin_view(ns, tick, frame)) scene_error("queue_full", ns, tick, frame, world, area);
     } else if (state.placementReady && ++state.settled >= ViewSettleTicks) {
-        state.phase = Phase::Measuring; state.phaseStart = ns; state.frames = 0;
-        state.lastMeasuredFrame = frame;
-        marker("measure_begin", "ok", ns, tick, frame, world, area);
+        if (state.play && !state.rehearsed) {
+            state.phase = Phase::Rehearsing; state.phaseStart = ns; reset_actions(frame);
+            marker("rehearse_begin","ok",ns,tick,frame,world,area);
+        } else shader_wait(ns,tick,frame);
     }
 }
 } // namespace
@@ -263,10 +331,10 @@ bool benchmark_play_enabled() noexcept { return benchmark_tour_enabled() && stat
 BenchmarkPlayControl benchmark_play_control() noexcept {
     return {benchmark_play_enabled(), state.phase == Phase::ViewSettle && !state.placementReady,
         state.phase == Phase::Measuring, static_cast<unsigned>(state.pass * Scenes.size() + state.scene + 1),
-        state.view, state.inputTick};
+        state.view, state.inputTick, state.phase == Phase::Rehearsing};
 }
 void benchmark_play_observe(const BenchmarkPlayObservation& p) {
-    if (!benchmark_play_enabled() || state.phase != Phase::Measuring) return;
+    if (!benchmark_play_enabled() || (state.phase != Phase::Measuring && state.phase != Phase::Rehearsing)) return;
     if (!p.valid || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || !std::isfinite(p.yaw)) { ++state.warps; return; }
     if (state.havePosition) {
         const double dx=p.x-state.lastX,dy=p.y-state.lastY,dz=p.z-state.lastZ;

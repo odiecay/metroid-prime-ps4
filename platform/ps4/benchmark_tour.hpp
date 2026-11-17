@@ -14,6 +14,7 @@ std::filesystem::path benchmark_tour_log_root();
 struct BenchmarkPlayControl {
     bool active{}, placing{}, measuring{};
     unsigned visit{}, view{}, inputTick{};
+    bool rehearsing{}; // Same action sequence, explicitly outside the timed interval.
 };
 struct BenchmarkPlayObservation {
     bool valid{}, airborne{}, morphed{}, lockedEnemy{};
