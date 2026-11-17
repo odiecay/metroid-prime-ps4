@@ -2451,7 +2451,7 @@ index 99029c05..f6644981 100644
  }
  
 diff --git a/extern/aurora/lib/gx/command_processor.cpp b/extern/aurora/lib/gx/command_processor.cpp
-index 7609e30e..2879ca5a 100644
+index 7609e30e..a5594dc9 100644
 --- a/extern/aurora/lib/gx/command_processor.cpp
 +++ b/extern/aurora/lib/gx/command_processor.cpp
 @@ -1,4 +1,6 @@
@@ -2855,12 +2855,93 @@ index 7609e30e..2879ca5a 100644
    ZoneScoped;
    u32 numIndices = 0;
    gfx::Range idxRange;
-@@ -944,11 +1127,214 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
+@@ -944,11 +1127,315 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
      idxBuf.clear();
    }
  
 -  push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices);
 +  push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, numIndices, profile);
++}
++
++static u16* write_prepared_indexed(u16* out, GXPrimitive prim, u16 base, u16 count) noexcept;
++
++struct MixedPrefix {
++  size_t end;
++  uint32_t primitives, vertices, vertexBytes, indexBytes;
++};
++static bool triangle_family(u8 opcode) noexcept {
++  switch (opcode & CP_OPCODE_MASK) {
++  case GX_QUADS: case GX_TRIANGLES: case GX_TRIANGLESTRIP: case GX_TRIANGLEFAN: return true;
++  default: return false;
++  }
++}
++static bool mixed_tail_follows(const ByteReader& reader, size_t end, GXPrimitive prim, GXVtxFmt fmt) noexcept {
++  if (end > reader.size() || reader.size() - end < 3) return false;
++  const u8 opcode = reader.data()[end];
++  return opcode != (u8(prim) | u8(fmt)) && (opcode & CP_VAT_MASK) == u8(fmt) && triangle_family(opcode);
++}
++static u32 mixed_indices(GXPrimitive prim, u16 count) noexcept {
++  switch (prim) {
++  case GX_QUADS: return count >= 4 ? u32(count) / 4 * 6 : 0;
++  case GX_TRIANGLES: return count >= 3 ? u32(count) / 3 * 3 : 0;
++  case GX_TRIANGLESTRIP: case GX_TRIANGLEFAN: return count >= 3 ? (u32(count) - 2) * 3 : 0;
++  default: return 0;
++  }
++}
++// Extend only an already legal, indexed merge. State packets, VAT changes and
++// capacity boundaries remain on the original path. No source pointer survives
++// this call and both existing frame-owned staging cursors are reserved together.
++[[gnu::noinline]] static bool try_batch_mixed_tail(GXPrimitive firstPrim, GXVtxFmt fmt, u16 firstCount,
++    u32 stride, ByteReader& reader, DrawData* draw, uint64_t vertexEnd, uint64_t indexEnd,
++    size_t vertexHeadroom, size_t indexHeadroom, MixedPrefix prefix) noexcept {
++  const size_t maxVertex = std::min<size_t>(64 * 1024, vertexHeadroom);
++  const size_t maxIndex = std::min<size_t>(256 * 1024, indexHeadroom);
++  if (!prefix.primitives || prefix.vertexBytes > maxVertex || prefix.indexBytes > maxIndex ||
++      prefix.end < reader.offset() || prefix.end > reader.size()) return false;
++  size_t pos = prefix.end;
++  uint32_t primitives = prefix.primitives, vertices = prefix.vertices;
++  uint32_t vertexBytes = prefix.vertexBytes, indexBytes = prefix.indexBytes;
++  while (reader.size() - pos >= 3) {
++    const u8 opcode = reader.data()[pos];
++    if ((opcode & CP_VAT_MASK) != u8(fmt) || !triangle_family(opcode)) break;
++    const auto prim = static_cast<GXPrimitive>(opcode & CP_OPCODE_MASK);
++    const u16 count = (u16(reader.data()[pos + 1]) << 8) | reader.data()[pos + 2];
++    const u32 indices = mixed_indices(prim, count);
++    const uint32_t bytes = u32(count) * stride;
++    if (!indices || indices > UINT16_MAX || bytes > reader.size() - pos - 3 ||
++        bytes > maxVertex - vertexBytes || indices * sizeof(u16) > maxIndex - indexBytes ||
++        uint64_t(draw->vtxCount) + vertices + count > UINT16_MAX) break;
++    ++primitives; vertices += count; vertexBytes += bytes; indexBytes += indices * sizeof(u16);
++    pos += 3 + bytes;
++  }
++  if (primitives == prefix.primitives) return false;
++  uint8_t* vertexOut = nullptr; uint8_t* indexOut = nullptr;
++  gfx::Range vertexRange{}, indexRange{};
++  if (!gfx::map_inline_geometry(vertexEnd, indexEnd, vertexBytes, indexBytes,
++                                vertexOut, indexOut, vertexRange, indexRange)) return false;
++  size_t at = reader.offset(), written = 0;
++  u16* out = reinterpret_cast<u16*>(indexOut);
++  uint32_t base = draw->vtxCount; GXPrimitive prim = firstPrim; u16 count = firstCount;
++  for (uint32_t i = 0; i < primitives; ++i) {
++    const size_t bytes = size_t(count) * stride;
++    std::memcpy(vertexOut + written, reader.data() + at, bytes);
++    out = prim == GX_TRIANGLESTRIP ? write_prepared_strip(out, u16(base), count) :
++                                   write_prepared_indexed(out, prim, u16(base), count);
++    base += count; written += bytes; at += bytes;
++    if (i + 1 != primitives) {
++      prim = static_cast<GXPrimitive>(reader.data()[at] & CP_OPCODE_MASK);
++      count = (u16(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3;
++    }
++  }
++  CHECK(at == pos, "mixed primitive source length");
++  CHECK(size_t(reinterpret_cast<u8*>(out) - indexOut) == indexBytes, "mixed primitive index length");
++  CHECK(!gfx::overflowed(vertexRange) && !gfx::overflowed(indexRange), "mixed primitive reservation failed");
++  CHECK(vertexEnd == vertexRange.offset && indexEnd == indexRange.offset, "non-contiguous mixed primitive batch");
++  draw->vertRange.size += vertexBytes; draw->idxRange.size += indexBytes;
++  draw->vtxCount += vertices; draw->indexCount += indexBytes / sizeof(u16);
++  gfx::detail::add_merged_draw_count(primitives);
++  ++sPrimitiveBatchGroups; sPrimitiveBatchPrimitives += primitives;
++  reader.skip(at - reader.offset()); return true;
 +}
 +
 +// Keep the non-strip draw path's instruction footprint and register pressure
@@ -2896,6 +2977,13 @@ index 7609e30e..2879ca5a 100644
 +      if (reader.size() - pos < 3 || reader.data()[pos] != opcode) break;
 +      count = (uint16_t(reader.data()[pos + 1]) << 8) | reader.data()[pos + 2];
 +      pos += 3;
++    }
++    if (batchPrims != 0) {
++      const size_t end = reader.offset() + batchVertexBytes + size_t(batchPrims - 1) * 3;
++      if (mixed_tail_follows(reader, end, prim, fmt) &&
++          try_batch_mixed_tail(prim, fmt, vtxCount, vtxSize, reader, lastDraw, vertexEnd, indexEnd,
++                               vertexHeadroom, indexHeadroom,
++                               {end, batchPrims, batchVertices, batchVertexBytes, batchIndexBytes})) return true;
 +    }
 +    if (batchPrims > 1) {
 +      uint8_t* vertexOut = nullptr;
@@ -2974,7 +3062,13 @@ index 7609e30e..2879ca5a 100644
 +      firstIndices > UINT16_MAX || uint64_t(lastDraw->vtxCount) + vtxCount > UINT16_MAX) return false;
 +  const uint8_t opcode = uint8_t(prim) | uint8_t(fmt);
 +  const size_t next = reader.offset() + firstVertexBytes;
-+  if (reader.size() - next < 3 || reader.data()[next] != opcode) return false;
++  if (next > reader.size() || reader.size() - next < 3) return false;
++  if (reader.data()[next] != opcode) {
++    return mixed_tail_follows(reader, next, prim, fmt) &&
++        try_batch_mixed_tail(prim, fmt, vtxCount, vtxSize, reader, lastDraw, vertexEnd, indexEnd,
++                             vertexHeadroom, indexHeadroom,
++                             {next, 1, vtxCount, firstVertexBytes, firstIndices * u32(sizeof(u16))});
++  }
 +  const size_t maxVertexBytes = std::min<size_t>(64 * 1024, vertexHeadroom);
 +  const size_t maxIndexBytes = std::min<size_t>(256 * 1024, indexHeadroom);
 +  size_t pos = reader.offset();
@@ -2992,6 +3086,13 @@ index 7609e30e..2879ca5a 100644
 +    ++primitives; pos += nextVertices;
 +    if (reader.size() - pos < 3 || reader.data()[pos] != opcode) break;
 +    count = (uint16_t(reader.data()[pos + 1]) << 8) | reader.data()[pos + 2]; pos += 3;
++  }
++  if (primitives != 0) {
++    const size_t end = reader.offset() + vertexBytes + size_t(primitives - 1) * 3;
++    if (mixed_tail_follows(reader, end, prim, fmt) &&
++        try_batch_mixed_tail(prim, fmt, vtxCount, vtxSize, reader, lastDraw, vertexEnd, indexEnd,
++                             vertexHeadroom, indexHeadroom,
++                             {end, primitives, vertices, vertexBytes, indexBytes})) return true;
 +  }
 +  if (primitives < 2) return false;
 +  uint8_t* vertexOut = nullptr; uint8_t* indexOut = nullptr;
@@ -3071,7 +3172,7 @@ index 7609e30e..2879ca5a 100644
    u32 vtxSize;
    if (g_gxState.lastVtxFmt == fmt)
      LIKELY { vtxSize = g_gxState.lastVtxSize; }
-@@ -982,6 +1368,17 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -982,6 +1469,17 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
    auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
    const bool canMerge = lastDraw != nullptr && lastDraw->instanceCount == 1;
  
@@ -3089,7 +3190,7 @@ index 7609e30e..2879ca5a 100644
    // Push raw vertex data to buffer. Merged draws must remain contiguous with the previous range.
    const auto vertexData = reader.take(totalVtxBytes);
    gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), canMerge ? 0 : 4);
-@@ -1026,10 +1423,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -1026,10 +1524,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
      lastDraw->vtxCount += vtxCount;
      lastDraw->indexCount += numIndices;
      gfx::detail::increment_merged_draw_count();
@@ -3102,7 +3203,7 @@ index 7609e30e..2879ca5a 100644
  }
  
  // How many indices prepare_idx_buffer makes of a draw, or 0 for one it cannot make into
-@@ -1151,6 +1549,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1151,6 +1650,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      return;
    }
    for (const resident::Chunk& chunk : entry->chunks) {
@@ -3110,7 +3211,7 @@ index 7609e30e..2879ca5a 100644
      const gfx::Range vertRange{entry->vert.offset + chunk.vertOffset, chunk.vertSize};
      const gfx::Range idxRange{entry->idx.offset + chunk.idxOffset, chunk.idxCount * u32(sizeof(u16))};
      // The same vertices as they are in the list's bytes, which is what the array check reads.
-@@ -1158,7 +1557,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1158,7 +1658,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      if (check_indexed_arrays(vtxData, chunk.fmt, GX_TRIANGLES, chunk.vtxCount, current_vtx_size(chunk.fmt))) UNLIKELY {
        continue;
      }
@@ -3119,7 +3220,7 @@ index 7609e30e..2879ca5a 100644
    }
    // The next draw must not merge into these: its vertices are not after them.
    sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
-@@ -1209,12 +1608,28 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1209,12 +1709,28 @@ void handle_aurora(ByteReader& reader) noexcept {
      g_gxState.dirty |= DirtyUniform;
    } else if (subCmd >= GX_AURORA_LOAD_ARRAYBASE && subCmd <= (GX_AURORA_LOAD_ARRAYBASE | 0x0f)) {
      const u32 attrIdx = subCmd - GX_AURORA_LOAD_ARRAYBASE + GX_VA_POS;
@@ -3151,7 +3252,7 @@ index 7609e30e..2879ca5a 100644
      if (array.data != newData || array.size != arraySize || array.le != le) {
        // Only an indexed attribute's array, or TEX7's under pbr (bind_pos_active), is in the
        // pipeline config (a VCD or pbr change dirties it anyway).
-@@ -1226,15 +1641,6 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1226,15 +1742,6 @@ void handle_aurora(ByteReader& reader) noexcept {
          // Endianness is baked into the shader
          g_gxState.dirty |= DirtyPipeline;
        }
@@ -3167,7 +3268,7 @@ index 7609e30e..2879ca5a 100644
        array.data = newData;
        array.size = arraySize;
        array.le = le;
-@@ -1242,23 +1648,25 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1242,23 +1749,25 @@ void handle_aurora(ByteReader& reader) noexcept {
        g_gxState.dirty |= DirtyImmediates;
      }
    } else if (subCmd == GX_AURORA_LOAD_TEXOBJ) {
@@ -3203,7 +3304,7 @@ index 7609e30e..2879ca5a 100644
      if (slot.data != newData || slot.userData != newUserData || slot.mWidth != newWidth || slot.mHeight != newHeight ||
          slot.mFormat != static_cast<u32>(newFormat) || slot.tlut != newTlut || slot.flags != newFlags ||
          slot.texObjId != newTexObjId || slot.texDataVersion != newTexDataVersion) {
-@@ -1376,6 +1784,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1376,6 +1885,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      call_resident_dl(key, size);
    } else if (subCmd == GX_AURORA_DRAW_INDEXED) {
      ZoneScopedN("DRAW_INDEXED");
@@ -3211,7 +3312,7 @@ index 7609e30e..2879ca5a 100644
      const u8 cmd = reader.read<u8>();
      const u16 vtxCount = reader.read<u16>();
      const u32 indexCount = reader.read<u32>();
-@@ -1400,7 +1809,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1400,7 +1910,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      } else {
        const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
        if (indexCount != 0) {
@@ -3220,7 +3321,7 @@ index 7609e30e..2879ca5a 100644
        }
      }
    } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
-@@ -1496,6 +1905,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1496,6 +2006,7 @@ void handle_aurora(ByteReader& reader) noexcept {
        sDrawCache.hasPipeline = false;
        sDrawCache.bindGeneration = 0;
        sDrawCache.uniformRange = {};
@@ -3228,7 +3329,7 @@ index 7609e30e..2879ca5a 100644
        sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
        st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
      }
-@@ -1889,6 +2299,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1889,6 +2400,7 @@ void handle_aurora(ByteReader& reader) noexcept {
        sDrawCache.hasPipeline = false;
        sDrawCache.bindGeneration = 0;
        sDrawCache.uniformRange = {};
@@ -3236,7 +3337,7 @@ index 7609e30e..2879ca5a 100644
        sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
        st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
      } else if (mode == 3) {
-@@ -1896,6 +2307,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1896,6 +2408,7 @@ void handle_aurora(ByteReader& reader) noexcept {
        sDrawCache.hasPipeline = false;
        sDrawCache.bindGeneration = 0;
        sDrawCache.uniformRange = {};
@@ -3244,7 +3345,7 @@ index 7609e30e..2879ca5a 100644
        sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
        st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
      }
-@@ -2056,11 +2468,67 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -2056,11 +2569,67 @@ void handle_aurora(ByteReader& reader) noexcept {
    }
  }
  

@@ -62,8 +62,11 @@ For the movement workload, use `benchmark-play.cfg` containing exactly
 logs are under `benchmarks/play-v2/`; it also enables sampled Vulkan diagnostics.
 For assisted 24-room/96-phase coverage, use `benchmark-coverage.cfg` with
 `PROJECT_PRIME_BENCHMARK_COVERAGE_V3` followed by a newline. It writes to
-`benchmarks/coverage-v3/`. This checks assisted room actions, not a complete
-playthrough. Remove active request files and relaunch for normal play.
+`benchmarks/coverage-v3/`. It uses validated multiwaypoint routes, replenishes
+assisted inventory per room and stops incomplete if a room or action fails.
+V2 retains its original six-room comparison workload. This is assisted room
+coverage, not a complete playthrough. Remove active request files and relaunch
+for normal play.
 
 Collect `benchmark-tour.jsonl` and `frame-profile.jsonl` from that folder's
 `logs/` directory, then analyse the matching launch on the PC:

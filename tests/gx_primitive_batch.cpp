@@ -6,7 +6,22 @@
 
 static unsigned indexedKind(){const char* c=getenv("GX_INDEXED_KIND");return c?std::strtoul(c,nullptr,10):0;}
 static GXPrimitive indexedPrimitive(GXPrimitive fallback,unsigned draw){
- switch(indexedKind()){case 1:return GX_QUADS;case 2:return GX_TRIANGLEFAN;case 3:return draw%18?GX_TRIANGLES:GX_QUADS;default:return fallback;}
+ switch(indexedKind()){
+ case 1:return GX_QUADS;
+ case 2:return GX_TRIANGLEFAN;
+ case 3:return draw%18?GX_TRIANGLES:GX_QUADS;
+ case 4:{
+  constexpr GXPrimitive types[]={GX_TRIANGLEFAN,GX_TRIANGLEFAN,GX_TRIANGLESTRIP,
+                                  GX_TRIANGLESTRIP,GX_TRIANGLES,GX_QUADS};
+  return types[draw%6];
+ }
+ case 5:{
+  constexpr GXPrimitive types[]={GX_TRIANGLEFAN,GX_TRIANGLESTRIP,GX_TRIANGLEFAN,
+                                  GX_QUADS,GX_TRIANGLES};
+  return types[draw%5];
+ }
+ default:return fallback;
+ }
 }
 static uint64_t cpuNow(){struct timespec t;clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t);return uint64_t(t.tv_sec)*1000000000+t.tv_nsec;}
 static void canonical(gfx::detail::FramePacket& frame){

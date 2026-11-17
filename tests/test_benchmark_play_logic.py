@@ -1,9 +1,57 @@
 import os
+import hashlib
 from pathlib import Path
 import subprocess
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 class BenchmarkPlayLogicTests(unittest.TestCase):
+    def test_v2_driver_preserves_frozen_v51_body(self):
+        source=(ROOT/'platform/ps4/benchmark_game.cpp').read_text()
+        start=source.index('void drive_legacy(CStateManager& mgr,')
+        begin=source.index('{',start);end=begin+1;depth=1
+        while depth:
+            depth+=(source[end]=='{')-(source[end]=='}');end+=1
+        # Frozen v51 source-export body; no private build/archive dependency.
+        self.assertEqual(hashlib.sha256(source[begin:end].encode()).hexdigest(),
+                         'f18c5fab7efd5bf69ecd69b20f90b11fd9a09242d87629982f021fe26e5179b7')
+        start=source.index('void drive(CStateManager& mgr,')
+        self.assertIn('if(!benchmark_coverage_enabled()){drive_legacy(mgr,control);return;}',source[start:source.index('auto& player=',start)])
+    def test_actual_placement_terminal_releases_virtual_pad(self):
+        out=Path(os.environ.get('PRIME_PLAY_LOGIC_BUILD_DIR',str(ROOT/'build/benchmark-play-logic')))
+        out.mkdir(parents=True,exist_ok=True)
+        source=(ROOT/'platform/ps4/benchmark_game.cpp').read_text()
+        start=source.index('benchmark_play_placement(valid,')
+        tail=source[start:source.index('return;',start)+len('return;')]
+        fixture='''#include <cassert>
+#include <cmath>
+#include <cstdint>
+struct Point { float x{},y{},z{}; };
+struct Route { Point start; float length=12,openness=30,dx=1,dy=0; bool jumpSafe=true; };
+struct { Route route; } adapter;
+bool enabled=true,finishing=false,owned=true;unsigned calls=0,clears=0;
+bool benchmark_play_enabled(){return enabled;}
+void PADClearVirtualStatus(int slot){assert(slot==0);owned=false;++clears;}
+void benchmark_play_placement(bool,float,float,float,float,float,bool,uint64_t,float){++calls;if(finishing)enabled=false;}
+void placement_tail(bool valid,uint64_t elapsed){
+'''+tail+'''
+}
+int main(){for(bool valid:{false,true})for(bool terminal:{false,true}){
+ enabled=owned=true;finishing=terminal;calls=clears=0;placement_tail(valid,123);
+ assert(calls==1);assert(clears==unsigned(terminal));assert(owned==!terminal);
+}}
+'''
+        fixture=fixture.replace('#include <cassert>','#include <cassert>\n#include <initializer_list>')
+        path=out/'placement_tail.cpp';path.write_text(fixture);exe=out/'placement_tail'
+        command=['/usr/lib/llvm-19/bin/clang++','-std=c++20','-O2','-Wall','-Wextra','-Werror',str(path),'-o',str(exe)]
+        sanitized=os.environ.get('PRIME_BENCHMARK_SANITIZE')=='1'
+        if sanitized:
+            command+=['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-link-runtime',
+                      '-fno-omit-frame-pointer','-L/usr/lib/gcc/x86_64-linux-gnu/14','-lasan','-lubsan']
+        subprocess.run(command,check=True,capture_output=True,text=True)
+        env=dict(os.environ)
+        if sanitized:env.update(LD_PRELOAD='/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so',
+                               ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1')
+        subprocess.run([str(exe)],env=env,check=True,capture_output=True,text=True)
     def test_actual_route_and_input_logic(self):
         out=Path(os.environ.get('PRIME_PLAY_LOGIC_BUILD_DIR',str(ROOT/'build/benchmark-play-logic')))
         out.mkdir(parents=True,exist_ok=True);exe=out/'run'

@@ -142,17 +142,32 @@ class BenchmarkTourTests(unittest.TestCase):
         self.assertTrue(all(r['tour_version']==3 and r['pass']==1 for r in rows))
         self.assertTrue(all(r['coverage_scope']=='assisted_room_actions' for r in rows))
         self.assertTrue(all(r['planned_rooms']==24 and r['planned_phases']==96 for r in rows))
+        self.assertTrue(all(r['steering']=='closed_loop_polyline_v4' for r in rows))
         self.assertEqual(rows[0]['world'],'158EFE17');self.assertEqual(rows[0]['mrea'],'D1241219')
         self.assertTrue(all(r['shader_stable_frames']>=8 for r in begins))
         self.assertEqual(sum(r['event']=='rehearse_end' for r in rows),96)
         self.assertGreaterEqual(rows[-1]['monotonic_ns']-rows[0]['monotonic_ns'],2580_000_000_000)
-    def test_v3_failures_remain_incomplete_without_render_only_fallback(self):
+    def test_v3_failures_stop_at_the_failed_room_without_skipping(self):
         for mode,reason in [('coverage_bad_pose','no_safe_route'),('coverage_no_actions','prewarm_insufficient_action'),('coverage_timeout','timeout')]:
             with self.subTest(mode=mode):
                 rows,_=self.run_mode(mode)
                 self.assertEqual(rows[-1]['event'],'incomplete')
-                self.assertEqual(sum(r['event']=='scene_error' and r['status']==reason for r in rows),24)
+                self.assertEqual(sum(r['event']=='scene_error' and r['status']==reason for r in rows),1)
+                self.assertEqual({r['visit'] for r in rows},{1})
                 self.assertFalse(any(r['event']=='measure_begin' for r in rows))
+    def test_v3_guard_invalidates_sample_and_stops_without_next_warp(self):
+        rows,_=self.run_mode('coverage_guard')
+        self.assertEqual(rows[-1]['event'],'incomplete')
+        self.assertEqual({r['visit'] for r in rows},{1})
+        self.assertEqual(sum(r['event']=='scene_error' for r in rows),1)
+        self.assertTrue(any(r['event']=='measure_end' and r['status']=='route_guard' for r in rows))
+        self.assertFalse(any(r['event']=='measure_end' and r['status']=='ok' for r in rows))
+    def test_v3_refills_after_world_reset_and_across_the_full_missile_budget(self):
+        rows,_=self.run_mode('coverage_finite_ammo')
+        self.assertEqual(rows[-1]['event'],'complete')
+        missiles=[r for r in rows if r['event']=='measure_end' and r['view']==2]
+        self.assertEqual(len(missiles),24)
+        self.assertTrue(all(r['missile_projectiles']>0 for r in missiles))
     def test_v3_invalid_request_preserves_current_settings(self):self.assertEqual(self.run_mode('coverage_invalid')[0],[])
     def test_failed_marker_write_stops_without_acceptance(self):
         rows,err=self.run_mode('log_failure')

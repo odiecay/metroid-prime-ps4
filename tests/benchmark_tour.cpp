@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "benchmark_tour.hpp"
 #include <aurora/gfx.h>
+#include <algorithm>
 #include <cassert>
 #include <cerrno>
 #include <cmath>
@@ -18,6 +19,8 @@ static std::vector<std::string> commands;
 static bool rejectQueue;
 static bool rejectPermissionChanges;
 static unsigned permissionChanges;
+static bool finiteAmmo;
+static unsigned missileCapacity, missileAmount;
 extern "C" int fchmod(int fd, mode_t mode) noexcept {
     if (rejectPermissionChanges) { ++permissionChanges; errno=EPERM; return -1; }
     return static_cast<int>(::syscall(SYS_fchmod,fd,mode));
@@ -26,8 +29,13 @@ static uint32_t world=0x39F2DE28, area=0x2043C96E;
 bool PortConsoleRun(std::string_view text) {
     if (rejectQueue) return false;
     commands.emplace_back(text);
-    if (text.starts_with("warp "))
+    if (text.starts_with("warp ")) {
+        const auto oldWorld = world;
         assert(std::sscanf(commands.back().c_str(), "warp %x %x", &world, &area)==2);
+        if (finiteAmmo && world != oldWorld) missileCapacity = missileAmount = 0;
+    }
+    if (finiteAmmo && text == "give Missiles 250") missileCapacity = missileAmount = 250;
+    if (finiteAmmo && text == "refill all") missileAmount = missileCapacity;
     return true;
 }
 extern "C" const char* prime_ps4_trace_session_id() noexcept { return "host-contract-session"; }
@@ -42,6 +50,7 @@ int main(int argc,char** argv) {
     assert(argc==3);const std::string mode=argv[1];const fs::path root=argv[2];
     const fs::path live=root/"live";fs::create_directories(live);
     const bool coverage=mode.starts_with("coverage_");
+    finiteAmmo = mode == "coverage_finite_ammo";
     const bool play=coverage||mode.starts_with("play_");
     std::string settings="render_scale=2.25\nmsaa=1\noriginal_experience=0\n";
     write(live/"port_settings.ini",settings);write(live/"memorycard.bin","PROTECTED-SAVE");
@@ -93,6 +102,7 @@ int main(int argc,char** argv) {
     assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/(coverage?"coverage-v3":play?"play-v2":"tour-v1");
     assert(std::sscanf(getenv("MP_BOOT_WORLD"),"%x:%x",&world,&area)==2);
     assert(prime::benchmark_play_enabled()==play);
+    assert(prime::benchmark_coverage_enabled()==coverage);
     assert(std::string(getenv("MP_USER_PATH"))==bench/"user");
     assert(std::string(getenv("MP_CACHE_PATH"))==bench/"cache");
     assert(std::string(getenv("MP_PS4_PROFILE_LOG"))==bench/"logs"/"frame-profile.jsonl");
@@ -126,11 +136,14 @@ int main(int argc,char** argv) {
                 sample.airborne=control.view==1&&control.inputTick<40;sample.morphed=control.view==3;
                 sample.power=control.view==1&&control.inputTick%20==0;
                 sample.charged=control.view==1&&control.inputTick%120==0;
-                sample.missiles=control.view==2&&control.inputTick%90==0;
+                sample.missiles=control.view==2&&control.inputTick%90==0&&(!finiteAmmo||missileAmount);
+                if(finiteAmmo&&sample.missiles)--missileAmount;
                 sample.bombs=control.view==3&&control.inputTick%60==0;
             }
             prime::benchmark_play_observe(sample);
             if(mode=="play_guard"&&control.inputTick==100)prime::benchmark_play_fail("route_guard");
+            if(mode=="coverage_guard"&&control.measuring&&control.inputTick==100)
+                prime::benchmark_play_fail("route_guard");
         }
         ++tick;ns+=(mode=="timeout"||mode=="coverage_timeout")?121000000000ull:16666667ull;
         bool ready=mode!="timeout"&&mode!="coverage_timeout";
@@ -138,7 +151,15 @@ int main(int argc,char** argv) {
         prime::benchmark_tour_tick_at_for_testing(world,area,tick,tick,ready,ns);
     }
     assert(tick<tickLimit);assert(!prime::benchmark_tour_enabled());
+    assert(!prime::benchmark_coverage_enabled());
     assert(read(live/"port_settings.ini")==settings);assert(read(live/"memorycard.bin")=="PROTECTED-SAVE");
+    if(mode=="coverage_finite_ammo") {
+        assert(std::count(commands.begin(),commands.end(),"give Missiles 250")==24);
+        assert(std::count(commands.begin(),commands.end(),"refill all")==24);
+    }
+    if(mode=="coverage_bad_pose"||mode=="coverage_no_actions"||mode=="coverage_timeout"||mode=="coverage_guard") {
+        for(const auto& c:commands)assert(!c.starts_with("warp "));
+    }
     if(mode=="complete") {
         assert(commands.size()==81); //22 inventory,48 fixed-yaw,11 cross-room loads
         for(const auto& c:commands)assert(!c.starts_with("state ")&&!c.starts_with("resume ")&&!c.starts_with("stick "));

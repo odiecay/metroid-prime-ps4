@@ -138,7 +138,7 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         state.shaderRetries,state.shaders.queued,state.shaders.background,state.shaders.active,state.shaders.pending,
         state.shaders.dropPending,state.shaders.prefetchQueued,state.shaders.prefetchActive,static_cast<unsigned long long>(state.shaders.epoch),
         static_cast<unsigned long long>(state.shaders.completed),static_cast<unsigned long long>(state.shaders.failures),
-        state.shaderStableFrames,state.play ? "closed_loop_route_v3" : "none",
+        state.shaderStableFrames,state.coverage ? "closed_loop_polyline_v4" : state.play ? "closed_loop_route_v3" : "none",
         state.play ? "body_direct_aim_or_ball_control_flat" : "none",
         state.play ? "true" : "null",state.play ? "false" : "null");
     if (state.coverage) {
@@ -196,6 +196,10 @@ void next_scene(uint64_t ns, uint64_t tick, uint64_t frame) {
         }
     }
     state.view = 0; state.settled = 0; state.frames = 0;
+    // World changes can replace PlayerState, and the complete route consumes
+    // more missiles than one inventory holds. Restore the same capped loadout
+    // during each coverage room's unmeasured warm-up, never during a sample.
+    if (state.coverage) state.inventory = false;
     state.phase = Phase::Waiting; state.deadline = ns + RoomTimeoutNs;
     char line[64]; const auto& scene = scene_at(state.scene);
     std::snprintf(line, sizeof(line), "warp %08X %08X", scene.world, scene.area);
@@ -210,6 +214,9 @@ void scene_error(const char* why, uint64_t ns, uint64_t tick, uint64_t frame,
     if (state.phase == Phase::Finished) return;
     if (state.phase == Phase::Measuring && !marker("measure_end", why, ns, tick, frame, world, area)) return;
     ++state.errors; if (!marker("scene_error", why, ns, tick, frame, world, area)) return;
+    // An uncovered room must stop this coverage attempt. Keep its failure and
+    // the remaining manifest entries pending instead of silently warping on.
+    if (state.coverage) { finish(ns, tick, frame); return; }
     next_scene(ns, tick, frame);
 }
 bool grant_inventory() {
@@ -404,6 +411,7 @@ bool prepare_benchmark_tour(const fs::path& root) {
 bool benchmark_tour_enabled() noexcept { return state.enabled && state.phase != Phase::Finished; }
 fs::path benchmark_tour_log_root() { return state.logRoot; }
 bool benchmark_play_enabled() noexcept { return benchmark_tour_enabled() && state.play; }
+bool benchmark_coverage_enabled() noexcept { return benchmark_tour_enabled() && state.coverage; }
 BenchmarkPlayControl benchmark_play_control() noexcept {
     return {benchmark_play_enabled(), state.phase == Phase::ViewSettle && !state.placementReady,
         state.phase == Phase::Measuring, static_cast<unsigned>(state.pass * scene_count() + state.scene + 1),

@@ -17,7 +17,7 @@ Aurora translates the game's GX rendering into Dawn/WebGPU. Dawn uses native
 Orbis RADV and PS4 video output. SDL connects native input/audio services to the
 upstream engine, with MusyX providing the original audio mixer.
 
-Current source matches the frozen package `00.51` (RC8) inputs, with portable
+Current source matches the frozen package `00.52` (RC9) inputs, with portable
 build-path adaptations recorded separately. The `v0.1.0-rc1` tag preserves the
 previous `00.44` source. The game source is pinned to `c872da704adde9a7838492aaa56dac73a32053e4`.
 [SOURCE-RECEIPT.json](../SOURCE-RECEIPT.json) identifies the frozen game-package

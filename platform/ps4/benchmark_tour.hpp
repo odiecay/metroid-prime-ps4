@@ -10,6 +10,7 @@ namespace prime {
 bool prepare_benchmark_tour(const std::filesystem::path& profileRoot);
 bool benchmark_tour_enabled() noexcept;
 bool benchmark_play_enabled() noexcept;
+bool benchmark_coverage_enabled() noexcept;
 std::filesystem::path benchmark_tour_log_root();
 struct BenchmarkPlayControl {
     bool active{}, placing{}, measuring{};

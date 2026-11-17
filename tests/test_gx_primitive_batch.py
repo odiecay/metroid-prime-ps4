@@ -198,7 +198,7 @@ class GxPrimitiveBatchTests(unittest.TestCase):
         if env.get('GX_DRAW_SANITIZE')=='1':
             env.update(LD_PRELOAD='/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so',ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
         total=0
-        for kind in range(4):
+        for kind in range(6):
             for vertices in (6,24,96):
                 captures={};files=[]
                 for enabled in (0,1):
@@ -211,10 +211,17 @@ class GxPrimitiveBatchTests(unittest.TestCase):
                         'transactional':'1','bounded_fallback':'1'}])
                     captures[enabled]={prefix:[{k:v for k,v in row.items() if k not in ('median_ms','min_ms','max_ms')}
                         for row in data_rows(run.stdout,prefix)]for prefix in ('DRAW_PREP','ADVERSARIAL')}
+                    # An 18-record mixed fan/strip/triangle/quad surface must use
+                    # the same existing atomic reservation across family changes.
+                    # This proves the new path runs, beyond output equivalence.
+                    if kind==4 and enabled:
+                        for row in data_rows(run.stdout,'DRAW_STAGE'):
+                            if row['stage'] in ('vertex_staging','index_staging'):
+                                self.assertEqual(int(row['calls']),16200*6//vertices//18,row)
                 self.assertEqual(captures[0],captures[1]);self.assertEqual(files[0].read_bytes(),files[1].read_bytes())
                 total+=files[0].stat().st_size
                 for file in files:file.unlink()
-        for kind in (1,2,3):
+        for kind in (1,2,3,4,5):
             for prefix in (2,3,17):
                 for malformed,message in [('header','Reader overrun'),('payload','draw vertex data overrun')]:
                     for enabled in (0,1):
@@ -222,7 +229,8 @@ class GxPrimitiveBatchTests(unittest.TestCase):
                         run=subprocess.run([out/'run'],env=selected,capture_output=True,text=True,preexec_fn=no_core,timeout=15)
                         self.assertLess(run.returncode,0,run.stdout+run.stderr);self.assertIn(message,run.stdout+run.stderr)
                         self.assertNotIn('ERROR: AddressSanitizer',run.stdout+run.stderr);self.assertNotIn('runtime error:',run.stdout+run.stderr)
-        print(f'Indexed batching: 90 preflight cases; 12 complete-byte comparisons ({total} bytes/arm); '
-              '29 adversarial cases per primitive family; 36 malformed records preserve original failures.')
+        print(f'Indexed batching: 90 preflight cases; 18 complete-byte comparisons ({total} bytes/arm); '
+              'homogeneous and mixed topology, 29 adversarial cases per pattern; '
+              '60 malformed records preserve original failures.')
 
 if __name__=='__main__':unittest.main()
