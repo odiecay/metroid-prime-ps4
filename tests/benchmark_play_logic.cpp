@@ -59,7 +59,41 @@ static void steering_checks() {
     assert(stick_for_world({1,0,0},{1,0,0}).y==127);
     std::printf("closed-loop %u lag/drift/rounding cases, max lateral %.4fm; guard .6500m unchanged\n",cases,worst);
 }
+static void route_lifecycle_checks() {
+    const auto floor=[](Point q,Point& out) {
+        out={q.x,q.y,.15f};
+        return q.x>=-1.1f&&q.x<=6.1f&&std::fabs(q.y)<=.5f;
+    };
+    const auto clear=[](Point){return true;};
+    const auto score=[](Point,float dx,float){return dx>.99f?30.f:0.f;};
+    Route route;assert(choose_route({0,0,.15f},floor,clear,score,route));
+    const auto original=route;
+    // A legal endpoint within the unchanged guard can be a bad new search
+    // anchor. This reproduces the lifecycle failure without inventing a room.
+    const Point walked{2,.1f,.15f};assert(inside_route(route,walked));
+    Route searched;assert(!choose_route(walked,floor,clear,score,searched));
+    for(unsigned reset=0;reset<32;++reset) {
+        assert(revalidate_route(walked,route,floor,clear,score));
+        assert(route.start.x==original.start.x&&route.start.y==original.start.y&&route.start.z==original.start.z);
+        assert(route.end.x==original.end.x&&route.end.y==original.end.y&&route.dx==original.dx&&route.dy==original.dy);
+    }
+    const auto blocked=[](Point q){return q.x<1.f||q.x>1.5f;};
+    assert(!revalidate_route(walked,route,floor,blocked,score));
+    const auto cliff=[](Point q,Point& out){out={q.x,q.y,.15f};return q.x<3.f;};
+    assert(!revalidate_route(walked,route,cliff,clear,score));
+    assert(!revalidate_route({2,2,.15f},route,floor,clear,score));
+    const auto obscured=[](Point,float,float){return 2.f;};
+    assert(!revalidate_route(walked,route,floor,clear,obscured));
+    const auto invalid=[](Point,float,float){return std::numeric_limits<float>::quiet_NaN();};
+    assert(!revalidate_route(walked,route,floor,clear,invalid));
+    auto bad=route;bad.dx=std::numeric_limits<float>::infinity();
+    assert(!revalidate_route(walked,bad,floor,clear,score));
+    // Failed checks never replace a previously valid route with zeroed data.
+    assert(route.start.x==original.start.x&&route.length==original.length);
+    std::puts("route lifecycle:32 stable phase/rehearsal resets; moving-anchor failure reproduced; new obstacles/cliffs/access/invalid view rejected");
+}
 int main(){
+    route_lifecycle_checks();
     steering_checks();
     const auto floor=[](Point desired,Point& p){p={desired.x,desired.y,.15f};return true;};
     const auto clear=[](Point){return true;};

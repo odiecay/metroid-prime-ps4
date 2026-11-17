@@ -3,6 +3,8 @@
 #include "sdl/orbis_pad.h"
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <dawn/native/DawnNative.h>
 #include <aurora/gfx.h>
 #include <orbis/libkernel.h>
@@ -13,7 +15,24 @@
 extern "C" bool prime_ps4_wait_for_gpu(WGPUDevice,uint64_t);
 #include <orbis/SystemService.h>
 extern "C" void prime_ps4_report_fatal(const char *,const char *,unsigned);
+extern "C" int wsi_orbis_prepare_present(uint32_t*,uint32_t*,uint32_t*,uint32_t*);
 namespace aurora {
+void prime_orbis_prepare_present() {
+    static const bool enabled=[] {
+        const char* value=std::getenv("MP_PS4_PRESENT_PREWAIT");
+        return !value || std::strcmp(value,"0")!=0;
+    }();
+    if (!enabled) return;
+    trace::Scope wait("video-out slot prewait (inclusive)",trace::Render);
+    uint32_t before=0,capacity=0,after=0,polls=0;
+    const int status=wsi_orbis_prepare_present(&before,&capacity,&after,&polls);
+    trace::count("present prewait queue depth",before,trace::Render);
+    trace::count("present prewait queue capacity",capacity,trace::Render);
+    trace::count("present prewait release depth",after,trace::Render);
+    trace::count("present prewait status polls",polls,trace::Render);
+    trace::count(status==1 ? "present prewait ready" : status==0 ? "present prewait unavailable" :
+        status==-1 ? "present prewait status error" : "present prewait timeout",1,trace::Render);
+}
 namespace gfx { void prime_orbis_encode_stats(uint64_t*); }
 namespace gfx::detail { void prime_orbis_command_pool_stats(uint64_t*); }
 void prime_orbis_gpu_times(float*,float*,uint32_t*,bool*);

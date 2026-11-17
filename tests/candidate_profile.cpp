@@ -50,6 +50,16 @@ int main(int argc,char** argv) {
         assert(std::string(getenv("MP_DAWN_CALL_PROFILE"))=="0");
     }
     fs::remove(p.root/"benchmark-v2.cfg");
+    for(const char* valid:{"present_prewait=0\n","present_prewait=1\n"}) {
+        write(p.root/"benchmark-v3.cfg",valid);apply_candidate_environment(p);
+        assert(std::string(getenv("MP_PS4_PRESENT_PREWAIT"))==std::string(valid).substr(16,1));
+    }
+    for(const char* bad:{"present_prewait=2\n","present_prewait=1\npresent_prewait=0\n","\n",""}) {
+        write(p.root/"benchmark-v3.cfg",bad);
+        bool badConfig=false;try{apply_candidate_environment(p);}catch(...){badConfig=true;}
+        assert(badConfig && std::string(getenv("MP_PS4_PRESENT_PREWAIT"))=="1");
+    }
+    fs::remove(p.root/"benchmark-v3.cfg");
     write(desc,"PROJECT_PRIME_PROFILE_V1\n../../user\n");
     bool rejected=false;try { read_candidate_profile(desc,root); } catch(...) { rejected=true; }assert(rejected);
     write(desc,"PROJECT_PRIME_PROFILE_V1\nremastered-lite-v0023\n");

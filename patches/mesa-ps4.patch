@@ -507,3 +507,154 @@ index e4055c6..f2296bf 100644
        if (timeout_ns == 0 || !orbis_wait_continue(&watch)) {
           if (timeout_ns != 0)
              mesa_logw("orbis-drm: fence %u never reached - label is %u, the GPU did not finish",
+diff --git a/src/vulkan/wsi/wsi_orbis.c b/src/vulkan/wsi/wsi_orbis.c
+index 82c3304..1f77733 100644
+--- a/src/vulkan/wsi/wsi_orbis.c
++++ b/src/vulkan/wsi/wsi_orbis.c
+@@ -10,6 +10,7 @@
+ #include "wsi_orbis.h"
+ 
+ #include <inttypes.h>
++#include <pthread.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -234,6 +235,39 @@ struct wsi_orbis_scanout {
+    bool     owns_buffers;
+ };
+ 
++/* Advisory pacing before the application's device lock. The registry pins the
++ * native handle through the wait; it owns no image or GPU resource. More than
++ * one scanout is deliberately ambiguous and retains the ordinary present path.
++ * The authoritative wait in scanout_present is always performed afterwards. */
++static pthread_mutex_t prime_scanout_mutex = PTHREAD_MUTEX_INITIALIZER;
++static struct wsi_orbis_scanout *prime_scanouts[WSI_ORBIS_MAX_BUFFERS];
++static bool prime_scanout_overflow;
++
++static void
++prime_scanout_register(struct wsi_orbis_scanout *so)
++{
++   pthread_mutex_lock(&prime_scanout_mutex);
++   for (unsigned i = 0; i < WSI_ORBIS_MAX_BUFFERS; ++i) {
++      if (prime_scanouts[i] == NULL) {
++         prime_scanouts[i] = so;
++         pthread_mutex_unlock(&prime_scanout_mutex);
++         return;
++      }
++   }
++   prime_scanout_overflow = true;
++   pthread_mutex_unlock(&prime_scanout_mutex);
++}
++
++static void
++prime_scanout_unregister(struct wsi_orbis_scanout *so)
++{
++   pthread_mutex_lock(&prime_scanout_mutex);
++   for (unsigned i = 0; i < WSI_ORBIS_MAX_BUFFERS; ++i)
++      if (prime_scanouts[i] == so)
++         prime_scanouts[i] = NULL;
++   pthread_mutex_unlock(&prime_scanout_mutex);
++}
++
+ static void
+ wsi_orbis_release(struct wsi_orbis_scanout *so)
+ {
+@@ -355,6 +389,7 @@ wsi_orbis_scanout_create(uint32_t width, uint32_t height, uint32_t count, void *
+              pitch_px != 0 ? pitch_px : width, count, so->owns_buffers ? "GARLIC" : "swapchain",
+              so->owns_buffers ? " - one full-screen copy per frame" : " - ZERO COPY, the flip shows what "
+                                                                      "the GPU rendered into");
++   prime_scanout_register(so);
+    return so;
+ 
+ fail:
+@@ -373,8 +408,10 @@ fail:
+ uint32_t
+ wsi_orbis_scanout_reserve(struct wsi_orbis_scanout *so, uint32_t reserve)
+ {
++   pthread_mutex_lock(&prime_scanout_mutex);
+    if (so != NULL)
+       so->reserve = reserve;
++   pthread_mutex_unlock(&prime_scanout_mutex);
+    return reserve + 2;
+ }
+ 
+@@ -467,6 +504,53 @@ wsi_orbis_wait_for_flip_slot(struct wsi_orbis_scanout *so)
+    }
+ }
+ 
++int
++wsi_orbis_prepare_present(uint32_t *before, uint32_t *capacity,
++                          uint32_t *after, uint32_t *polls)
++{
++   if (before) *before = 0;
++   if (capacity) *capacity = 0;
++   if (after) *after = 0;
++   if (polls) *polls = 0;
++   pthread_mutex_lock(&prime_scanout_mutex);
++   struct wsi_orbis_scanout *so = NULL;
++   unsigned count = 0;
++   for (unsigned i = 0; i < WSI_ORBIS_MAX_BUFFERS; ++i) {
++      if (prime_scanouts[i] != NULL) {
++         so = prime_scanouts[i];
++         ++count;
++      }
++   }
++   if (count != 1 || prime_scanout_overflow || so->video < 0) {
++      pthread_mutex_unlock(&prime_scanout_mutex);
++      return 0;
++   }
++   const int32_t reserve = so->owns_buffers ? 0 : (int32_t)so->reserve;
++   const int32_t limit = MAX2((int32_t)so->count - 1 - reserve, 1);
++   if (capacity) *capacity = (uint32_t)limit;
++   /* One 60 Hz refresh plus polling margin. A stalled display still takes the
++    * original bounded/error-reporting path instead of paying its timeout twice. */
++   const uint64_t deadline = os_time_get_nano() + 20ull * 1000 * 1000;
++   int result;
++   uint32_t attempts = 0;
++   for (;;) {
++      OrbisVideoOutFlipStatus status;
++      memset(&status, 0, sizeof(status));
++      const int32_t error = sceVideoOutGetFlipStatus(so->video, &status);
++      ++attempts;
++      if (error != 0) { result = -1; break; }
++      const uint32_t pending = status.numFlipPending > 0 ? (uint32_t)status.numFlipPending : 0;
++      if (attempts == 1 && before) *before = pending;
++      if (after) *after = pending;
++      if (status.numFlipPending < limit) { result = 1; break; }
++      if (os_time_get_nano() >= deadline) { result = -2; break; }
++      sceKernelUsleep(500);
++   }
++   if (polls) *polls = attempts;
++   pthread_mutex_unlock(&prime_scanout_mutex);
++   return result;
++}
++
+ /* ⚠ FRAME AGAINST FRAME, BECAUSE THE ARTEFACT IS TRANSIENT AND THE SCENE IS NOT.
+  *
+  * Two metrics before this one measured the wrong thing, and both errors were mine. The first counted how BLACK each
+@@ -920,6 +1004,9 @@ wsi_orbis_scanout_destroy(struct wsi_orbis_scanout *so)
+ {
+    if (so == NULL)
+       return;
++   /* Wait for any advisory reader, then prevent another from pinning a handle
++    * that teardown may close. The existing display/GPU retirement stays below. */
++   prime_scanout_unregister(so);
+ 
+    /* ⚠ WAIT FOR THE QUEUE TO EMPTY WHEN THE BUFFERS ARE NOT OURS. With the swapchain's own images
+     * registered, every buffer the display still holds is memory the caller is about to free. A flip
+diff --git a/src/vulkan/wsi/wsi_orbis.h b/src/vulkan/wsi/wsi_orbis.h
+index c2a0310..17bbe29 100644
+--- a/src/vulkan/wsi/wsi_orbis.h
++++ b/src/vulkan/wsi/wsi_orbis.h
+@@ -61,6 +61,11 @@ uint32_t wsi_orbis_scanout_reserve(struct wsi_orbis_scanout *so, uint32_t reserv
+  * buffers and the one on screen are all still the display's and must not be handed back. */
+ uint32_t wsi_orbis_flips_pending(struct wsi_orbis_scanout *so);
+ 
++/* Advisory only: 1 ready, 0 no unique scanout, -1 status error, -2 timeout.
++ * Never transfers buffer ownership or replaces scanout_present's own checks. */
++int wsi_orbis_prepare_present(uint32_t *before, uint32_t *capacity,
++                              uint32_t *after, uint32_t *polls);
++
+ void wsi_orbis_scanout_destroy(struct wsi_orbis_scanout *so);
+ 
+ #ifdef __cplusplus

@@ -28,16 +28,15 @@ namespace prime {
 namespace {
 using namespace benchmark_play;
 struct Adapter {
-    unsigned visit{},view{},unmorphTicks{};bool prepared{},measuring{},controls{},placing{},toEnd=true;
-    Route route;std::bitset<65536> seen;
+    unsigned visit{},view{},unmorphTicks{};bool prepared{},measuring{},controls{},placing{},routeValid{},toEnd=true;
+    Route route;uint32_t routeWorld{},routeArea{};std::bitset<65536> seen;
 } adapter;
 Point point(const CVector3f& p){return {p.GetX(),p.GetY(),p.GetZ()};}
 CVector3f vector(Point p){return CVector3f(p.x,p.y,p.z);}
 uint64_t nanos(){return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 const CMaterialFilter Solid=CMaterialFilter::MakeIncludeExclude(CMaterialList(kMT_Solid),CMaterialList());
 
-bool setup(CStateManager& mgr,Route& route) {
-    route={};
+bool setup(CStateManager& mgr,Route& route,bool reuse) {
     CPlayer& player=*mgr.Player();const CVector3f origin=player.GetTranslation();
     const CAABox& bounds=mgr.GetWorld()->GetAreaAlways(mgr.GetWorld()->GetCurrentAreaId()).GetAABB();
     const auto floor=[&](Point desired,Point& out){
@@ -69,7 +68,12 @@ bool setup(CStateManager& mgr,Route& route) {
         }
         return total/9.f;
     };
-    if(!choose_route(point(origin),floor,clear,score,route))return false;
+    if(reuse) {
+        if(!revalidate_route(point(origin),route,floor,clear,score))return false;
+    } else {
+        route={};
+        if(!choose_route(point(origin),floor,clear,score,route))return false;
+    }
     route.jumpSafe=true;
     for(float height:{1.f,2.f,3.f})
         if(!clear({route.start.x,route.start.y,route.start.z+height}))route.jumpSafe=false;
@@ -172,7 +176,14 @@ void benchmark_game_tick(CStateManager& mgr) {
     adapter.placing=control.placing;
     if(control.placing&&ready) {
         neutral();
+        const auto worldKey=uint32_t(world->IGetWorldAssetId()),areaKey=uint32_t(area->GetAreaAssetId());
+        if(adapter.routeWorld!=worldKey||adapter.routeArea!=areaKey){
+            adapter.routeValid=false;adapter.routeWorld=worldKey;adapter.routeArea=areaKey;
+        }
         if(newPlacement||adapter.visit!=control.visit||adapter.view!=control.view){
+            // Rehearsal resets and later actions keep the room's same route.
+            // A new visit alone invalidates the cache, even if its room repeats.
+            if(adapter.visit!=control.visit)adapter.routeValid=false;
             adapter.visit=control.visit;adapter.view=control.view;adapter.prepared=false;adapter.unmorphTicks=0;
         }
         if(player->GetMorphballTransitionState()!=CPlayer::kMS_Unmorphed) {
@@ -180,8 +191,8 @@ void benchmark_game_tick(CStateManager& mgr) {
             if(adapter.unmorphTicks++%120<6)pad.button=PAD_BUTTON_X;
             PADSetVirtualStatus(0,&pad);return;
         }
-        const auto start=nanos();const bool valid=setup(mgr,adapter.route);const auto elapsed=nanos()-start;
-        adapter.prepared=valid;adapter.toEnd=true;adapter.seen.reset();adapter.measuring=false;
+        const auto start=nanos();const bool valid=setup(mgr,adapter.route,adapter.routeValid);const auto elapsed=nanos()-start;
+        adapter.prepared=valid;adapter.routeValid=valid;adapter.toEnd=true;adapter.seen.reset();adapter.measuring=false;
         benchmark_play_placement(valid,adapter.route.start.x,adapter.route.start.y,adapter.route.start.z,
             adapter.route.length,adapter.route.openness,adapter.route.jumpSafe,elapsed,
             std::atan2(-adapter.route.dx,adapter.route.dy));

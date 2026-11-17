@@ -352,7 +352,8 @@ def report(result, details=False):
         'Medians are medians of window medians; P95/P99 are worst window percentiles, never pooled frame percentiles. '
         'Window durations can exceed five seconds when polling is delayed. '
         'Stages and asynchronous frame completions can cross poll boundaries; inclusive CPU stages overlap.',
-        'This fixed-camera room tour does not establish combat, transition, audio, controls or complete-game reliability. '
+        'Results cover only the recorded room-tour workload, including scripted actions when declared. '
+        'They do not establish normal controller operation, audio synchronisation, progression or complete-game reliability. '
         'Its main frame times measure throughput, not input/display latency; CPU submission time is not GPU execution time.',
         'Passes identify repeat order, not proven cold/warm shader-cache state. '
         'Assisted inventory, invulnerability and cache policy are preserved in the machine report when the markers declare them.',

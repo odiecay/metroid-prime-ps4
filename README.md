@@ -25,19 +25,19 @@ roughly **80 MB**; you add your own game image separately.
 
 ![DualShock 4 quick guide: original-style buttons with twin-stick aim](docs/images/ps4-controls.svg)
 
-## Download — Release Candidate 5
+## Download — Release Candidate 6
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.48-RC5.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.49-RC6.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
-RC5 replaces the benchmark setup’s filesystem copy with a checked, bounded
-byte copy and rename, and records startup failures earlier. The native copy
-compatibility risk was reproduced in tests; console startup verification is
-pending. It retains RC4’s model, renderer, loading and control improvements.
-In v45 tests, lighter views ran near 60 FPS; the heavy open view of Main Plaza
-ran around 42 FPS after the cache warmed. RC5 has passed the native build and
-host checks; its continuous gameplay comparison is pending. A locked 1080p60
-and a complete playthrough have not been verified.
+RC6 moves native presentation waiting outside Dawn’s device lock, while
+retaining the existing image/fence checks and two-frame limit. It also fixes
+render-worker sync accounting and benchmark route control, with more detailed
+wait diagnostics. It retains the earlier model, renderer and startup fixes.
+In v48 tests, lighter scenes ran near 60 FPS; the heavy open view of Main Plaza
+ran around 43 FPS. RC6 has passed the native build and host checks; its PS4
+performance comparison is pending. A locked 1080p60 and a complete playthrough
+have not been verified.
 Please include the room and what you were doing when reporting a problem.
 
 ## Getting it running

@@ -16,7 +16,7 @@
 
 namespace {
 using namespace aurora::trace;
-constexpr unsigned MaxStages=160, Buckets=1024;
+constexpr unsigned MaxStages=192, Buckets=1024;
 constexpr unsigned MaxStageName = 256, StageLookupSlots = 512;
 struct Stage { std::array<char,MaxStageName> name{}; Kind kind{}; Lane lane{}; };
 struct StageLookup { uintptr_t address{}; unsigned index{}; };

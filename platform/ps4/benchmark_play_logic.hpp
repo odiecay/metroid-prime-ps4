@@ -49,6 +49,23 @@ bool choose_route(Point origin,Floor&& floor,Clear&& clear,Score&& score,Route& 
     }
     return found;
 }
+// Re-validate the original visit route before each rehearsal/phase reset.
+// The search origin must not follow the moving player through the room.
+// Floor and full-body corridor/access checks still run before any teleport.
+template<class Floor,class Clear,class Score>
+bool revalidate_route(Point current,Route& route,Floor&& floor,Clear&& clear,Score&& score) {
+    if(!finite(current)||!finite(route.start)||!finite(route.end)||!(route.length>0)||
+       !std::isfinite(route.dx)||!std::isfinite(route.dy)||
+       std::fabs(std::hypot(route.dx,route.dy)-1.f)>.001f)return false;
+    Point start,end,back,front;
+    if(!floor(route.start,start)||!finite(start)||!floor(route.end,end)||!finite(end)||
+       !floor({start.x-route.dx,start.y-route.dy,start.z},back)||
+       !floor({start.x+(route.length+2)*route.dx,start.y+(route.length+2)*route.dy,start.z},front)||
+       !segment(back,front,floor,clear,.35f)||!segment(current,start,floor,clear))return false;
+    const float openness=score(start,route.dx,route.dy);
+    if(!std::isfinite(openness)||openness<=8.f)return false;
+    route.start=start;route.end=end;route.openness=openness;return true;
+}
 inline bool inside_route(const Route& r,Point p) {
     if(!(r.length>0)||!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z))return false;
     const float x=p.x-r.start.x,y=p.y-r.start.y;

@@ -85,10 +85,10 @@ index b8760173..020ebe8a 100644
   */
 diff --git a/extern/aurora/include/aurora/frame_trace.hpp b/extern/aurora/include/aurora/frame_trace.hpp
 new file mode 100644
-index 00000000..da9ac0c3
+index 00000000..950ffd1c
 --- /dev/null
 +++ b/extern/aurora/include/aurora/frame_trace.hpp
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,154 @@
 +// SPDX-License-Identifier: MIT
 +#pragma once
 +#include <array>
@@ -206,8 +206,13 @@ index 00000000..da9ac0c3
 +inline void gpu_sample(const char* name,uint64_t ns) noexcept {
 +  emit({0,now_ns(),ns,name,Render,Gpu});
 +}
-+inline void count(const char* name, uint64_t value, Lane lane = Render) noexcept {
-+  emit({contexts[lane].frame, now_ns(), value, name, lane, Counter});
++// Explicit IDs let an arriving queue item report its canonical game-frame
++// trace before begin(Render), without mistaking the internal packet serial for it.
++inline void count(const char* name, uint64_t value, Lane lane = Render, uint64_t frame = UINT64_MAX) noexcept {
++  emit({frame == UINT64_MAX ? contexts[lane].frame : frame, now_ns(), value, name, lane, Counter});
++}
++inline void interval(const char* name, uint64_t frame, uint64_t start, uint64_t elapsed, Lane lane) noexcept {
++  if (elapsed) emit({frame, start, elapsed, name, lane, Inclusive});
 +}
 +class Scope {
 +  Lane lane_; const char* name_; uint64_t frame_, start_;
@@ -225,13 +230,15 @@ index 00000000..da9ac0c3
 +  Frame(const Frame&) = delete;
 +};
 +#else
++inline uint64_t now_ns() noexcept { return 0; }
 +inline uint64_t next_frame() noexcept { return 0; }
 +inline uint64_t frame_id(Lane = Main) noexcept { return 0; }
 +inline void transition(Lane, const char*, uint64_t) noexcept {}
 +inline void begin(Lane, uint64_t) noexcept {}
 +inline void end(Lane) noexcept {}
 +inline void gpu_sample(const char*,uint64_t) noexcept {}
-+inline void count(const char*, uint64_t, Lane = Render) noexcept {}
++inline void count(const char*, uint64_t, Lane = Render, uint64_t = UINT64_MAX) noexcept {}
++inline void interval(const char*, uint64_t, uint64_t, uint64_t, Lane) noexcept {}
 +struct Scope { explicit Scope(const char*, Lane = Main) noexcept {} };
 +struct Frame { Frame(Lane, uint64_t) noexcept {} };
 +#endif
@@ -311,20 +318,21 @@ index 0a88569d..7d8a4d46 100644
                            const f32 color[3]);
  GXBool GXPortShadowBoxCasts(const f32 min[3], const f32 max[3]);
 diff --git a/extern/aurora/lib/aurora.cpp b/extern/aurora/lib/aurora.cpp
-index e88d777f..3ddc42f2 100644
+index e88d777f..335c69d5 100644
 --- a/extern/aurora/lib/aurora.cpp
 +++ b/extern/aurora/lib/aurora.cpp
-@@ -50,6 +50,9 @@
+@@ -50,6 +50,10 @@
  #include "tracy/Tracy.hpp"
  
  namespace aurora {
 +#if defined(__ORBIS__)
++void prime_orbis_prepare_present();
 +void prime_orbis_present_queued();
 +#endif
  AuroraConfig g_config;
  // aurora_set_graphics_quality request: msaa << 16 | anisotropy, 0 = none.
  std::atomic<uint32_t> g_pendingQuality{0};
-@@ -470,10 +473,19 @@ void end_frame() noexcept {
+@@ -470,10 +474,19 @@ void end_frame() noexcept {
    } resizeFrameTimer;
  #ifdef AURORA_ENABLE_GX
    phase::set(phase::Main, "end_frame (recording and queueing the frame)");
@@ -347,7 +355,17 @@ index e88d777f..3ddc42f2 100644
    auto imguiDrawData = imgui::freeze();
  
    const auto& presentSource = webgpu::present_source();
-@@ -603,6 +615,10 @@ void end_frame() noexcept {
+@@ -598,11 +611,20 @@ void end_frame() noexcept {
+         window::SurfaceLock surfaceLock;
+         if (window::is_presentable()) {
+           phase::set(phase::Render, "surface Present");
++#if defined(__ORBIS__)
++          // Wait for native display capacity before Dawn takes its device
++          // guard. The real Present still checks every GPU/display owner.
++          ::aurora::prime_orbis_prepare_present();
++#endif
+           status = g_surface.Present();
+         }
        }
        phase::set(phase::Render, "after present");
        if (status) {
@@ -1124,7 +1142,7 @@ index 00000000..b01290a6
 +};
 +} // namespace aurora::gfx
 diff --git a/extern/aurora/lib/gfx/frame.cpp b/extern/aurora/lib/gfx/frame.cpp
-index 744d19c1..374ebc6b 100644
+index 744d19c1..b00dfc30 100644
 --- a/extern/aurora/lib/gfx/frame.cpp
 +++ b/extern/aurora/lib/gfx/frame.cpp
 @@ -1,3 +1,4 @@
@@ -1178,12 +1196,61 @@ index 744d19c1..374ebc6b 100644
    }
  }
  
-@@ -964,15 +997,27 @@ bool wait_for_staging_buffer(size_t slot) {
+@@ -346,6 +379,8 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
+     return;
+   }
  
++  trace::Scope mapRequest("staging MapAsync request (inclusive)",
++                          releaseSlotOnCompletion ? trace::Render : trace::Main);
+   g_stagingBuffers[slot].MapAsync(
+       wgpu::MapMode::Write, 0, g_bufferSizes.staging(), wgpu::CallbackMode::AllowSpontaneous,
+       [slot, releaseSlotOnCompletion](wgpu::MapAsyncStatus status, wgpu::StringView message) {
+@@ -354,6 +389,9 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
+           g_mappingStates[slot].store(BufferMapState::Unmapped, std::memory_order_release);
+           if (releaseSlotOnCompletion) {
+             g_stagingSlots.release(slot);
++            // Spontaneous callbacks may run on another thread: aggregate the
++            // real completion reason without inventing that thread's frame.
++            trace::count("staging map aborted releases", 1, trace::Render, 0);
+           }
+           return;
+         }
+@@ -362,6 +400,7 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
+         g_mappingStates[slot].store(BufferMapState::Mapped, std::memory_order_release);
+         if (releaseSlotOnCompletion) {
+           g_stagingSlots.release(slot);
++          trace::count("staging map completed releases", 1, trace::Render, 0);
+         }
+       });
+ }
+@@ -950,14 +989,17 @@ void shutdown() {
+ bool wait_for_staging_buffer(size_t slot) {
+   ZoneScopedN("Wait for buffer map");
+   map_staging_buffer(slot);
++  uint64_t waitStart = 0;
+   while (true) {
+     const auto mappingState = g_mappingStates[slot].load(std::memory_order_acquire);
+-    if (mappingState == BufferMapState::Mapped) {
+-      return true;
+-    }
+-    if (mappingState == BufferMapState::Unmapped) {
+-      return false;
++    if (mappingState != BufferMapState::Mapping) {
++      if (waitStart) trace::interval("CPU staging map readiness wait (inclusive)", trace::frame_id(),
++                                     waitStart, trace::now_ns() - waitStart, trace::Main);
++      if (mappingState == BufferMapState::Unmapped)
++        trace::count("CPU staging map readiness failures", 1, trace::Main);
++      return mappingState == BufferMapState::Mapped;
+     }
++    if (!waitStart) waitStart = trace::now_ns();
+     wait_for_gpu_progress(std::chrono::milliseconds{1});
+   }
+ }
+@@ -965,27 +1007,52 @@ bool wait_for_staging_buffer(size_t slot) {
  size_t acquire_frame_slot() {
    ZoneScopedN("Acquire frame slot");
-+  trace::Scope slotWait("CPU frame packet wait (inclusive)");
    const auto waitStart = PresentClock::now();
++  uint64_t traceWaitStart = 0;
 +  uint32_t waits = 0;
 +  auto slot = g_frameSlots.try_acquire();
    while (true) {
@@ -1192,6 +1259,11 @@ index 744d19c1..374ebc6b 100644
        const auto waitDuration = PresentClock::now() - waitStart;
        const double waitMs = std::chrono::duration<double, std::milli>{waitDuration}.count();
        TracyPlot("aurora: frameSlotWaitMs", waitMs);
++      if (traceWaitStart) {
++        trace::interval("CPU frame packet wait (inclusive)", trace::frame_id(), traceWaitStart,
++                        trace::now_ns() - traceWaitStart, trace::Main);
++        trace::count("CPU frame packet occupied depth sum", FrameSlotCount, trace::Main);
++      }
 +      trace::count("frame slot completion waits", waits, trace::Main);
        return *slot;
      }
@@ -1200,6 +1272,7 @@ index 744d19c1..374ebc6b 100644
 +    // on that release, rather than sleeping past it in a 100 us polling loop.
 +    // Keep a bounded progress pump for callbacks on devices that require it;
 +    // GPU staging-buffer mapping has its own, unchanged wait below.
++    if (!traceWaitStart) traceWaitStart = trace::now_ns();
 +    if (render_worker::is_idle()) {
 +      enqueue_process_events();
 +    }
@@ -1208,7 +1281,27 @@ index 744d19c1..374ebc6b 100644
    }
  }
  
-@@ -1190,6 +1235,7 @@ bool begin_frame() {
+ std::optional<size_t> acquire_mapped_staging_buffer() {
+   ZoneScopedN("Acquire mapped staging buffer");
++  uint64_t waitStart = 0;
+   while (true) {
+     if (auto slot = g_stagingSlots.try_acquire()) {
++      if (waitStart) {
++        trace::interval("CPU staging capacity wait (inclusive)", trace::frame_id(), waitStart,
++                        trace::now_ns() - waitStart, trace::Main);
++        trace::count("CPU staging capacity occupied depth sum", StagingBufferCount, trace::Main);
++      }
+       if (wait_for_staging_buffer(*slot)) {
+         return *slot;
+       }
+       g_stagingSlots.release(*slot);
+       return std::nullopt;
+     }
++    if (!waitStart) waitStart = trace::now_ns();
+     wait_for_gpu_progress(std::chrono::microseconds{100});
+   }
+ }
+@@ -1190,6 +1257,7 @@ bool begin_frame() {
    auto& frame = g_framePackets[frameSlot];
    frame = {};
    frame.frameId = g_nextFrameId++;
@@ -1216,7 +1309,7 @@ index 744d19c1..374ebc6b 100644
    frame.frameIndex = g_frameIndex;
    frame.stagingBuffer = *stagingSlot;
    size_t bufferOffset = 0;
-@@ -1212,6 +1258,7 @@ bool begin_frame() {
+@@ -1212,6 +1280,7 @@ bool begin_frame() {
    begin_recording(frame, frameSlot);
    begin_pipeline_frame();
    render_worker::enqueue_begin_frame(frame.frameId, [frameSlot] {
@@ -1224,7 +1317,7 @@ index 744d19c1..374ebc6b 100644
      constexpr wgpu::CommandEncoderDescriptor EncoderDescriptor{.label = "Redraw encoder"};
      g_framePackets[frameSlot].encoder = g_device.CreateCommandEncoder(&EncoderDescriptor);
      webgpu::gpu_prof::frame_begin(g_framePackets[frameSlot].encoder);
-@@ -1240,11 +1287,16 @@ void end_frame(EndFrameCallback callback) {
+@@ -1240,11 +1309,16 @@ void end_frame(EndFrameCallback callback) {
    render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, callback = std::move(callback)]() mutable {
      auto& packet = g_framePackets[frameSlot];
      const uint32_t finishedFrame = packet.frameIndex;
@@ -1241,7 +1334,11 @@ index 744d19c1..374ebc6b 100644
      packet = {};
      g_resources.stats.drawCallCount = stats.drawCallCount;
      g_resources.stats.mergedDrawCallCount = stats.mergedDrawCallCount;
-@@ -1261,6 +1313,7 @@ void end_frame(EndFrameCallback callback) {
+@@ -1258,9 +1332,11 @@ void end_frame(EndFrameCallback callback) {
+       callback(encoder, std::move(afterSubmitCallbacks));
+     }
+     g_frameSlots.release(frameSlot);
++    trace::count("CPU packet releases after callback", 1, trace::Render);
      expire_cached_bind_groups(finishedFrame);
      map_staging_buffer(stagingSlot, true);
      process_events();
@@ -2019,10 +2116,122 @@ index 1c162a55..3ee82153 100644
  Range push_verts(ArrayRef<T> data, size_t alignment) {
    return push_verts(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(T), alignment);
 diff --git a/extern/aurora/lib/gfx/render_worker.cpp b/extern/aurora/lib/gfx/render_worker.cpp
-index 85783b60..ddced7c2 100644
+index 85783b60..8f548a50 100644
 --- a/extern/aurora/lib/gfx/render_worker.cpp
 +++ b/extern/aurora/lib/gfx/render_worker.cpp
-@@ -167,6 +167,22 @@ std::optional<size_t> FrameSlotPool::try_acquire() {
+@@ -1,4 +1,5 @@
+ #include "render_worker.hpp"
++#include <aurora/frame_trace.hpp>
+ 
+ #include "../thread.hpp"
+ 
+@@ -34,9 +35,40 @@ void complete_sync(const std::shared_ptr<SyncState>& sync) {
+ void worker_main(std::stop_token token) {
+   g_workerThreadId = std::this_thread::get_id();
+ 
++  uint64_t producerWaitStart = 0, producerWaitNs = 0, producerWaitFrame = 0;
+   while (true) {
+     bool closed = false;
+-    auto item = g_queue.pop_for(IdlePumpInterval, closed);
++    const uint64_t activeFrame = trace::frame_id(trace::Render);
++    uint64_t blockedNs = 0;
++    auto item = g_queue.pop_for(IdlePumpInterval, closed, &blockedNs);
++    if (activeFrame && blockedNs) {
++      if (!producerWaitNs || producerWaitFrame != activeFrame) {
++        producerWaitFrame = activeFrame;
++        producerWaitStart = trace::now_ns() - blockedNs;
++        producerWaitNs = 0;
++      }
++      producerWaitNs += blockedNs;
++    }
++    // Only waits within a live rendering frame belong to that frame. Idle
++    // time between frames is not added to the next frame's render duration.
++    if (!activeFrame) producerWaitNs = 0;
++    if ((item || closed) && producerWaitNs) {
++      trace::interval("render producer-ready wait (inclusive)", producerWaitFrame,
++                      producerWaitStart, producerWaitNs, trace::Render);
++      trace::count("render producer-ready wakes", 1, trace::Render, producerWaitFrame);
++      trace::count("render producer-ready queue depth sum", item ? item->depthAtPop : 0,
++                   trace::Render, producerWaitFrame);
++      if (closed) trace::count("render queue closed wakes", 1, trace::Render, producerWaitFrame);
++      producerWaitNs = 0;
++    }
++    if (item && item->readyNs) {
++      const auto now = trace::now_ns();
++      trace::interval(item->type == ItemType::BeginFrame ? "render begin packet queue residence (inclusive)"
++                                                       : "render end packet queue residence (inclusive)",
++                      item->traceFrameId, item->readyNs, now - item->readyNs, trace::Render);
++      trace::count("render frame packet queue depth sum", item->depthAtPop, trace::Render, item->traceFrameId);
++      trace::count("render queued frame packets", 1, trace::Render, item->traceFrameId);
++    }
+     if (!item) {
+       if (closed || token.stop_requested()) {
+         break;
+@@ -48,8 +80,11 @@ void worker_main(std::stop_token token) {
+       ZoneScopedN("QueueItem work");
+       item->work();
+     }
+-    complete_sync(item->sync);
++    // Publish queue accounting before waking a synchronize() waiter. All
++    // callback work (including its real GPU/staging ownership handoffs) has
++    // returned; notification must not race the item's pending decrement.
+     g_pendingItems.fetch_sub(1, std::memory_order_acq_rel);
++    complete_sync(item->sync);
+     if (item->type == ItemType::Shutdown) {
+       break;
+     }
+@@ -87,25 +122,44 @@ BoundedQueue::BoundedQueue(size_t capacity) : m_capacity(capacity) {}
+ 
+ bool BoundedQueue::push(QueueItem item) {
+   ZoneScoped;
++  if (!item.traceFrameId) item.traceFrameId = trace::frame_id(trace::Main);
++  const uint64_t frame = item.traceFrameId;
+   std::unique_lock lock{m_mutex};
++  const bool blocked = !m_closed && m_items.size() >= m_capacity;
++  const auto start = blocked ? trace::now_ns() : 0;
++  const size_t depth = m_items.size();
+   m_notFull.wait(lock, [&] { return m_closed || m_items.size() < m_capacity; });
+-  if (m_closed) {
+-    return false;
++  const bool closed = m_closed;
++  if (!closed) {
++    if (frame && (item.type == ItemType::BeginFrame || item.type == ItemType::EndFrame))
++      item.readyNs = trace::now_ns();
++    m_items.emplace_back(std::move(item));
+   }
+-  m_items.emplace_back(std::move(item));
+   lock.unlock();
+-  m_notEmpty.notify_one();
+-  return true;
++  if (!closed) m_notEmpty.notify_one();
++  if (blocked) {
++    trace::interval("render queue capacity wait (inclusive)", frame, start, trace::now_ns() - start, trace::Main);
++    trace::count("render queue capacity wakes", 1, trace::Main, frame);
++    trace::count("render queue capacity depth sum", depth, trace::Main, frame);
++    if (closed) trace::count("render queue closed wakes", 1, trace::Main, frame);
++  }
++  return !closed;
+ }
+ 
+-std::optional<QueueItem> BoundedQueue::pop_for(std::chrono::milliseconds timeout, bool& closed) {
++std::optional<QueueItem> BoundedQueue::pop_for(std::chrono::milliseconds timeout, bool& closed,
++                                             uint64_t* blockedNs) {
++  if (blockedNs) *blockedNs = 0;
+   std::unique_lock lock{m_mutex};
++  const bool blocked = blockedNs && !m_closed && m_items.empty();
++  const auto start = blocked ? trace::now_ns() : 0;
+   m_notEmpty.wait_for(lock, timeout, [&] { return m_closed || !m_items.empty(); });
++  if (blocked) *blockedNs = trace::now_ns() - start;
+   closed = m_closed && m_items.empty();
+   if (m_items.empty()) {
+     return std::nullopt;
+   }
+   auto item = std::move(m_items.front());
++  item.depthAtPop = m_items.size();
+   m_items.pop_front();
+   lock.unlock();
+   m_notFull.notify_one();
+@@ -167,6 +221,22 @@ std::optional<size_t> FrameSlotPool::try_acquire() {
    return std::nullopt;
  }
  
@@ -2046,10 +2255,30 @@ index 85783b60..ddced7c2 100644
    {
      std::lock_guard lock{m_mutex};
 diff --git a/extern/aurora/lib/gfx/render_worker.hpp b/extern/aurora/lib/gfx/render_worker.hpp
-index 7d652caf..60cdddb1 100644
+index 7d652caf..332ae7fb 100644
 --- a/extern/aurora/lib/gfx/render_worker.hpp
 +++ b/extern/aurora/lib/gfx/render_worker.hpp
-@@ -62,6 +62,8 @@ public:
+@@ -34,6 +34,9 @@ struct QueueItem {
+   ItemType type = ItemType::Sync;
+   uint64_t frameId = 0;
+   uint32_t passIndex = 0;
++  uint64_t traceFrameId = 0; // canonical trace ID, not the internal packet serial
++  uint64_t readyNs = 0;
++  size_t depthAtPop = 0;
+   WorkCallback work;
+   std::shared_ptr<SyncState> sync;
+ };
+@@ -43,7 +46,8 @@ public:
+   explicit BoundedQueue(size_t capacity);
+ 
+   bool push(QueueItem item);
+-  std::optional<QueueItem> pop_for(std::chrono::milliseconds timeout, bool& closed);
++  std::optional<QueueItem> pop_for(std::chrono::milliseconds timeout, bool& closed,
++                                   uint64_t* blockedNs = nullptr);
+   void close();
+   void reset();
+   [[nodiscard]] size_t size() const;
+@@ -62,6 +66,8 @@ public:
    explicit FrameSlotPool(size_t slotCount);
  
    size_t acquire();
@@ -4454,6 +4683,19 @@ index 99bf0f79..0155fc6e 100644
    TRY_WARN(SDL_RestoreWindow(g_window), "Failed to un-maximize window: {}", SDL_GetError());
    TRY_WARN(SDL_SetWindowSize(g_window, width, height), "Failed to set window size: {}", SDL_GetError());
  }
+diff --git a/extern/aurora/tests/CMakeLists.txt b/extern/aurora/tests/CMakeLists.txt
+index a8e977d9..d4bee509 100644
+--- a/extern/aurora/tests/CMakeLists.txt
++++ b/extern/aurora/tests/CMakeLists.txt
+@@ -186,7 +186,7 @@ if (AURORA_ENABLE_GX)
+     ../include
+     ../lib
+   )
+-  target_compile_definitions(render_worker_tests PRIVATE AURORA TARGET_PC)
++  target_compile_definitions(render_worker_tests PRIVATE AURORA TARGET_PC PRIME_TRACE_TEST=1)
+   target_link_libraries(render_worker_tests PRIVATE
+     gtest
+     gtest_main
 diff --git a/extern/aurora/tests/gfx_recording_test.cpp b/extern/aurora/tests/gfx_recording_test.cpp
 index aa2a8fcc..c0a6c27f 100644
 --- a/extern/aurora/tests/gfx_recording_test.cpp
@@ -5333,10 +5575,47 @@ index 55d850c7..16d3390e 100644
  // struct declares them, so a PBR draw's block grew by exactly 3 vec4.
  TEST_F(GxUniformLimitTest, PbrModelModulationIsPackedAfterRoomLights) {
 diff --git a/extern/aurora/tests/render_worker_test.cpp b/extern/aurora/tests/render_worker_test.cpp
-index 74e83edc..8ca06e5d 100644
+index 74e83edc..210b23c8 100644
 --- a/extern/aurora/tests/render_worker_test.cpp
 +++ b/extern/aurora/tests/render_worker_test.cpp
-@@ -104,4 +104,84 @@ TEST(RenderWorkerFrameSlots, RecyclesReleasedSlots) {
+@@ -1,7 +1,9 @@
+ #include "../lib/gfx/render_worker.hpp"
++#include <aurora/frame_trace.hpp>
+ 
+ #include <atomic>
+ #include <chrono>
++#include <cstring>
+ #include <future>
+ #include <thread>
+ #include <vector>
+@@ -15,9 +17,25 @@ using aurora::gfx::render_worker::FrameSlotPool;
+ using aurora::gfx::render_worker::ItemType;
+ using aurora::gfx::render_worker::QueueItem;
+ 
++std::vector<aurora::trace::Event> take_trace() {
++  std::vector<aurora::trace::Event> events;
++  for (unsigned i = 0; i < aurora::trace::MaxThreads; ++i)
++    aurora::trace::drain(i, [&](const auto& event) { events.push_back(event); });
++  return events;
++}
++uint64_t trace_value(const std::vector<aurora::trace::Event>& events, const char* name,
++                     uint64_t frame, aurora::trace::Lane lane) {
++  uint64_t value = 0;
++  for (const auto& event : events)
++    if (event.frame == frame && event.lane == lane && !std::strcmp(event.name, name)) value += event.value;
++  return value;
++}
+ class RenderWorkerTest : public testing::Test {
+ protected:
+-  void TearDown() override { aurora::gfx::render_worker::shutdown(); }
++  void TearDown() override {
++    aurora::gfx::render_worker::shutdown();
++    (void)take_trace(); // return drained retired SPSC registrations after each worker lifetime
++  }
+ };
+ 
+ TEST(RenderWorkerQueue, PreservesOrdering) {
+@@ -104,4 +122,187 @@ TEST(RenderWorkerFrameSlots, RecyclesReleasedSlots) {
    slots.release(second);
    EXPECT_EQ(slots.free_count(), 1u);
  }
@@ -5419,6 +5698,109 @@ index 74e83edc..8ca06e5d 100644
 +  for (auto& worker : workers) worker.join();
 +  EXPECT_EQ(violations.load(), 0);
 +  EXPECT_EQ(slots.free_count(), 1u);
++}
++TEST(RenderWorkerQueue, CapacityWakeTraceKeepsCanonicalFrameAndQueueContents) {
++  (void)take_trace();
++  BoundedQueue queue{1};
++  ASSERT_TRUE(queue.push(QueueItem{.type = ItemType::BeginFrame, .frameId = 1}));
++  auto pushed = std::async(std::launch::async, [&] {
++    return queue.push(QueueItem{.type = ItemType::EndFrame, .frameId = 2, .traceFrameId = 9002});
++  });
++  EXPECT_EQ(pushed.wait_for(5ms), std::future_status::timeout);
++  bool closed = false;
++  const auto first = queue.pop_for(0ms, closed);
++  ASSERT_TRUE(first);EXPECT_EQ(first->frameId, 1u);
++  ASSERT_EQ(pushed.wait_for(1s), std::future_status::ready);EXPECT_TRUE(pushed.get());
++  const auto second = queue.pop_for(0ms, closed);
++  ASSERT_TRUE(second);EXPECT_EQ(second->frameId, 2u);EXPECT_EQ(second->traceFrameId, 9002u);
++  const auto events = take_trace();
++  EXPECT_GT(trace_value(events, "render queue capacity wait (inclusive)", 9002, aurora::trace::Main), 0u);
++  EXPECT_EQ(trace_value(events, "render queue capacity wakes", 9002, aurora::trace::Main), 1u);
++  EXPECT_EQ(trace_value(events, "render queue capacity depth sum", 9002, aurora::trace::Main), 1u);
++  EXPECT_EQ(trace_value(events, "render queue closed wakes", 9002, aurora::trace::Main), 0u);
++}
++
++TEST(RenderWorkerQueue, ClosedCapacityWakeDoesNotInsertOrReportSuccessfulRelease) {
++  (void)take_trace();
++  BoundedQueue queue{1};
++  ASSERT_TRUE(queue.push(QueueItem{.type = ItemType::BeginFrame, .frameId = 3}));
++  auto pushed = std::async(std::launch::async, [&] {
++    return queue.push(QueueItem{.type = ItemType::EndFrame, .frameId = 4, .traceFrameId = 9004});
++  });
++  EXPECT_EQ(pushed.wait_for(5ms), std::future_status::timeout);
++  queue.close();
++  ASSERT_EQ(pushed.wait_for(1s), std::future_status::ready);EXPECT_FALSE(pushed.get());
++  bool closed = false;
++  const auto retained = queue.pop_for(0ms, closed);ASSERT_TRUE(retained);EXPECT_EQ(retained->frameId, 3u);
++  EXPECT_FALSE(queue.pop_for(0ms, closed));EXPECT_TRUE(closed);
++  const auto events = take_trace();
++  EXPECT_GT(trace_value(events, "render queue capacity wait (inclusive)", 9004, aurora::trace::Main), 0u);
++  EXPECT_EQ(trace_value(events, "render queue closed wakes", 9004, aurora::trace::Main), 1u);
++  EXPECT_EQ(trace_value(events, "render queue capacity depth sum", 9004, aurora::trace::Main), 1u);
++}
++
++TEST(RenderWorkerQueue, ConsumerTimingOnlyCountsActualEmptyWaits) {
++  BoundedQueue queue{1};bool closed = false;uint64_t blocked = UINT64_MAX;
++  EXPECT_FALSE(queue.pop_for(1ms, closed, &blocked));EXPECT_GT(blocked, 0u);
++  ASSERT_TRUE(queue.push(QueueItem{.type = ItemType::BeginFrame}));
++  auto item = queue.pop_for(0ms, closed, &blocked);ASSERT_TRUE(item);
++  EXPECT_EQ(blocked, 0u);EXPECT_EQ(item->depthAtPop, 1u);
++  queue.close();EXPECT_FALSE(queue.pop_for(10ms, closed, &blocked));EXPECT_TRUE(closed);EXPECT_EQ(blocked, 0u);
++}
++
++TEST_F(RenderWorkerTest, ProducerReadyWaitAndQueueResidenceUseCanonicalFrame) {
++  (void)take_trace();
++  std::promise<void> began, ended;
++  aurora::trace::begin(aurora::trace::Main, 9512);
++  aurora::gfx::render_worker::initialize();
++  aurora::gfx::render_worker::enqueue_begin_frame(12, [&] {
++    aurora::trace::begin(aurora::trace::Render, 9512);began.set_value();
++  });
++  began.get_future().wait();
++  // Leave the real worker's queue empty while its frame is live. The idle
++  // timed polls must combine into one wait, not a fabricated new-frame cost.
++  std::this_thread::sleep_for(5ms);
++  aurora::gfx::render_worker::enqueue_end_frame(12, [&] {
++    aurora::trace::end(aurora::trace::Render);ended.set_value();
++  });
++  ended.get_future().wait();aurora::gfx::render_worker::synchronize();
++  aurora::trace::end(aurora::trace::Main);
++  const auto events = take_trace();
++  EXPECT_GT(trace_value(events, "render producer-ready wait (inclusive)", 9512, aurora::trace::Render), 0u);
++  EXPECT_EQ(trace_value(events, "render producer-ready wakes", 9512, aurora::trace::Render), 1u);
++  EXPECT_EQ(trace_value(events, "render producer-ready queue depth sum", 9512, aurora::trace::Render), 1u);
++  EXPECT_GT(trace_value(events, "render begin packet queue residence (inclusive)", 9512, aurora::trace::Render), 0u);
++  EXPECT_GT(trace_value(events, "render end packet queue residence (inclusive)", 9512, aurora::trace::Render), 0u);
++  EXPECT_EQ(trace_value(events, "render queued frame packets", 9512, aurora::trace::Render), 2u);
++  for (const auto& event : events) EXPECT_NE(event.frame, 12u);
++}
++
++TEST_F(RenderWorkerTest, ActiveCallbackRetainsAdmissionUntilItsRealCompletion) {
++  FrameSlotPool slots{2};const auto first = slots.acquire();const auto second = slots.acquire();
++  std::promise<void> entered, complete;auto completion = complete.get_future().share();
++  aurora::gfx::render_worker::initialize();
++  aurora::gfx::render_worker::enqueue_end_frame(31, [&] {
++    entered.set_value();completion.wait();slots.release(first);
++  });
++  entered.get_future().wait();
++  // Two active-or-queued frames remain the bound even if all packet encoding
++  // has ended. A pending submit/present callback is still an admitted frame.
++  EXPECT_FALSE(slots.acquire_for(2ms));EXPECT_EQ(slots.free_count(), 0u);
++  complete.set_value();aurora::gfx::render_worker::synchronize();
++  EXPECT_EQ(slots.acquire_for(0ns), first);EXPECT_EQ(slots.free_count(), 0u);
++  slots.release(first);slots.release(second);EXPECT_EQ(slots.free_count(), 2u);
++}
++TEST_F(RenderWorkerTest, SyncPublishesRetiredAccountingBeforeWakingSoleProducer) {
++  std::atomic_uint completed = 0;
++  aurora::gfx::render_worker::initialize();
++  for (unsigned n = 1; n <= 500; ++n) {
++    aurora::gfx::render_worker::enqueue_work([&] { completed.fetch_add(1, std::memory_order_release); });
++    aurora::gfx::render_worker::synchronize();
++    EXPECT_EQ(completed.load(std::memory_order_acquire), n);
++    // No other producer enqueues here. Later concurrent work would correctly
++    // keep is_idle false; synchronize only fences items before its own marker.
++    EXPECT_TRUE(aurora::gfx::render_worker::is_idle());
++  }
 +}
  } // namespace
 diff --git a/extern/aurora/tests/scene_hdr_test.cpp b/extern/aurora/tests/scene_hdr_test.cpp

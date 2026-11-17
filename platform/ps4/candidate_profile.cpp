@@ -147,6 +147,19 @@ void apply_candidate_environment(const CandidateProfile& p) {
         if(setenv("MP_DAWN_CALL_PROFILE",row.back()=='1'?"1":"0",1))
             throw std::runtime_error("Could not apply Vulkan call profiling option");
     }
+    // A restart-only A/B switch for the same executable and workload. Older
+    // packages ignore this versioned file; normal graphics settings stay intact.
+    const auto pacing=p.root/"benchmark-v3.cfg";
+    if(fs::exists(pacing)) {
+        if(fs::is_symlink(pacing) || !fs::is_regular_file(pacing) || fs::file_size(pacing)>128)
+            throw std::runtime_error("Invalid native presentation diagnostic configuration");
+        std::ifstream config(pacing);std::string row,extra;
+        if(!std::getline(config,row) || std::getline(config,extra) || config.bad() ||
+           (row!="present_prewait=0" && row!="present_prewait=1"))
+            throw std::runtime_error("Presentation diagnostic accepts present_prewait=0 or 1 only");
+        if(setenv("MP_PS4_PRESENT_PREWAIT",row.back()=='1'?"1":"0",1))
+            throw std::runtime_error("Could not apply native presentation diagnostic option");
+    }
     setenv("MP_PS4_CANDIDATE",p.key.c_str(),1);
     setenv("MP_PS4_LOG_ROOT",(p.root/"logs").c_str(),1);
     const auto log=p.root/"logs/frame-profile.jsonl";
