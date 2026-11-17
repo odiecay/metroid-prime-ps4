@@ -45,11 +45,9 @@ class Mesh:
                        ((X,y,z),(X,Y,z),(X,Y,Z),(X,y,Z))]:self.polygon(points,colour,material)
 
 def outline(w,d,r):
-    out=[]
-    for x,y,start in [(w/2-r,d/2-r,0),(-w/2+r,d/2-r,90),(-w/2+r,-d/2+r,180),(w/2-r,-d/2+r,270)]:
-        for i in range(4):
-            a=math.radians(start+i*30);out.append((x+r*math.cos(a),y+r*math.sin(a)))
-    return out
+    # CUH-1000 has crisp, mitred corners rather than the rounded Slim outline.
+    return [(w/2,d/2-r),(w/2-r,d/2),(-w/2+r,d/2),(-w/2,d/2-r),
+            (-w/2,-d/2+r),(-w/2+r,-d/2),(w/2-r,-d/2),(w/2,-d/2+r)]
 
 def clipped(poly,xcut,less):
     out=[]
@@ -61,40 +59,78 @@ def clipped(poly,xcut,less):
             t=(xcut-a[0])/(b[0]-a[0]);out.append((xcut,a[1]+t*(b[1]-a[1])))
     return out
 
-def slab(mesh,w,d,z0,z1):
-    bevel=.045;outer=outline(w,d,.09);inner=outline(w-2*bevel,d-2*bevel,.05)
-    rings=[[(x,y,z0)for x,y in inner],[(x,y,z0+bevel)for x,y in outer],
-           [(x,y,z1-bevel)for x,y in outer],[(x,y,z1)for x,y in inner]]
-    mesh.polygon(list(reversed(rings[0])),(31,35,43,255))
-    for low,high in zip(rings,rings[1:]):
-        colour=(65,72,84,255) if high is rings[-1] else (43,49,59,255)
-        for i in range(len(low)):
-            j=(i+1)%len(low);mesh.polygon([low[i],low[j],high[j],high[i]],colour)
-    for less,colour in [(True,(43,49,61,255)),(False,(66,73,84,255))]:
-        mesh.polygon([(x,y,z1)for x,y in clipped(inner,-.38,less)],colour)
+class Ps4Mesh(Mesh):
+    def polygon(self,points,colour,material=0):
+        # Original PS4's front and rear faces lean forwards as they rise.
+        # Width/height/depth follow Sony's 275 x 53 x 305 mm launch dimensions.
+        super().polygon([(x,y-.60*z,z)for x,y,z in points],colour,material)
+
+def slab(mesh,w,d,z0,z1,upper):
+    bevel=.014;outer=outline(w,d,.018);inner=outline(w-2*bevel,d-2*bevel,.012)
+    for left,cut in [(True,-.43),(False,-.40)]:
+        o=clipped(outer,cut,left);i=clipped(inner,cut,left)
+        rings=[[(x,y,z0)for x,y in i],[(x,y,z0+bevel)for x,y in o],
+               [(x,y,z1-bevel)for x,y in o],[(x,y,z1)for x,y in i]]
+        top=(30,37,48,255)if upper and left else(53,57,64,255)if upper else(36,40,47,255)
+        mesh.polygon(list(reversed(rings[0])),(18,22,28,255))
+        for layer,(low,high)in enumerate(zip(rings,rings[1:])):
+            for k in range(len(low)):
+                j=(k+1)%len(low);front=(low[k][1]+low[j][1])*.5<-d/2+.04
+                seam=abs(low[k][0]-cut)<.001 and abs(low[j][0]-cut)<.001
+                colour=(8,12,18,255)if seam else(28,33,41,255)if upper and left else(65,69,77,255)if front else(38,43,51,255)
+                if layer==2:colour=tuple(min(255,c+9)for c in top[:3])+(255,)
+                mesh.polygon([low[k],low[j],high[j],high[k]],colour)
+        mesh.polygon(rings[-1],top)
+
+def stroke(mesh,points,width,z=None,front=False,colour=(8,12,18,255),material=0):
+    for a,b in zip(points,points[1:]):
+        dx=b[0]-a[0];dy=b[1]-a[1];length=math.hypot(dx,dy)
+        px=-dy/length*width/2;py=dx/length*width/2
+        q=[(a[0]-px,a[1]-py),(b[0]-px,b[1]-py),(b[0]+px,b[1]+py),(a[0]+px,a[1]+py)]
+        mesh.polygon([(x,-1.3705,y)if front else(x,y,z)for x,y in q],colour,material)
 
 def build_mesh():
-    m=Mesh()
-    slab(m,2.72,2.82,-.255,-.035)
-    slab(m,2.72,2.82,.035,.255)
-    # Recessed middle band, slot, paired USB sockets and thin top status strip.
-    m.box((-1.315,-1.365,-.04),(1.315,1.365,.04),(12,16,22,255))
-    m.box((-1.02,-1.414,.065),(-.10,-1.409,.105),(3,5,8,255))
-    for x in (.21,.68):
-        m.box((x,-1.414,-.175),(x+.265,-1.409,-.075),(7,10,15,255))
-        m.box((x+.025,-1.418,-.147),(x+.24,-1.415,-.125),(92,103,118,255))
-    m.box((-.397,-1.2,.2555),(-.363,1.2,.259),(27,120,255,255),1)
-    m.box((-1.22,-1.416,.075),(-1.11,-1.411,.11),(40,145,255,255),1)
-    # Rear ventilation slots are shallow authored recesses, not transparent faces.
-    for i in range(13):
-        x=-1.16+i*.18;m.box((x,1.409,-.19),(x+.10,1.414,-.09),(8,11,17,255))
-    # Original monoline P/S/4 letter strokes; no imported font or logo image.
-    glyphs=[[(0,0,.04,.34),(0,.30,.19,.34),(.15,.16,.19,.34),(0,.15,.19,.19)],
-            [(0,.30,.19,.34),(0,.15,.04,.34),(0,.15,.19,.19),(.15,0,.19,.19),(0,0,.19,.04)],
-            [(0,.15,.04,.34),(.15,0,.19,.34),(0,.15,.19,.19)]]
-    for g,strokes in enumerate(glyphs):
-        for x,y,X,Y in strokes:
-            m.box((.43+g*.26+x,.70+y,.256),(.43+g*.26+X,.70+Y,.259),(150,161,178,255))
+    m=Ps4Mesh()
+    # Four sharp case blocks with a recessed horizontal seam and vertical panel split.
+    # Shear expands the 2.735 deep body to the published 3.05 total depth.
+    slab(m,2.75,2.735,-.265,-.045,False)
+    slab(m,2.75,2.735,.045,.265,True)
+    m.box((-1.31,-1.325,-.05),(1.31,1.325,.05),(9,13,19,255))
+    # A narrow illuminated seam, set below the lid rather than painted over it.
+    m.box((-.429,-1.345,.254),(-.401,1.342,.261),(9,24,42,255))
+    m.box((-.424,-1.340,.263),(-.406,1.337,.267),(27,133,255,255),1)
+    m.box((-.420,-1.338,.2672),(-.410,1.335,.268),(124,202,255,255),1)
+    # Slot and both USB sockets sit in the actual recessed interspace.
+    m.box((-1.22,-1.347,.000),(-.57,-1.326,.022),(2,4,7,255))
+    for x in (.12,.49):
+        m.box((x-.018,-1.352,-.037),(x+.188,-1.327,.037),(53,58,67,255))
+        m.box((x,-1.355,-.026),(x+.17,-1.350,.026),(2,5,9,255))
+        m.box((x+.018,-1.357,-.008),(x+.15,-1.354,.004),(71,88,111,255))
+    # The power/eject touch keys follow the split down the slanted front fascia.
+    for z in (.085,-.205):
+        m.box((-.429,-1.372,z),(-.401,-1.368,z+.095),(9,14,22,255))
+        m.box((-.421,-1.375,z+.040),(-.409,-1.372,z+.063),(145,157,171,255))
+    # Fine side and rear ventilation retains the sharp two-layer silhouette.
+    for side in (-1,1):
+        for k in range(18):
+            y=-1.12+k*.13
+            x=side*1.376
+            lo,hi=sorted((x,x+side*.007))
+            m.box((lo,y,-.033),(hi,y+.075,.030),(5,9,14,255))
+    for k in range(23):
+        x=-1.25+k*.11;m.box((x,1.368,-.196),(x+.062,1.374,-.090),(6,10,16,255))
+    # Recessed rear I/O is authored detail, not imported texture imagery.
+    for x,width in [(-1.12,.20),(-.72,.19),(-.36,.17),(.10,.22),(.78,.32)]:
+        m.box((x,1.342,-.018),(x+width,1.349,.027),(4,7,12,255))
+    # Authored thin-stroke PS4 wordmark on the front-right face, as on CUH-1000.
+    glyphs=[[(0,0),(0,.095),(.105,.095),(.105,.048),(0,.048)],
+            [(.105,.095),(0,.095),(0,.048),(.105,.048),(.105,0),(0,0)],
+            [(0,.095),(0,.045),(.105,.045),(.105,.095),(.105,0)]]
+    for g,points in enumerate(glyphs):
+        stroke(m,[(.79+g*.15+x,.115+y)for x,y in points],.010,front=True)
+    # Small, independently drawn P/S monogram on the glossy lid.
+    stroke(m,[(-.92,.91),(-.92,1.15),(-.80,1.15),(-.80,1.03),(-.92,1.03)],.025,z=.2665,colour=(121,133,150,255))
+    stroke(m,[(-.77,1.01),(-.86,.98),(-.73,.94),(-.84,.91)],.020,z=.2665,colour=(121,133,150,255))
     return m
 
 def material(index,lit):

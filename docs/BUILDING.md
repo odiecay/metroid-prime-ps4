@@ -57,7 +57,10 @@ The optional developer room tour uses `benchmark-tour.cfg` in
 settings into `benchmarks/tour-v1/`, with separate user data, caches and logs.
 The tour warps through six rooms with assisted inventory and four stationary
 camera directions; it is a rendering workload, not a gameplay completion test.
-Remove the request file and relaunch for normal play.
+For the movement workload, use `benchmark-play.cfg` containing exactly
+`PROJECT_PRIME_BENCHMARK_PLAY_V2` followed by a newline. Its separate data and
+logs are under `benchmarks/play-v2/`; it also enables sampled Vulkan diagnostics.
+Remove either request file and relaunch for normal play.
 
 Collect `benchmark-tour.jsonl` and `frame-profile.jsonl` from that folder's
 `logs/` directory, then analyse the matching launch on the PC:

@@ -2,6 +2,7 @@
 #include "benchmark_tour.hpp"
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -18,6 +19,7 @@ namespace prime {
 namespace {
 namespace fs = std::filesystem;
 constexpr std::string_view Request = "PROJECT_PRIME_BENCHMARK_TOUR_V1\n";
+constexpr std::string_view PlayRequest = "PROJECT_PRIME_BENCHMARK_PLAY_V2\n";
 constexpr uint64_t Second = 1000000000ull;
 constexpr unsigned WarmTicks = 180, ViewSettleTicks = 60, Passes = 2;
 constexpr uint64_t MeasureNs = 12 * Second, RoomTimeoutNs = 120 * Second;
@@ -33,7 +35,10 @@ constexpr std::array<Scene, 6> Scenes{{
 }};
 enum class Phase { Waiting, ViewSettle, Measuring, Finished };
 struct State {
-    bool enabled{}, started{}, inventory{};
+    bool enabled{}, started{}, inventory{}, play{}, placementReady{}, jumpSafe{}, havePosition{};
+    unsigned inputTick{}, power{}, charged{}, missiles{}, bombs{}, airFrames{}, morphFrames{}, lockFrames{}, guardStops{}, warps{};
+    double distance{}, aimDegrees{}; float lastX{}, lastY{}, lastZ{}, lastYaw{}, routeYaw{}, routeLength{}, openness{};
+    uint64_t setupNs{}, lastNs{}, lastTick{}, lastFrame{}; uint32_t lastWorld{}, lastArea{};
     unsigned scene{}, pass{}, view{}, settled{}, errors{};
     Phase phase = Phase::Waiting;
     uint64_t phaseStart{}, deadline{}, frames{}, lastMeasuredFrame{};
@@ -67,11 +72,24 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         "\"actual_world\":\"%08X\",\"actual_mrea\":\"%08X\",\"status\":\"%s\","
         "\"observed_frames\":%llu,\"failed_visits\":%u,\"assisted_inventory\":true,"
         "\"invulnerable\":true,\"cache_policy\":\"isolated_persistent\","
-        "\"workload\":\"stationary_authored_spawn_four_yaws\"}\n",
+        "\"workload\":\"%s\"",
         event, static_cast<unsigned long long>(ns), static_cast<unsigned long long>(frame),
         static_cast<unsigned long long>(tick), static_cast<unsigned>(state.pass * Scenes.size() + state.scene + 1),
         scene.name, state.pass + 1, state.view, state.view * 90, scene.world, scene.area,
-        actualWorld, actualArea, status, static_cast<unsigned long long>(state.frames), state.errors);
+        actualWorld, actualArea, status, static_cast<unsigned long long>(state.frames), state.errors,
+        state.play ? "scripted_native_input_v2" : "stationary_authored_spawn_four_yaws");
+    static constexpr const char* kinds[] = {"running_aim", "beam_jump", "missile_aim", "morph_roll_bombs"};
+    std::fprintf(state.log, ",\"input_source\":\"%s\",\"tour_version\":%u,\"view_kind\":\"%s\",\"dawn_call_profile\":%s,"
+        "\"movement_distance_m\":%.6f,\"aim_degrees\":%.4f,\"power_projectiles\":%u,\"charged_projectiles\":%u,"
+        "\"missile_projectiles\":%u,\"bomb_objects\":%u,\"airborne_frames\":%u,"
+        "\"morphed_frames\":%u,\"enemy_lock_frames\":%u,\"guard_stops\":%u,"
+        "\"unexpected_warps\":%u,\"route_length_m\":%.4f,\"openness_m\":%.4f,"
+        "\"jump_safe\":%s,\"setup_ns\":%llu,\"position\":[%.5f,%.5f,%.5f],\"route_yaw_degrees\":%.4f}\n",
+        state.play ? "virtual_gamecube_pad" : "none", state.play ? 2u : 1u, state.play ? kinds[state.view < 4 ? state.view : 3] : "fixed_yaw",
+        state.play ? "true" : "false", state.distance, state.aimDegrees, state.power, state.charged, state.missiles,
+        state.bombs, state.airFrames, state.morphFrames, state.lockFrames, state.guardStops,
+        state.warps, state.routeLength, state.openness, state.jumpSafe ? "true" : "false",
+        static_cast<unsigned long long>(state.setupNs),state.lastX,state.lastY,state.lastZ,state.routeYaw*57.295779513);
     if (std::ferror(state.log) || std::fflush(state.log) != 0) {
         std::fprintf(stderr, "[benchmark-tour] marker write failed; stopped without acceptance (run %s)\n", state.runId.c_str());
         state.phase = Phase::Finished; ++state.errors;
@@ -137,12 +155,16 @@ bool grant_inventory() {
 }
 bool begin_view(uint64_t ns, uint64_t tick, uint64_t frame) {
     char command[32]; std::snprintf(command, sizeof(command), "face %u", state.view * 90);
-    if (!queue(command)) return false;
+    if (!state.play && !queue(command)) return false;
+    state.placementReady = !state.play; state.havePosition = false; state.inputTick = 0;
+    state.power = state.charged = state.missiles = state.bombs = state.airFrames = state.morphFrames = 0;
+    state.lockFrames = state.guardStops = state.warps = 0; state.distance = 0; state.aimDegrees = 0;
     state.phase = Phase::ViewSettle; state.settled = 0; state.deadline = ns + RoomTimeoutNs;
     return marker("warm_begin", "ok", ns, tick, frame);
 }
 void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool ready, uint64_t ns) {
     if (!state.enabled || state.phase == Phase::Finished) return;
+    state.lastNs=ns; state.lastTick=tick; state.lastFrame=frame; state.lastWorld=world; state.lastArea=area;
     if (!state.started) {
         state.started = true; state.deadline = ns + RoomTimeoutNs;
         if (!marker("start", "ok", ns, tick, frame, world, area) ||
@@ -155,8 +177,17 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
     }
     if (state.phase == Phase::Measuring) {
         if (!ready || !here) { scene_error("lost_ready", ns, tick, frame, world, area); return; }
+        ++state.inputTick;
         if (frame != state.lastMeasuredFrame) { ++state.frames; state.lastMeasuredFrame = frame; }
         if (ns - state.phaseStart < MeasureNs) return;
+        if (state.play) {
+            const bool moved = state.distance >= (state.view == 0 ? 2.0 : 1.0);
+            const bool action = state.view == 0 ? state.aimDegrees >= 5 : (state.view == 1 ? state.power > 0 && (!state.jumpSafe || state.airFrames > 0) :
+                state.view == 2 ? state.missiles > 0 : state.morphFrames >= 30 && state.bombs > 0);
+            if (!moved || !action || state.warps) {
+                scene_error("insufficient_action", ns, tick, frame, world, area); return;
+            }
+        }
         if (!marker("measure_end", "ok", ns, tick, frame, world, area)) return;
         if (++state.view == 4) next_scene(ns, tick, frame);
         else if (!begin_view(ns, tick, frame)) scene_error("queue_full", ns, tick, frame, world, area);
@@ -171,7 +202,7 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
         if (++state.settled < WarmTicks) return;
         if (!marker("ready", "ok", ns, tick, frame, world, area)) return;
         if (!begin_view(ns, tick, frame)) scene_error("queue_full", ns, tick, frame, world, area);
-    } else if (++state.settled >= ViewSettleTicks) {
+    } else if (state.placementReady && ++state.settled >= ViewSettleTicks) {
         state.phase = Phase::Measuring; state.phaseStart = ns; state.frames = 0;
         state.lastMeasuredFrame = frame;
         marker("measure_begin", "ok", ns, tick, frame, world, area);
@@ -180,7 +211,9 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
 } // namespace
 
 bool prepare_benchmark_tour(const fs::path& root) {
-    const fs::path request = root / "benchmark-tour.cfg";
+    const fs::path playRequest = root / "benchmark-play.cfg";
+    const bool play = fs::exists(playRequest) || fs::is_symlink(playRequest);
+    const fs::path request = play ? playRequest : root / "benchmark-tour.cfg";
     if (!fs::exists(request) && !fs::is_symlink(request)) return false;
     if (state.enabled) throw std::runtime_error("Benchmark tour was already configured");
     if (fs::is_symlink(request) || !fs::is_regular_file(request) || fs::file_size(request) > 128)
@@ -188,12 +221,12 @@ bool prepare_benchmark_tour(const fs::path& root) {
     std::ifstream input(request, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(input)), {});
     if (!input.eof() && input.fail()) throw std::runtime_error("Could not read benchmark request");
-    if (text != Request) throw std::runtime_error("Benchmark tour request must be PROJECT_PRIME_BENCHMARK_TOUR_V1");
+    if (text != (play ? PlayRequest : Request)) throw std::runtime_error("Invalid benchmark request marker");
     const char* user = std::getenv("MP_USER_PATH");
     const fs::path settings = user ? fs::path(user) / "port_settings.ini" : fs::path{};
     if (settings.empty() || fs::is_symlink(settings) || !fs::is_regular_file(settings) || fs::file_size(settings) > 1024 * 1024)
         throw std::runtime_error("Benchmark requires the current port_settings.ini for identical graphics settings");
-    directory(root / "benchmarks"); const auto base = root / "benchmarks" / "tour-v1";
+    directory(root / "benchmarks"); const auto base = root / "benchmarks" / (play ? "play-v2" : "tour-v1");
     directory(base); directory(base / "user"); directory(base / "cache"); directory(base / "logs");
     directory(base / "cache" / "mesa");
     for (const auto& item : fs::recursive_directory_iterator(base))
@@ -208,8 +241,9 @@ bool prepare_benchmark_tour(const fs::path& root) {
         throw std::runtime_error("Invalid benchmark log destination");
     state.log = std::fopen(log.c_str(), "ab");
     if (!state.log) throw std::runtime_error("Could not open benchmark tour log");
+    state.play = play;
     state.session = prime_ps4_trace_session_id();
-    state.runId = state.session + "-tour-" + std::to_string(now_ns());
+    state.runId = state.session + (play ? "-play-" : "-tour-") + std::to_string(now_ns());
     environment("MP_USER_PATH", (base / "user").string());
     environment("MP_CACHE_PATH", (base / "cache").string());
     environment("MESA_SHADER_CACHE_DIR", (base / "cache" / "mesa").string());
@@ -219,11 +253,43 @@ bool prepare_benchmark_tour(const fs::path& root) {
     environment("MP_GODMODE", "1"); environment("MP_UPDATE_CHECK", "0");
     // No network console; the in-process queue is available without MP_CONSOLE.
     unsetenv("MP_CONSOLE");
+    if (play) environment("MP_DAWN_CALL_PROFILE", "1");
     state.enabled = true;
     return true;
 }
 bool benchmark_tour_enabled() noexcept { return state.enabled && state.phase != Phase::Finished; }
 fs::path benchmark_tour_log_root() { return state.logRoot; }
+bool benchmark_play_enabled() noexcept { return benchmark_tour_enabled() && state.play; }
+BenchmarkPlayControl benchmark_play_control() noexcept {
+    return {benchmark_play_enabled(), state.phase == Phase::ViewSettle && !state.placementReady,
+        state.phase == Phase::Measuring, static_cast<unsigned>(state.pass * Scenes.size() + state.scene + 1),
+        state.view, state.inputTick};
+}
+void benchmark_play_observe(const BenchmarkPlayObservation& p) {
+    if (!benchmark_play_enabled() || state.phase != Phase::Measuring) return;
+    if (!p.valid || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || !std::isfinite(p.yaw)) { ++state.warps; return; }
+    if (state.havePosition) {
+        const double dx=p.x-state.lastX,dy=p.y-state.lastY,dz=p.z-state.lastZ;
+        const double distance=std::sqrt(dx*dx+dy*dy+dz*dz);
+        if (distance>4.0) ++state.warps; else state.distance+=distance;
+        state.aimDegrees+=std::fabs(std::remainder(double(p.yaw)-state.lastYaw,6.283185307179586))*57.295779513;
+    }
+    state.havePosition=true;state.lastX=p.x;state.lastY=p.y;state.lastZ=p.z;state.lastYaw=p.yaw;
+    state.power+=p.power;state.charged+=p.charged;state.missiles+=p.missiles;state.bombs+=p.bombs;
+    state.airFrames+=p.airborne;state.morphFrames+=p.morphed;state.lockFrames+=p.lockedEnemy;state.guardStops+=p.guardStops;
+}
+void benchmark_play_placement(bool valid,float x,float y,float z,float length,float openness,bool jumpSafe,uint64_t setupNs,float yaw) {
+    if (!benchmark_play_enabled() || state.phase != Phase::ViewSettle) return;
+    state.routeLength=length;state.openness=openness;state.jumpSafe=jumpSafe;state.setupNs=setupNs;
+    state.lastX=x;state.lastY=y;state.lastZ=z;state.lastYaw=yaw;state.routeYaw=yaw;
+    if (!valid) { scene_error("no_safe_route",state.lastNs,state.lastTick,state.lastFrame,state.lastWorld,state.lastArea);return; }
+    state.placementReady=true;state.settled=0;
+    marker("placement", "ok", state.lastNs,state.lastTick,state.lastFrame,state.lastWorld,state.lastArea);
+}
+void benchmark_play_fail(const char* reason) {
+    if (benchmark_play_enabled()) scene_error(reason,state.lastNs,state.lastTick,state.lastFrame,state.lastWorld,state.lastArea);
+}
+
 #ifdef PRIME_BENCHMARK_TEST
 void benchmark_tour_reset_for_testing() {
     if (state.log) std::fclose(state.log);

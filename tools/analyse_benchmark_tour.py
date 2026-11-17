@@ -16,6 +16,8 @@ except ImportError:
 
 
 WINDOW_NS = 5_000_000_000
+# aurora::trace::Kind: Phase, Inclusive, Counter, Complete, Gpu, CpuTime.
+STAGE_KINDS = frozenset(range(6))
 FAIL_EVENTS = {'scene_error', 'error', 'timeout', 'aborted'}
 TERMINAL_EVENTS = {'complete', 'aborted', 'incomplete'}
 
@@ -60,7 +62,7 @@ def window_problem(row):
     for stage in stages:
         if not isinstance(stage, dict) or stage.get('lane') not in ('main', 'render'):
             return 'invalid_stages'
-        if not integer(stage.get('kind')) or stage['kind'] > 4 or not isinstance(stage.get('stage'), str):
+        if not integer(stage.get('kind')) or stage['kind'] not in STAGE_KINDS or not isinstance(stage.get('stage'), str):
             return 'invalid_stages'
         if not integer(stage.get('frames')):
             return 'invalid_stages'

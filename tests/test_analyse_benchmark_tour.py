@@ -149,6 +149,26 @@ class BenchmarkTourAnalysisTests(unittest.TestCase):
         for key in ('trace_integrity', 'invalid_stages', 'invalid_interval', 'no_completed_main_frames'):
             self.assertEqual(result['diagnostics'][key], 1)
 
+    def test_native_cpu_time_kind_five_is_valid_and_unknown_kinds_are_rejected(self):
+        # Exact native CpuTime stage schema captured from the running v45 tour.
+        # Keep this regression self-contained; private hardware logs are not
+        # required by the source release or represented as synthetic timings.
+        cpu = {'thread': 3, 'lane': 'main', 'stage': 'thread CPU execution', 'kind': 5,
+               'frames': 25, 'sum_ns': 50214000, 'median_ns': 1099000, 'p95_ns': 6403000,
+               'p99_ns': 7772000, 'max_ns': 7772000, 'counter': 0, 'unattributed_ns': 0,
+               'over_1667': 0, 'over_20': 0, 'over_25': 0, 'over_3333': 0}
+        row = window(5, 10)
+        row['stages'].append(cpu)
+        markers = [marker('start', 0), marker('measure_begin', 1),
+                   marker('measure_end', 13), marker('complete', 14)]
+        result = m.analyse([row], markers, 1)
+        self.assertEqual(result['counts']['accepted_visits'], 1)
+        self.assertIn('main: thread CPU execution', result['runs'][0]['visits'][0]['frame_report'])
+        for unknown in (6, 255, -1, True):
+            with self.subTest(kind=unknown):
+                row['stages'][-1] = dict(cpu, kind=unknown)
+                self.assertEqual(m.window_problem(row), 'invalid_stages')
+
     def test_window_medians_and_worst_percentiles_are_explicit(self):
         markers = [marker('start', 0), marker('measure_begin', 0), marker('measure_end', 20), marker('complete', 21)]
         result = m.analyse([window(0, 5, duration=10), window(5, 10, duration=30)], markers, 1)

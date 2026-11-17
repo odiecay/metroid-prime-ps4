@@ -1,6 +1,7 @@
 """Validate our texture-free console mesh through the actual game model loader."""
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import shlex
@@ -16,15 +17,23 @@ class MenuConsoleModelTests(unittest.TestCase):
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         mesh=module.build_mesh();data,bounds=module.encode(mesh)
         self.assertEqual(module.header(data),(ROOT/'platform/ps4/menu_console_model_data.hpp').read_text())
-        self.assertEqual(len(data),45952)
-        self.assertEqual(sum(map(len,mesh.triangles))//3,648)
-        self.assertEqual(len(mesh.vertices),1206)
-        self.assertLess(max(abs(x)for x in bounds),1.5)
+        self.assertEqual(len(data),85920)
+        self.assertEqual(sum(map(len,mesh.triangles))//3,1164)
+        self.assertEqual(len(mesh.vertices),2302)
+        self.assertLess(max(abs(x)for x in bounds),1.6)
         self.assertTrue(all(vertex[2][3]==255 for vertex in mesh.vertices))
+        for position,normal,colour in mesh.vertices:
+            self.assertTrue(all(math.isfinite(x)for x in position+normal))
+            self.assertAlmostEqual(sum(x*x for x in normal),1.,places=6)
+        for indices in mesh.triangles:
+            for offset in range(0,len(indices),3):
+                a,b,c=(mesh.vertices[indices[offset+i]]for i in range(3))
+                normal=module.normal(a[0],b[0],c[0])
+                self.assertGreater(sum(normal[i]*a[1][i]for i in range(3)),.99999)
 
     @unittest.skipUnless((HOST/'compile_commands.json').exists(),'populated host game build required')
     def test_actual_model_load_surface_fetches_and_lifetime(self):
-        out=ROOT/'build/menu-console-model-tests';out.mkdir(exist_ok=True)
+        out=Path(os.environ.get('PRIME_MENU_BUILD_DIR',str(ROOT/'build/menu-console-model-tests')));out.mkdir(parents=True,exist_ok=True)
         recipes=json.loads((HOST/'compile_commands.json').read_text())
         sanitizer=os.environ.get('PRIME_MENU_SANITIZE')=='1'
         extra=[]
@@ -43,7 +52,7 @@ class MenuConsoleModelTests(unittest.TestCase):
             args=shlex.split(recipe['command']);removed.append(args[args.index('-o')+1])
             obj=out/(Path(source or recipe['file']).stem+'.o')
             args[args.index('-o')+1]=str(obj);args[args.index('-c')+1]=str(source or recipe['file'])
-            args+=extra+['-I'+str(ROOT/'platform/ps4')]
+            args+=extra+['-I'+str(ROOT/'platform/ps4'),'-I'+str(ROOT/'game/MetroidPrimePort/extern/aurora/lib')]
             result=subprocess.run(args,cwd=recipe['directory'],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             objects.append(str(obj))

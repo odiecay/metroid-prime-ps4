@@ -49,7 +49,7 @@ class TraceTests(unittest.TestCase):
         self.assertEqual(stages['render','Dawn resource preparation (inclusive)']['sum_ns'],600000)
         self.assertEqual(stages['render','Dawn render-pass replay (inclusive)']['sum_ns'],3000000)
         self.assertEqual(stages['render','Dawn render-pass setup (inclusive)']['sum_ns'],200000)
-        self.assertEqual(window['stage_capacity'],144)
+        self.assertEqual(window['stage_capacity'],160)
         self.assertLess(window['stage_count'],window['stage_capacity'])
         self.assertTrue(window['vulkan_call_sampling']['enabled'])
         self.assertEqual(window['vulkan_call_sampling']['period'],64)
@@ -114,10 +114,10 @@ class TraceTests(unittest.TestCase):
         result=subprocess.run([program,log],capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         window=json.loads(log.read_text())
-        self.assertEqual(window['stage_capacity'],144)
-        self.assertEqual(window['stage_count'],144)
+        self.assertEqual(window['stage_capacity'],160)
+        self.assertEqual(window['stage_count'],160)
         self.assertEqual(window['unknown_stages'],16)
-        self.assertEqual(len(window['stages']),144)
+        self.assertEqual(len(window['stages']),160)
         self.assertEqual(window['dropped_events'],0)
 
     def test_stage_lookup_owns_labels_and_rejects_stale_pointer_hits(self):

@@ -1,0 +1,192 @@
+// SPDX-License-Identifier: MIT
+#include "benchmark_tour.hpp"
+#include "benchmark_play_logic.hpp"
+#include "port_debug.h"
+#include "MetroidPrime/CStateManager.hpp"
+#include "MetroidPrime/CWorld.hpp"
+#include "MetroidPrime/CGameArea.hpp"
+#include "MetroidPrime/CGameCollision.hpp"
+#include "MetroidPrime/CObjectList.hpp"
+#include "MetroidPrime/CHealthInfo.hpp"
+#include "MetroidPrime/Cameras/CCameraManager.hpp"
+#include "MetroidPrime/Player/CPlayer.hpp"
+#include "MetroidPrime/Enemies/CPatterned.hpp"
+#include "MetroidPrime/Weapons/CGameProjectile.hpp"
+#include "MetroidPrime/Weapons/CBomb.hpp"
+#include "MetroidPrime/TCastTo.hpp"
+#include "Collision/CCollisionPrimitive.hpp"
+#include "Collision/CRayCastResult.hpp"
+#include "Collision/CMaterialFilter.hpp"
+#include <aurora/frame_trace.hpp>
+#include <dolphin/pad.h>
+#include <algorithm>
+#include <bitset>
+#include <chrono>
+#include <cmath>
+
+namespace prime {
+namespace {
+using namespace benchmark_play;
+struct Adapter {
+    unsigned visit{},view{},unmorphTicks{};bool prepared{},measuring{},controls{},toEnd=true;
+    Route route;std::bitset<65536> seen;
+} adapter;
+Point point(const CVector3f& p){return {p.GetX(),p.GetY(),p.GetZ()};}
+CVector3f vector(Point p){return CVector3f(p.x,p.y,p.z);}
+uint64_t nanos(){return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+const CMaterialFilter Solid=CMaterialFilter::MakeIncludeExclude(CMaterialList(kMT_Solid),CMaterialList());
+
+bool setup(CStateManager& mgr,Route& route) {
+    route={};
+    CPlayer& player=*mgr.Player();const CVector3f origin=player.GetTranslation();
+    const CAABox& bounds=mgr.GetWorld()->GetAreaAlways(mgr.GetWorld()->GetCurrentAreaId()).GetAABB();
+    const auto floor=[&](Point desired,Point& out){
+        const CVector3f top(desired.x,desired.y,desired.z+2.f);
+        const auto hit=CGameCollision::RayStaticIntersection(mgr,top,CVector3f::Down(),5.f,Solid);
+        if(!hit.IsValid()||!(hit.GetPlane().GetNormal().GetZ()>=.85f)||
+           hit.GetMaterial().HasMaterial(kMT_Lava)||hit.GetMaterial().HasMaterial(kMT_Phazon))return false;
+        out=point(hit.GetPoint()+CVector3f(0,0,.15f));
+        const auto& lo=bounds.GetMinPoint();const auto& hi=bounds.GetMaxPoint();
+        return out.x>lo.GetX()+.6f&&out.x<hi.GetX()-.6f&&out.y>lo.GetY()+.6f&&out.y<hi.GetY()-.6f&&
+               out.z>lo.GetZ()&&out.z<hi.GetZ()-2.f;
+    };
+    const auto clear=[&](Point pos){
+        const auto* primitive=player.GetCollisionPrimitive();
+        const auto transform=CTransform4f::Translate(vector(pos)+player.GetPrimitiveOffset());
+        TEntityList near;mgr.BuildNearList(near,primitive->CalculateAABox(transform),Solid,&player);
+        return !CGameCollision::DetectCollisionBoolean(mgr,*primitive,transform,player.GetMaterialFilter(),near);
+    };
+    const auto score=[&](Point pos,float dx,float dy){
+        const auto eye=vector(pos)+CVector3f(0,0,player.GetEyeHeight());
+        float total=0;
+        for(float horizontal:{-.35f,0.f,.35f})for(float vertical:{-.18f,0.f,.18f}) {
+            CVector3f dir(dx*std::cos(horizontal)-dy*std::sin(horizontal),dx*std::sin(horizontal)+dy*std::cos(horizontal),vertical);
+            dir.Normalize();TEntityList near;mgr.BuildNearList(near,eye,dir,40.f,Solid,&player);
+            TUniqueId hitId=kInvalidUniqueId;
+            const auto hit=CGameCollision::RayWorldIntersection(mgr,hitId,eye,dir,40.f,Solid,near);
+            const float distance=hit.IsValid()?hit.GetTime():40.f;
+            if(distance<3.f)return 0.f;total+=distance;
+        }
+        return total/9.f;
+    };
+    if(!choose_route(point(origin),floor,clear,score,route))return false;
+    route.jumpSafe=true;
+    for(float height:{1.f,2.f,3.f})
+        if(!clear({route.start.x,route.start.y,route.start.z+height}))route.jumpSafe=false;
+    const CVector3f pos=vector(route.start),look(route.dx,route.dy,0);
+    player.Teleport(CTransform4f::LookAt(pos,pos+look,CVector3f::Up()),mgr,true);
+    player.SetVelocityWR(CVector3f::Zero());
+    return true;
+}
+BenchmarkPlayObservation observe(CStateManager& mgr,bool seed) {
+    const auto* player=mgr.GetPlayer();BenchmarkPlayObservation sample;
+    if(!player)return sample;
+    const auto pos=point(player->GetTranslation());sample.valid=true;sample.x=pos.x;sample.y=pos.y;sample.z=pos.z;
+    const auto forward=player->GetTransform().GetForward();sample.yaw=std::atan2(-forward.GetX(),forward.GetY());
+    sample.airborne=player->GetPlayerMovementState()!=NPlayer::kMS_OnGround;
+    sample.morphed=player->GetMorphballTransitionState()==CPlayer::kMS_Morphed;
+    const auto& objects=mgr.GetObjectListById(kOL_Actor);
+    for(int index=objects.GetFirstObjectIndex();index!=-1;index=objects.GetNextObjectIndex(index)) {
+        const auto* entity=objects[index];if(!entity)continue;
+        const CWeapon* weapon=nullptr;
+        if(const CGameProjectile* projectile=TCastToConstPtr<CGameProjectile>(entity))weapon=projectile;
+        else if(const CBomb* bomb=TCastToConstPtr<CBomb>(entity))weapon=bomb;
+        if(!weapon||weapon->GetOwnerId()!=player->GetUniqueId())continue;
+        const auto uid=weapon->GetUniqueId().Value();
+        if(adapter.seen.test(uid))continue;adapter.seen.set(uid);
+        if(seed)continue;
+        if(weapon->GetType()==kWT_Missile)++sample.missiles;
+        else if(weapon->GetType()==kWT_Bomb)++sample.bombs;
+        else if(weapon->GetType()>=kWT_Power&&weapon->GetType()<=kWT_Plasma){
+            ++sample.power;sample.charged+=weapon->HasAttrib(CWeapon::kPA_Charged);
+        }
+    }
+    if(player->GetOrbitState()==CPlayer::kOS_OrbitObject) {
+        const CPatterned* enemy=TCastToConstPtr<CPatterned>(mgr.GetObjectById(player->GetOrbitTargetId()));
+        sample.lockedEnemy=enemy!=nullptr;
+    }
+    return sample;
+}
+void neutral(){PADStatus pad{};pad.err=PAD_ERR_NONE;PADSetVirtualStatus(0,&pad);}
+void drive(CStateManager& mgr,const BenchmarkPlayControl& control) {
+    auto& player=*mgr.Player();const Point pos=point(player.GetTranslation());
+    if(!inside_route(adapter.route,pos)){
+        BenchmarkPlayObservation failure;failure.valid=true;failure.x=pos.x;failure.y=pos.y;failure.z=pos.z;
+        const auto forward=player.GetTransform().GetForward();failure.yaw=std::atan2(-forward.GetX(),forward.GetY());
+        failure.guardStops=1;benchmark_play_observe(failure);
+        neutral();benchmark_play_fail("route_guard");return;
+    }
+    const bool morphed=player.GetMorphballTransitionState()==CPlayer::kMS_Morphed;
+    const CPatterned* target=TCastToConstPtr<CPatterned>(mgr.GetObjectById(player.GetOrbitNextTargetId()));
+    const auto action=input(control.view,control.inputTick,morphed,adapter.route.jumpSafe,target!=nullptr);
+    PADStatus pad{};pad.err=PAD_ERR_NONE;
+    if(control.view!=3) {
+        const auto forward=player.GetTransform().GetForward();
+        const float desired=std::atan2(-adapter.route.dx,adapter.route.dy)+((control.inputTick/120)%2?.18f:-.18f);
+        const float error=std::remainder(desired-std::atan2(-forward.GetX(),forward.GetY()),6.283185307f);
+        pad.substickX=error>.04f?-64:error<-.04f?64:0;
+    }
+    if(action.fire)pad.button|=PAD_BUTTON_A;
+    if(action.missile)pad.button|=PAD_BUTTON_Y;
+    if(action.jump)pad.button|=PAD_BUTTON_B;
+    if(action.morph)pad.button|=PAD_BUTTON_X;
+    if(action.lock){pad.button|=PAD_TRIGGER_L;pad.triggerLeft=255;}
+    if(action.move) {
+        const float along=(pos.x-adapter.route.start.x)*adapter.route.dx+(pos.y-adapter.route.start.y)*adapter.route.dy;
+        if(along>=3.f)adapter.toEnd=false;else if(along<=1.f)adapter.toEnd=true;
+        const float sign=adapter.toEnd?1.f:-1.f;
+        const CVector3f goal(adapter.route.dx*sign,adapter.route.dy*sign,0);
+        const auto forward=player.GetTransform().GetForward(),right=player.GetTransform().GetRight();
+        const float travel=morphed?64.f:127.f;
+        pad.stickX=static_cast<s8>(std::clamp(CVector3f::Dot(goal,right)*travel,-127.f,127.f));
+        pad.stickY=static_cast<s8>(std::clamp(CVector3f::Dot(goal,forward)*travel,-127.f,127.f));
+    }
+    PADSetVirtualStatus(0,&pad);
+}
+}
+void benchmark_game_tick(CStateManager& mgr) {
+    const auto* world=mgr.GetWorld();const int index=world?world->GetCurrentAreaId().Value():-1;
+    const bool hasArea=world&&index>=0&&index<world->GetNumAreas();
+    const auto* area=hasArea?&world->GetAreaAlways(TAreaId(index)):nullptr;
+    const auto* player=mgr.GetPlayer();const bool play=benchmark_play_enabled();
+    if(play&&!adapter.controls){
+        // Fixed diagnostic input semantics, saved only in the isolated play-v2 user folder.
+        PortDebug::SetTwinStick(true);PortDebug::SetFlickStick(false);adapter.controls=true;
+    }
+    bool ready=area&&area->IsPostConstructed()&&!mgr.GetWantsToQuit()&&mgr.GetGameState()==CStateManager::kGS_Running&&
+        player&&!mgr.GetCameraManager()->IsInCinematicCamera()&&player->GetCameraState()!=CPlayer::kCS_Spawned;
+    if(!play)ready=ready&&!player->GetDisableInput()&&mgr.GetCameraManager()->IsInFPCamera();
+    auto before=benchmark_play_control();
+    if(play&&before.measuring) {
+        aurora::trace::Scope observer("benchmark gameplay observation",aurora::trace::Main);
+        benchmark_play_observe(observe(mgr,false));
+    }
+    prime_ps4_benchmark_tick(world?uint32_t(world->IGetWorldAssetId()):0,area?uint32_t(area->GetAreaAssetId()):0,
+        mgr.GetUpdateFrameIndex(),aurora::trace::frame_id(),ready);
+    if(!play)return;
+    auto control=benchmark_play_control();
+    if(!control.active){PADClearVirtualStatus(0);return;}
+    if(control.placing&&ready) {
+        neutral();
+        if(adapter.visit!=control.visit||adapter.view!=control.view){
+            adapter.visit=control.visit;adapter.view=control.view;adapter.prepared=false;adapter.unmorphTicks=0;
+        }
+        if(player->GetMorphballTransitionState()!=CPlayer::kMS_Unmorphed) {
+            PADStatus pad{};pad.err=PAD_ERR_NONE;
+            if(adapter.unmorphTicks++%120<6)pad.button=PAD_BUTTON_X;
+            PADSetVirtualStatus(0,&pad);return;
+        }
+        const auto start=nanos();const bool valid=setup(mgr,adapter.route);const auto elapsed=nanos()-start;
+        adapter.prepared=valid;adapter.toEnd=true;adapter.seen.reset();adapter.measuring=false;
+        benchmark_play_placement(valid,adapter.route.start.x,adapter.route.start.y,adapter.route.start.z,
+            adapter.route.length,adapter.route.openness,adapter.route.jumpSafe,elapsed,
+            std::atan2(-adapter.route.dx,adapter.route.dy));
+        return;
+    }
+    if(control.measuring&&ready&&adapter.prepared) {
+        if(!adapter.measuring){adapter.measuring=true;adapter.seen.reset();observe(mgr,true);}
+        drive(mgr,control);
+        if(!benchmark_play_enabled())PADClearVirtualStatus(0);
+    } else {neutral();adapter.measuring=false;}
+}
+}

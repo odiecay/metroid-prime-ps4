@@ -16,7 +16,7 @@
 
 namespace {
 using namespace aurora::trace;
-constexpr unsigned MaxStages=144, Buckets=1024;
+constexpr unsigned MaxStages=160, Buckets=1024;
 constexpr unsigned MaxStageName = 256, StageLookupSlots = 512;
 struct Stage { std::array<char,MaxStageName> name{}; Kind kind{}; Lane lane{}; };
 struct StageLookup { uintptr_t address{}; unsigned index{}; };
@@ -243,9 +243,22 @@ extern "C" void* prime_native_pthread_self() asm("scePthreadSelf");
 static void trace_registration_observed(const void* address,unsigned slot) noexcept {
     // Once per acquired ring, never per event/draw. Native identities make a
     // zero-initialized TLS template or shared TLS storage visible in boot logs.
-    std::fprintf(stderr,"orbis: trace registration: slot=%u tls=%p thread=%p template=%08x expected=5052544c\n",
-                 slot,address,prime_native_pthread_self(),
-                 unsigned(aurora::trace::tls_template_canary));
+    // These declarations match the pinned SDK's libkernel.h. Its affinity
+    // getter returns void: expose the raw output and its sentinel, not a
+    // fabricated success code. No priority or affinity is changed here.
+    extern int32_t prime_native_getprio(void*,int32_t*) asm("scePthreadGetprio");
+    extern void prime_native_getaffinity(void*,uint64_t*) asm("scePthreadGetaffinity");
+    void* thread=prime_native_pthread_self();
+    int32_t priority=INT32_MIN;
+    const int32_t priorityResult=prime_native_getprio(thread,&priority);
+    uint64_t affinity=UINT64_MAX;
+    prime_native_getaffinity(thread,&affinity);
+    std::fprintf(stderr,"orbis: trace registration: slot=%u tls=%p thread=%p template=%08x expected=5052544c "
+                 "priority_rc=%d priority_raw=%d affinity_status=unavailable_sdk_void "
+                 "affinity_raw=%016llx affinity_sentinel_changed=%u\n",
+                 slot,address,thread,unsigned(aurora::trace::tls_template_canary),
+                 int(priorityResult),int(priority),static_cast<unsigned long long>(affinity),
+                 unsigned(affinity!=UINT64_MAX));
 }
 static uint64_t thread_cpu_ns() noexcept {
     static thread_local bool unsupported=false;

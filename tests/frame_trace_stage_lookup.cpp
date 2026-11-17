@@ -32,7 +32,7 @@ int main(){
  const auto unknown=unknownStages;assert(stage_index({0,0,1,nullptr,Main,Counter})==MaxStages);
  char longLabel[257];std::memset(longLabel,'x',256);longLabel[256]=0;
  assert(stage_index({0,0,1,longLabel,Main,Counter})==MaxStages);assert(unknownStages==unknown+2);
- std::array<std::array<char,32>,144> tail{};
+ std::array<std::array<char,32>,MaxStages> tail{};
  for(unsigned n=0;stageCount<MaxStages;++n){std::snprintf(tail[n].data(),tail[n].size(),"fill-%u",n);assert(stage_index({0,0,1,tail[n].data(),Main,Counter})<MaxStages);}
  assert(stage_index({0,0,1,"overflow-stage",Main,Counter})==MaxStages);
  std::printf("label_queries=30000 pointer_reuse=1 text_alias=1 stale_cache_collision=1 source_lifetime=1 bounded_name_and_registry=1 table_bytes=%zu lookup_bytes=%zu\n",sizeof(stages),sizeof(stageLookups));

@@ -25,17 +25,17 @@ roughly **80 MB**; you add your own game image separately.
 
 ![DualShock 4 quick guide: original-style buttons with twin-stick aim](docs/images/ps4-controls.svg)
 
-## Download — Release Candidate 2
+## Download — Release Candidate 3
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.45-RC2.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.46-RC3.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
-RC2 adds less repeated draw setup, faster matrix uploads and lighter profiling
-while keeping the existing renderer, loading and reliability fixes. Earlier
-builds have been played on a PS4 Slim at around 55–60 FPS in the scenes tested.
-RC2 has passed the native build and host checks; console testing is next. A locked
-60 FPS and a complete playthrough have not been verified. Please include the
-room and what you were doing when reporting a problem.
+RC3 adds texture-binding optimisations, a graphics-resource lifetime fix and
+controller-prompt fixes. In v45 tests, lighter views ran near 60 FPS; the heavy open
+view of Main Plaza ran around 42 FPS after the cache warmed. RC3 has passed the
+native build and host checks, but its continuous gameplay comparison is still
+pending. A locked 1080p60 and a complete playthrough have not been verified.
+Please include the room and what you were doing when reporting a problem.
 
 ## Getting it running
 

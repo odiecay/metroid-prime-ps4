@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "benchmark_tour.hpp"
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -27,6 +28,7 @@ static void write(const fs::path& p,const std::string& v) { std::ofstream(p,std:
 int main(int argc,char** argv) {
     assert(argc==3);const std::string mode=argv[1];const fs::path root=argv[2];
     const fs::path live=root/"live";fs::create_directories(live);
+    const bool play=mode.starts_with("play_");
     const std::string settings="render_scale=2.25\nmsaa=1\noriginal_experience=0\n";
     write(live/"port_settings.ini",settings);write(live/"memorycard.bin","PROTECTED-SAVE");
     setenv("MP_USER_PATH",live.c_str(),1);setenv("MP_CACHE_PATH",(live/"cache").c_str(),1);
@@ -36,18 +38,20 @@ int main(int argc,char** argv) {
         return 0;
     }
     write(root/"benchmark-tour.cfg",mode=="invalid"?"not-a-tour\n":"PROJECT_PRIME_BENCHMARK_TOUR_V1\n");
+    if(play)write(root/"benchmark-play.cfg",mode=="play_invalid"?"WRONG_VERSION\n":"PROJECT_PRIME_BENCHMARK_PLAY_V2\n");
     if(mode=="symlink") {
         fs::create_directories(root/"benchmarks");
         fs::create_directory_symlink(live,root/"benchmarks"/"tour-v1");
     }
-    if(mode=="invalid"||mode=="symlink") {
+    if(mode=="invalid"||mode=="symlink"||mode=="play_invalid") {
         bool failed=false;try { prime::prepare_benchmark_tour(root); }catch(...) {failed=true;}
         assert(failed);assert(!prime::benchmark_tour_enabled());
         assert(std::string(getenv("MP_USER_PATH"))==live);assert(read(live/"port_settings.ini")==settings);
         assert(read(live/"memorycard.bin")=="PROTECTED-SAVE");return 0;
     }
     assert(prime::prepare_benchmark_tour(root));
-    assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/"tour-v1";
+    assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/(play?"play-v2":"tour-v1");
+    assert(prime::benchmark_play_enabled()==play);
     assert(std::string(getenv("MP_USER_PATH"))==bench/"user");
     assert(std::string(getenv("MP_CACHE_PATH"))==bench/"cache");
     assert(std::string(getenv("MP_PS4_PROFILE_LOG"))==bench/"logs"/"frame-profile.jsonl");
@@ -57,6 +61,21 @@ int main(int argc,char** argv) {
     if(mode=="queue_failure")rejectQueue=true;
     uint64_t tick=0,ns=1000000000ull;bool interrupted=false;
     while(prime::benchmark_tour_enabled()&&tick<100000) {
+        auto control=prime::benchmark_play_control();
+        if(control.placing)prime::benchmark_play_placement(mode!="play_bad_pose",0,0,0,4,20,true,100);
+        if(control.measuring) {
+            prime::BenchmarkPlayObservation sample;sample.valid=true;
+            if(mode!="play_no_actions") {
+                sample.x=control.inputTick*.01f;sample.yaw=std::sin(control.inputTick*.03f)*.15f;
+                sample.airborne=control.view==1&&control.inputTick<40;sample.morphed=control.view==3;
+                sample.power=control.view==1&&control.inputTick%20==0;
+                sample.charged=control.view==1&&control.inputTick%120==0;
+                sample.missiles=control.view==2&&control.inputTick%90==0;
+                sample.bombs=control.view==3&&control.inputTick%60==0;
+            }
+            prime::benchmark_play_observe(sample);
+            if(mode=="play_guard"&&control.inputTick==100)prime::benchmark_play_fail("route_guard");
+        }
         ++tick;ns+=mode=="timeout"?121000000000ull:16666667ull;
         bool ready=mode!="timeout";
         if(mode=="lost_ready"&&!interrupted&&tick==400) { ready=false;interrupted=true; }

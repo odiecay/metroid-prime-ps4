@@ -3252,6 +3252,134 @@ index 00000000..6c01b213
 +  }
 +};
 +}
+diff --git a/extern/aurora/lib/gx/gx.cpp b/extern/aurora/lib/gx/gx.cpp
+index 8f209dba..572ac1be 100644
+--- a/extern/aurora/lib/gx/gx.cpp
++++ b/extern/aurora/lib/gx/gx.cpp
+@@ -43,6 +43,7 @@ wgpu::BindGroup g_emptyTextureBindGroup;
+ 
+ namespace {
+ wgpu::Sampler sEmptySampler;
++wgpu::Sampler sShellSceneSampler;
+ // The sampler each texture slot took last, by its descriptor's value fields (build_bind_groups)
+ constexpr auto kSamplerKeyOffset = offsetof(wgpu::SamplerDescriptor, addressModeU);
+ constexpr auto kSamplerKeySize = offsetof(wgpu::SamplerDescriptor, maxAnisotropy) + sizeof(uint16_t) - kSamplerKeyOffset;
+@@ -754,6 +755,74 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
+ // The lightmap's slot is the last binding, left out of group 2 when the device has no room for it.
+ static size_t texture_binding_count() noexcept { return kTextureBindings - (webgpu::g_lightmapBinding ? 0 : 1); }
+ 
++// POD-only FIFO-thread scratch: every current resource handle is overwritten
++// before use. It owns no GPU objects, cached bind groups, generations or leases.
++// The normal global cache still validates ownership and stamps every lookup.
++struct LdrBindingScratch {
++  std::array<WGPUBindGroupEntry, kTextureBindings> entries{};
++  std::array<const void*, kTextureBindings + 1> key{};
++  bool active = false;
++  LdrBindingScratch() noexcept {
++    for (u32 i = 0; i < kTextureBindings; ++i) entries[i].binding = i;
++  }
++};
++static thread_local LdrBindingScratch sLdrBindingScratch;
++
++[[gnu::noinline]] static GXBindGroups build_ldr_bind_groups(const ShaderInfo& info) noexcept {
++  auto& scratch = sLdrBindingScratch;
++  struct Guard {
++    bool& active;
++    explicit Guard(bool& value) noexcept : active(value) { active = true; }
++    ~Guard() { active = false; }
++  } guard{scratch.active};
++  const auto view = [&](u32 i, WGPUTextureView value) {
++    scratch.entries[i].textureView = value;
++    scratch.key[i + 1] = value;
++  };
++  const auto sampler = [&](u32 i, WGPUSampler value) {
++    scratch.entries[i].sampler = value;
++    scratch.key[i + 1] = value;
++  };
++  // create_cube/create_volume/create_lightmap reject ID0. The normal default
++  // accessors retain their lazy recreation after device/resource shutdown.
++  view(MaxTextures * 2, gfx::probe::cube_view().Get());
++  sampler(MaxTextures * 2 + 1, gfx::probe::sampler().Get());
++  const auto volume = gfx::probe::volume_view(0, 0).Get();
++  for (u32 i = 0; i < gfx::probe::VolumeTextures; ++i) view(MaxTextures * 2 + 2 + i, volume);
++  view(kLightmapBinding, gfx::probe::lightmap_view(0).Get());
++  // These selections can change even while the GX material is ordinary LDR.
++  view(kBrdfLutBinding, gfx::probe::brdf_lut_view().Get());
++  view(kVolFogFroxelBinding, gfx::volfog::froxel_view().Get());
++  sampler(kVolFogSamplerBinding, gfx::volfog::sampler().Get());
++  for (u32 i = 0; i < MaxTextures; ++i) {
++    const auto& tex = g_gxState.textures[i];
++    if (tex && (info.sampledTextures[i] || info.sampledIndTextures[i])) {
++      view(i * 2, tex.ref->sampleTextureView.Get());
++      const auto descriptor = tex.get_descriptor();
++      const auto* key = reinterpret_cast<const u8*>(&descriptor) + kSamplerKeyOffset;
++      if (!sSlotSamplers[i] || std::memcmp(sSlotSamplerKeys[i].data(), key, kSamplerKeySize) != 0) {
++        sSlotSamplers[i] = gfx::sampler_ref(descriptor);
++        std::memcpy(sSlotSamplerKeys[i].data(), key, kSamplerKeySize);
++      }
++      sampler(i * 2 + 1, sSlotSamplers[i].Get());
++    } else {
++      view(i * 2, sEmptyTextureView.Get());
++      sampler(i * 2 + 1, sEmptySampler.Get());
++    }
++  }
++  scratch.key[0] = sTextureBindGroupLayout.Get();
++  // The excluded optional lightmap slot is zero in the original whole-array
++  // hash, even though its descriptor entry was populated above.
++  if (!webgpu::g_lightmapBinding) scratch.key[kLightmapBinding + 1] = nullptr;
++  const WGPUBindGroupDescriptor descriptor{
++      .label = {"GX Texture Bind Group", WGPU_STRLEN},
++      .layout = sTextureBindGroupLayout.Get(),
++      .entryCount = texture_binding_count(),
++      .entries = scratch.entries.data(),
++  };
++  return {.textureBindGroup = gfx::bind_group_ref(xxh3_hash(scratch.key), descriptor)};
++}
++
+ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
+   ZoneScoped;
+ 
+@@ -763,6 +832,14 @@ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
+     return {};
+   }
+ 
++  static const bool ldrScratch = env_flag("MP_GX_LDR_BINDING_SCRATCH", true);
++  if (ldrScratch && g_gxState.pbr == 0 &&
++      g_gxState.pbrCube == 0 && g_gxState.pbrVolume == 0 && g_gxState.pbrLightmap == 0 &&
++      !info.usesHdrTone && !info.usesVolFog && !info.shadowReceive && !info.usesLightmap && !info.shellScene &&
++      !sLdrBindingScratch.active) {
++    return build_ldr_bind_groups(info);
++  }
++
+   // Using C WGPU types instead of C++ wrappers to avoid destructor overhead
+   std::array<WGPUBindGroupEntry, kTextureBindings> textureEntries{};
+   textureEntries[MaxTextures * 2].binding = MaxTextures * 2;
+@@ -832,7 +909,7 @@ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
+   // without this frame's copy it reads the empty texture, and the caller draws no colour pass.
+   wgpu::TextureView shellScene;
+   if (info.shellScene) {
+-    static const wgpu::Sampler shellSceneSampler = gfx::sampler_ref(wgpu::SamplerDescriptor{
++    if (!sShellSceneSampler) sShellSceneSampler = gfx::sampler_ref(wgpu::SamplerDescriptor{
+         .addressModeU = wgpu::AddressMode::ClampToEdge,
+         .addressModeV = wgpu::AddressMode::ClampToEdge,
+         .magFilter = wgpu::FilterMode::Linear,
+@@ -842,7 +919,7 @@ GXBindGroups build_bind_groups(const ShaderInfo& info) noexcept {
+     });
+     shellScene = gfx::vfx::scene_copy_view(gfx::scene_hdr_pass_active());
+     textureEntries[GX_TEXMAP2 * 2].textureView = shellScene ? shellScene.Get() : sEmptyTextureView.Get();
+-    textureEntries[GX_TEXMAP2 * 2 + 1].sampler = shellSceneSampler.Get();
++    textureEntries[GX_TEXMAP2 * 2 + 1].sampler = sShellSceneSampler.Get();
+   }
+   const WGPUBindGroupDescriptor textureBindGroupDescriptor{
+       .label = {"GX Texture Bind Group", WGPU_STRLEN},
+@@ -1090,6 +1167,7 @@ void shutdown() noexcept {
+   sEmptyTextureView = {};
+   sEmptyTexture = {};
+   sEmptySampler = {};
++  sShellSceneSampler = {};
+   sPipelineLayout = {};
+   sSamplerBindGroupLayout = {};
+   sTextureBindGroupLayout = {};
 diff --git a/extern/aurora/lib/gx/gx.hpp b/extern/aurora/lib/gx/gx.hpp
 index 2e121900..9e605908 100644
 --- a/extern/aurora/lib/gx/gx.hpp
@@ -5803,6 +5931,20 @@ index 9fcb5644..cb773ba9 100644
 +// supply it, or an already loaded icy material is still retained across reload.
 +bool MayBeAvailable();
  } // namespace PortIcy
+diff --git a/platform/include/port_input_devices.h b/platform/include/port_input_devices.h
+index 0c67998b..37351f8f 100644
+--- a/platform/include/port_input_devices.h
++++ b/platform/include/port_input_devices.h
+@@ -111,6 +111,9 @@ void BuildProfile(PortInput::Profile& out);
+ bool PromptButtonInput(unsigned padButton, PortInput::Family family, PortInput::Input& out);
+ // The contexts PromptButtonInput resolves against now: the prompts re-resolve when they change.
+ uint16_t PromptContexts();
++// Gameplay's physical pad binding for Power(up), Ice(down), Plasma(left),
++// Wave(right), including a modifier. Returns a value copy of the polled profile.
++bool PromptBeamBinding(unsigned direction, PortInput::Binding& out);
+ bool PromptAxisInput(PADAxis axis, PortInput::Family family, PortInput::Input& out);
+ // A pad input as the native button the prompts name (an SDL_GamepadButton or
+ // PAD_NATIVE_BUTTON_TRIGGER_*), or PAD_NATIVE_BUTTON_INVALID.
 diff --git a/platform/include/port_mod_inventory.h b/platform/include/port_mod_inventory.h
 new file mode 100644
 index 00000000..a171793c
@@ -5930,6 +6072,21 @@ index 69d28d7a..c4732aff 100644
  // While suspended no mod loads, whatever the settings say: a Remastered import
  // unloads them so their memory is free while it runs. Takes effect at the next
  // reload or start.
+diff --git a/platform/include/port_prompts.h b/platform/include/port_prompts.h
+index f2d57bbc..60a29033 100644
+--- a/platform/include/port_prompts.h
++++ b/platform/include/port_prompts.h
+@@ -36,6 +36,10 @@ void Initialize(const char* textureRoot);
+ // Re-registers an action's icon when its binding changed. Call once per frame.
+ void Poll();
+ 
++// Scoped by the inventory beam-help body: direction0..3 is Power/Ice/Plasma/Wave;
++// -1 leaves help. Only native PS4 twin-stick help replaces the C-stick diagram.
++void SetBeamHelp(int direction);
++
+ // Tells the prompts that the touch overlay was just used, and in which layout
+ // (true for the twin-stick Xbox arrangement, false for the GameCube one), so the
+ // in-game prompts follow the input the player actually reached for.
 diff --git a/platform/include/port_ps4_menu_model.h b/platform/include/port_ps4_menu_model.h
 new file mode 100644
 index 00000000..e2c9b9cf
@@ -6122,7 +6279,7 @@ index 3d7d93f9..041a1acb 100644
  }
  
 diff --git a/platform/input/port_input_devices.cpp b/platform/input/port_input_devices.cpp
-index be9fb5fa..f39b8fe7 100644
+index be9fb5fa..69d226aa 100644
 --- a/platform/input/port_input_devices.cpp
 +++ b/platform/input/port_input_devices.cpp
 @@ -1,4 +1,7 @@
@@ -6184,6 +6341,67 @@ index be9fb5fa..f39b8fe7 100644
  }
  
  void BuildProfile(Profile& out) {
+@@ -1155,19 +1169,19 @@ static u32 PromptNative(const Input& in) {
+ 
+ u32 PromptNativeButton(const Input& in) { return PromptNative(in); }
+ 
+-// The polled profile's single-input bindings, for the prompts: Remap edits live
++// The polled profile's bindings, for the prompts: Remap edits live
+ // only here (controls.toml), not in Aurora's key and pad mapping tables. Set by
+ // Poll, read wherever prompts are drawn.
+ static std::mutex sPromptMutex;
+ static std::vector< Binding > sPromptBindings;
+ 
+ static void UpdatePromptBindings(const Profile& p) {
+-  std::vector< Binding > singles;
++  std::vector< Binding > bindings;
+   for (const Binding& b : p.bindings) {
+-    if (b.count == 1) singles.push_back(b);
++    if (b.count > 0 && b.count <= PortInput::kMaxChord) bindings.push_back(b);
+   }
+   std::lock_guard lock(sPromptMutex);
+-  sPromptBindings = std::move(singles);
++  sPromptBindings = std::move(bindings);
+ }
+ 
+ // The first of `actions` with a single input from `family`: one that applies in
+@@ -1179,7 +1193,7 @@ static bool PromptInputFor(std::initializer_list< Action > actions, PortInput::F
+   for (const uint16_t want : {contexts, static_cast< uint16_t >(~PortInput::kCtxLayers)}) {
+     for (const Action a : actions) {
+       for (const Binding& b : sPromptBindings) {
+-        if (b.action == a && (b.contexts & want) != 0 && (b.blocked & contexts) == 0 &&
++        if (b.count == 1 && b.action == a && (b.contexts & want) != 0 && (b.blocked & contexts) == 0 &&
+             PortInput::BindingFamily(b) == family) {
+           out = b.inputs[0];
+           return true;
+@@ -1216,6 +1230,27 @@ bool PromptButtonInput(unsigned padButton, PortInput::Family family, Input& out)
+   return PromptInputFor({menu->menu, game}, family, out);
+ }
+ 
++// Help describes the gameplay action even while the pause menu is active.
++// Return a copy: the polled snapshot may be replaced after the mutex is released.
++bool PromptBeamBinding(unsigned direction, PortInput::Binding& out) {
++  static constexpr Action actions[] = {Action::BeamPower, Action::BeamIce, Action::BeamPlasma, Action::BeamWave};
++  if (direction >= std::size(actions)) return false;
++  const uint16_t contexts = PortInput::kCtxGameplay;
++  std::lock_guard lock(sPromptMutex);
++  for (const uint16_t want : {contexts, static_cast<uint16_t>(~PortInput::kCtxLayers)}) {
++    for (const Binding& b : sPromptBindings) {
++      if (b.action != actions[direction] || b.count == 0 || b.count > PortInput::kMaxChord ||
++          (b.contexts & want) == 0 || (b.blocked & contexts) != 0) continue;
++      // A virtual touch modifier followed by a D-pad input is a touch chord,
++      // not the real controller chord the player needs to see here.
++      if (!std::all_of(b.inputs.begin(), b.inputs.begin() + b.count, IsPadFamily)) continue;
++      out = b;
++      return true;
++    }
++  }
++  return false;
++}
++
+ uint16_t PromptContexts() { return GameContexts(); }
+ 
+ bool PromptAxisInput(PADAxis axis, PortInput::Family family, Input& out) {
 diff --git a/platform/main.cpp b/platform/main.cpp
 index ffa06b1d..fd1a7f4b 100644
 --- a/platform/main.cpp
@@ -6724,6 +6942,190 @@ index 65d40637..43bbdb23 100644
    sHead = (sHead + 1) % kRing;
    if (sCount < kRing) {
      ++sCount;
+diff --git a/platform/port_prompts.cpp b/platform/port_prompts.cpp
+index 908138c4..f635d6dd 100644
+--- a/platform/port_prompts.cpp
++++ b/platform/port_prompts.cpp
+@@ -670,7 +670,52 @@ std::string TouchTwinStemForPrompt(uint32_t prompt) {
+   }
+ }
+ 
++std::atomic<int> sBeamHelp{-1};
++
++std::string BeamInputStem(const PortInput::Input& in, const char* device, bool whole) {
++  using namespace PortInput;
++  const char* suffix = SuffixForSdlButton(static_cast<int>(PortInputDevices::PromptNativeButton(in)));
++  if (suffix != nullptr) {
++    if (whole && std::strncmp(suffix, "dpad_", 5) == 0) suffix = "dpad";
++    return std::string(device) + "_" + suffix;
++  }
++  if (in.device != Device::PadAxis) return {};
++  const bool left = in.code == SDL_GAMEPAD_AXIS_LEFTX || in.code == SDL_GAMEPAD_AXIS_LEFTY;
++  const bool right = in.code == SDL_GAMEPAD_AXIS_RIGHTX || in.code == SDL_GAMEPAD_AXIS_RIGHTY;
++  if (!left && !right) return {};
++  std::string stem = std::string(device) + (left ? "_stick_l" : "_stick_r");
++  if (whole || in.dir == 0) return stem;
++  const bool vertical = in.code == SDL_GAMEPAD_AXIS_LEFTY || in.code == SDL_GAMEPAD_AXIS_RIGHTY;
++  return stem + (vertical ? (in.dir > 0 ? "_down" : "_up") : (in.dir > 0 ? "_right" : "_left"));
++}
++
++std::string BeamHelpStem(uint32_t prompt, const char* device) {
++  const int help = sBeamHelp.load(std::memory_order_relaxed);
++  if (help < 0 || std::strcmp(device, "playstation") != 0) return {};
++  int direction = help;
++  bool whole = false;
++  switch (prompt) {
++  case PROMPT_CSTICK: case PROMPT_DPAD: whole = true; break;
++  case PROMPT_CSTICK_UP: case PAD_BUTTON_UP: direction = 0; break;
++  case PROMPT_CSTICK_DOWN: case PAD_BUTTON_DOWN: direction = 1; break;
++  case PROMPT_CSTICK_LEFT: case PAD_BUTTON_LEFT: direction = 2; break;
++  case PROMPT_CSTICK_RIGHT: case PAD_BUTTON_RIGHT: direction = 3; break;
++  default: return {};
++  }
++  PortInput::Binding binding;
++  if (!PortInputDevices::PromptBeamBinding(direction, binding) || binding.count > 2) return {};
++  std::string stem;
++  for (unsigned i = 0; i < binding.count; ++i) {
++    const std::string part = BeamInputStem(binding.inputs[i], device, whole && i + 1 == binding.count);
++    if (part.empty()) return {};
++    if (!stem.empty()) stem += '+';
++    stem += part;
++  }
++  return stem;
++}
++
+ std::string IconStemForPrompt(uint32_t prompt, const char* device) {
++  if (const std::string beam = BeamHelpStem(prompt, device); !beam.empty()) return beam;
+   if (sActiveInput.load(std::memory_order_relaxed) == ActiveInput::TouchXbox &&
+       std::strcmp(device, "xbox") == 0) {
+     return TouchTwinStemForPrompt(prompt);
+@@ -764,6 +809,76 @@ const IconPixels* StablePixels(const std::string* path) {
+   return &pixels;
+ }
+ 
++// Compose only existing glyph pixels. The cache is bounded and never moves or
++// frees borrowed texels while Aurora may still reference an old replacement.
++const IconPixels* StableChordPixels(const std::string& stem, uint32_t width, uint32_t height) {
++  constexpr size_t MaxEntries = 128, MaxBytes = 4 * 1024 * 1024;
++  static std::unordered_map<std::string, IconPixels> cache;
++  static size_t retained = 0;
++  const std::string key = stem + "@" + std::to_string(width) + "x" + std::to_string(height);
++  if (const auto it = cache.find(key); it != cache.end()) return &it->second;
++  const size_t plus = stem.find('+');
++  if (plus == std::string::npos || plus == 0 || plus + 1 == stem.size() ||
++      stem.find('+', plus + 1) != std::string::npos || width < 16 || width > 128 ||
++      height < 16 || height > 64 || cache.size() >= MaxEntries) return nullptr;
++  const uint32_t outWidth = width * 2, outHeight = height * 2;
++  const size_t bytes = size_t(outWidth) * outHeight * 4;
++  if (bytes > MaxBytes - retained) return nullptr;
++  const IconPixels* parts[2]{};
++  for (unsigned i = 0; i < 2; ++i) {
++    const std::string part = i == 0 ? stem.substr(0, plus) : stem.substr(plus + 1);
++    const std::string path = FindIconForSize(part, 32, 32);
++    if (path.empty() || !(parts[i] = StablePixels(StablePath(path)))) return nullptr;
++  }
++  IconPixels result;
++  result.width = outWidth; result.height = outHeight;
++  result.rgba.resize(bytes);
++  // Retail beam text uses a centred 0.6 x 0.85 image crop. Fit every control
++  // inside that crop rather than cutting off the modifier or direction.
++  const int left = int(outWidth) / 5 + 1, right = int(outWidth) - left;
++  const int top = int(outHeight) / 12 + 1, bottom = int(outHeight) - top;
++  const int plusSize = std::max(4, int(outHeight) / 8);
++  const int gap = std::max(1, int(outHeight) / 32);
++  const int tileWidth = (right - left - plusSize - gap * 2) / 2;
++  if (tileWidth <= 0 || bottom <= top) return nullptr;
++  for (unsigned i = 0; i < 2; ++i) {
++    const IconPixels& src = *parts[i];
++    uint32_t minX = src.width, minY = src.height, maxX = 0, maxY = 0;
++    bool visible = false;
++    for (uint32_t y = 0; y < src.height; ++y) for (uint32_t x = 0; x < src.width; ++x) {
++      if (!src.rgba[(size_t(y) * src.width + x) * 4 + 3]) continue;
++      minX = std::min(minX, x); minY = std::min(minY, y);
++      maxX = std::max(maxX, x); maxY = std::max(maxY, y); visible = true;
++    }
++    if (!visible) return nullptr;
++    const uint32_t cropWidth = maxX - minX + 1, cropHeight = maxY - minY + 1;
++    const float scale = std::min(float(tileWidth) / cropWidth, float(bottom - top) / cropHeight);
++    const int drawWidth = std::max(1, int(cropWidth * scale));
++    const int drawHeight = std::max(1, int(cropHeight * scale));
++    const int tileLeft = i == 0 ? left : right - tileWidth;
++    const int startX = tileLeft + (tileWidth - drawWidth) / 2;
++    const int startY = top + (bottom - top - drawHeight) / 2;
++    for (int y = 0; y < drawHeight; ++y) for (int x = 0; x < drawWidth; ++x) {
++      const uint32_t sourceX = minX + uint32_t(x) * cropWidth / drawWidth;
++      const uint32_t sourceY = minY + uint32_t(y) * cropHeight / drawHeight;
++      const size_t srcOffset = (size_t(sourceY) * src.width + sourceX) * 4;
++      const size_t dstOffset = (size_t(startY + y) * outWidth + startX + x) * 4;
++      std::memcpy(result.rgba.data() + dstOffset, src.rgba.data() + srcOffset, 4);
++    }
++  }
++  const int cx = int(outWidth) / 2, cy = int(outHeight) / 2;
++  const int stroke = std::max(1, int(outHeight) / 32);
++  for (int y = cy - plusSize / 2; y <= cy + plusSize / 2; ++y)
++    for (int x = cx - plusSize / 2; x <= cx + plusSize / 2; ++x)
++      if (std::abs(x - cx) < stroke || std::abs(y - cy) < stroke) {
++        const size_t at = (size_t(y) * outWidth + x) * 4;
++        result.rgba[at] = result.rgba[at + 1] = result.rgba[at + 2] = 235;
++        result.rgba[at + 3] = 255;
++      }
++  retained += bytes;
++  return &cache.emplace(key, std::move(result)).first->second;
++}
++
+ void ApplyBound(const void* owner, BoundPrompt& bound, const std::string& stem) {
+   if (bound.registered) {
+     aurora::texture::unregister_replacement(bound.handle);
+@@ -773,6 +888,19 @@ void ApplyBound(const void* owner, BoundPrompt& bound, const std::string& stem)
+   if (stem.empty()) {
+     return;
+   }
++  if (stem.find('+') != std::string::npos) {
++    if (const IconPixels* pixels = StableChordPixels(stem, bound.width, bound.height)) {
++      const std::string* label = StablePath("beam-chord:" + stem + "@" + std::to_string(bound.width) +
++                                            "x" + std::to_string(bound.height));
++      bound.handle = aurora::texture::register_replacement(
++          aurora::texture::TexturePointerKey{owner},
++          aurora::texture::RawTextureReplacement{.bytes = pixels->rgba, .width = pixels->width,
++              .height = pixels->height, .mipCount = 1, .gxFormat = GX_TF_RGBA8_PC, .label = *label},
++          aurora::texture::ReplacementOptions{.priority = 2});
++      bound.registered = bound.handle.id != 0;
++    }
++    return;
++  }
+   const std::string iconPath = FindIconForSize(stem, bound.width, bound.height);
+   uint32_t iconWidth = 0;
+   uint32_t iconHeight = 0;
+@@ -886,7 +1014,10 @@ void Poll() {
+   // could open on the gameplay button's icon for up to a quarter second (MP2 #127).
+   static uint16_t sLastContexts = 0;
+   const uint16_t contexts = PortInputDevices::PromptContexts();
+-  const bool changed = sLastDevice != device || sLastMap != map || sLastContexts != contexts;
++  static int sLastBeamHelp = -1;
++  const int beamHelp = sBeamHelp.load(std::memory_order_relaxed);
++  const bool changed = sLastDevice != device || sLastMap != map || sLastContexts != contexts || sLastBeamHelp != beamHelp;
++  sLastBeamHelp = beamHelp;
+   sLastContexts = contexts;
+   if (!changed && sLastResolveNs != 0 && nowNs - sLastResolveNs < 250000000ull) {
+     return;
+@@ -914,6 +1045,17 @@ void Poll() {
+     }
+   }
+ }
++void SetBeamHelp(int direction) {
++#ifdef __ORBIS__
++  const int next = direction >= 0 && direction < 4 && PortDebug::TwinStick() &&
++                           !PortDebug::OriginalExperience() ? direction : -1;
++#else
++  const int next = -1;
++  (void)direction;
++#endif
++  if (sBeamHelp.exchange(next, std::memory_order_relaxed) != next) Poll();
++}
++
+ bool KeyboardActive() { return sActiveInput.load(std::memory_order_relaxed) == ActiveInput::Keyboard; }
+ 
+ bool PadActive() {
 diff --git a/platform/port_room_env.cpp b/platform/port_room_env.cpp
 index 1db8bd5c..8d525a21 100644
 --- a/platform/port_room_env.cpp
@@ -7553,10 +7955,30 @@ index 3c53e059..c75969c1 100644
  }
  
 diff --git a/src/Kyoto/Input/CDolphinController.cpp b/src/Kyoto/Input/CDolphinController.cpp
-index 37726e5b..59fdfbb6 100644
+index 37726e5b..781cc010 100644
 --- a/src/Kyoto/Input/CDolphinController.cpp
 +++ b/src/Kyoto/Input/CDolphinController.cpp
-@@ -192,7 +192,8 @@ void CDolphinController::ReadDevices() {
+@@ -3,6 +3,9 @@
+ #include "port_debug.h"
+ #include "port_freecam.h"
+ #include "port_input_gate.h"
++#ifdef __ORBIS__
++#include "benchmark_tour.hpp"
++#endif
+ #include <SDL3/SDL_gamepad.h>
+ #include <SDL3/SDL_keyboard.h>
+ #include <SDL3/SDL_mouse.h>
+@@ -110,6 +113,9 @@ void CDolphinController::ReadDevices() {
+ #endif
+   // The console's pad commands work in a window without focus.
+   inputFocused = inputFocused || PortConsoleEnabled();
++#ifdef __ORBIS__
++  inputFocused = inputFocused || prime::benchmark_play_enabled();
++#endif
+   // Every binding (pad, keyboard, mouse, alt buttons, turbo, touch extras) goes
+   // through the input engine; Aurora's PADRead then adds the virtual pads and
+   // its suppression to port 0's result.
+@@ -192,7 +198,8 @@ void CDolphinController::ReadDevices() {
      PortDebug::SetTwinStickRightY(0.f);
    }
  
@@ -7566,7 +7988,7 @@ index 37726e5b..59fdfbb6 100644
    // Either alone may be bound to Start (the Remastered preset pauses on Back).
    if (SDL_Gamepad* pad = PADGetSDLGamepadForIndex(0)) {
      if (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_BACK) &&
-@@ -200,6 +201,7 @@ void CDolphinController::ReadDevices() {
+@@ -200,6 +207,7 @@ void CDolphinController::ReadDevices() {
        x4_status[0].button &= ~PAD_BUTTON_START;
      }
    }
@@ -7796,7 +8218,7 @@ index 9d67eacb..b7fb3fae 100644
  
    if (GetHasAttractMovies()) {
 diff --git a/src/MetroidPrime/CGameCubeDoll.cpp b/src/MetroidPrime/CGameCubeDoll.cpp
-index 4ea4a716..cd512c8e 100644
+index 4ea4a716..67d181d8 100644
 --- a/src/MetroidPrime/CGameCubeDoll.cpp
 +++ b/src/MetroidPrime/CGameCubeDoll.cpp
 @@ -12,6 +12,14 @@
@@ -7863,7 +8285,7 @@ index 4ea4a716..cd512c8e 100644
 +  if (!mPs4MenuModel.null()) {
 +    // Keep the flat console's top visible while retaining the original spin,
 +    // camera, actor-light rig and fade. Restore the old draw's matrix contract.
-+    CGraphics::SetModelMatrix(CTransform4f::RotateX(CRelAngle::FromDegrees(40.f)) * spin);
++    CGraphics::SetModelMatrix(CTransform4f::RotateX(CRelAngle::FromDegrees(25.f)) * spin);
 +    mPs4MenuModel->Draw(CModelFlags(CModelFlags::kT_Blend, alphaFader));
 +    CGraphics::SetModelMatrix(spin);
 +  } else
@@ -7874,6 +8296,61 @@ index 4ea4a716..cd512c8e 100644
 +  }
    CGraphics::DisableAllLights();
  }
+diff --git a/src/MetroidPrime/CInventoryScreen.cpp b/src/MetroidPrime/CInventoryScreen.cpp
+index 15a68aa5..9d94be42 100644
+--- a/src/MetroidPrime/CInventoryScreen.cpp
++++ b/src/MetroidPrime/CInventoryScreen.cpp
+@@ -14,6 +14,7 @@
+ #include "rstl/math.hpp"
+ #ifdef TARGET_PC
+ #include "port_pointer_menu.h"
++#include "port_prompts.h"
+ #endif
+ #include <limits.h>
+ 
+@@ -70,6 +71,9 @@ CInventoryScreen::CInventoryScreen(const CStateManager& mgr, CGuiFrame& frame,
+ , x1ac_textLeaveRequested(false) {}
+ 
+ CInventoryScreen::~CInventoryScreen() {
++#ifdef TARGET_PC
++  PortPrompts::SetBeamHelp(-1);
++#endif
+   for (int i = 0; i < 5; ++i) {
+     xd8_textpane_titles[i]->TextSupport().SetFontColor(CColor::White());
+     x15c_model_righttitledecos[i]->SetColor(CColor::White());
+@@ -304,6 +308,18 @@ void CInventoryScreen::Update(float dt, CRandom16& rand, CArchitectureQueue& que
+   if (x1a8_state == kS_Leaving && x1a4_textBodyAlpha == 0.f) {
+     x1a8_state = kS_Inactive;
+   }
++#ifdef TARGET_PC
++  // Only the visible Arm Cannon help owns these diagrams. Map navigation,
++  // the doll's free camera and the Options controller diagram keep their sticks.
++  int beamHelp = -1;
++  if (x1a8_state == kS_Active && x10_mode == kM_TextScroll && x1ad_textViewing &&
++      x1a4_textBodyAlpha > 0.f && CMath::AbsF(x19c_samusDoll->GetViewInterpolation()) == 0.f &&
++      x70_tablegroup_leftlog->GetUserSelection() == 0 && x1c_rightSel >= 0 && x1c_rightSel < 4) {
++    static constexpr int directions[] = {0, 1, 3, 2}; // inventoryPower/Ice/Wave/Plasma
++    beamHelp = directions[x1c_rightSel];
++  }
++  PortPrompts::SetBeamHelp(beamHelp);
++#endif
+ }
+ 
+ void CInventoryScreen::UpdateRightTable() {
+@@ -395,7 +411,12 @@ void CInventoryScreen::UpdateRightLogHighlight(bool active, int idx, const CColo
+   }
+ }
+ 
+-void CInventoryScreen::TransitioningAway() { x1a8_state = kS_Leaving; }
++void CInventoryScreen::TransitioningAway() {
++  x1a8_state = kS_Leaving;
++#ifdef TARGET_PC
++  PortPrompts::SetBeamHelp(-1);
++#endif
++}
+ 
+ bool CInventoryScreen::InputDisabled() const {
+   if (CMath::AbsF(x19c_samusDoll->GetViewInterpolation()) > 0.f) {
 diff --git a/src/MetroidPrime/CPauseScreenFrame.cpp b/src/MetroidPrime/CPauseScreenFrame.cpp
 index bb803219..7a0cbbf5 100644
 --- a/src/MetroidPrime/CPauseScreenFrame.cpp
@@ -7892,7 +8369,7 @@ index bb803219..7a0cbbf5 100644
    }
  }
 diff --git a/src/MetroidPrime/CStateManager.cpp b/src/MetroidPrime/CStateManager.cpp
-index 8dbfa95d..077f0e4d 100644
+index 8dbfa95d..22793f60 100644
 --- a/src/MetroidPrime/CStateManager.cpp
 +++ b/src/MetroidPrime/CStateManager.cpp
 @@ -1,3 +1,6 @@
@@ -7957,29 +8434,17 @@ index 8dbfa95d..077f0e4d 100644
    if (GetWantsToQuit()) return;
  
  #ifdef TARGET_PC
-@@ -1650,6 +1673,21 @@ void CStateManager::Update(float dt) {
+@@ -1650,6 +1673,9 @@ void CStateManager::Update(float dt) {
    PortSmokeMouseBeforeUpdate(*this);
  #endif
    PortConsoleTick(*this);
 +#ifdef __ORBIS__
-+  if (prime::benchmark_tour_enabled()) {
-+    const CWorld* benchmarkWorld = GetWorld();
-+    const int areaIndex = benchmarkWorld ? benchmarkWorld->GetCurrentAreaId().Value() : -1;
-+    const bool hasArea = benchmarkWorld && areaIndex >= 0 && areaIndex < benchmarkWorld->GetNumAreas();
-+    const CGameArea* area = hasArea ? &benchmarkWorld->GetAreaAlways(TAreaId(areaIndex)) : nullptr;
-+    const bool ready = area && area->IsPostConstructed() && !GetWantsToQuit() &&
-+        GetGameState() == kGS_Running && GetPlayer() && !GetPlayer()->GetDisableInput() &&
-+        GetCameraManager()->IsInFPCamera() && !GetCameraManager()->IsInCinematicCamera() &&
-+        GetPlayer()->GetCameraState() != CPlayer::kCS_Spawned;
-+    prime_ps4_benchmark_tick(benchmarkWorld ? uint32_t(benchmarkWorld->IGetWorldAssetId()) : 0,
-+        area ? uint32_t(area->GetAreaAssetId()) : 0, x8d8_updateFrameIdx,
-+        aurora::trace::frame_id(), ready);
-+  }
++  if (prime::benchmark_tour_enabled()) prime::benchmark_game_tick(*this);
 +#endif
  
    PortDebug::SetStateManager(this);
    PortDebug::ConsumeWorldSweepRequest(*this);
-@@ -3204,7 +3242,15 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, con
+@@ -3204,7 +3230,15 @@ static bool PortSetupShadow(const CTransform4f& view, const CGameArea* area, con
    float dir[3] = {0.f, 0.f, 0.f};
    float color[3] = {0.f, 0.f, 0.f};
    float distance = 0.f;
@@ -8032,7 +8497,7 @@ index 6d1dbf2c..bb257fcb 100644
          x4_view =
              CTransform4f::LookAt(light.GetPosition(), centerPoint, CVector3f(0.0f, 0.0f, -1.0f));
 diff --git a/src/MetroidPrime/main.cpp b/src/MetroidPrime/main.cpp
-index a06bcb00..b3162db6 100644
+index a06bcb00..89b99c03 100644
 --- a/src/MetroidPrime/main.cpp
 +++ b/src/MetroidPrime/main.cpp
 @@ -1,3 +1,4 @@
@@ -8107,7 +8572,17 @@ index a06bcb00..b3162db6 100644
  
          gpRender->EndScene();
          aurora::phase::set(aurora::phase::Main, "after EndScene");
-@@ -1338,7 +1363,12 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -1301,7 +1326,9 @@ int CMain::RsMain(int argc, const char* const* argv) {
+       } else {
+         nextFrameDeadline = SDL_GetTicksNS();
+       }
++      aurora::phase::set(aurora::phase::Main, "frame statistics");
+       PortDebug::RecordFrame(workEndNs - loopStartNs, sTicksAdvanced, presented);
++      aurora::phase::set(aurora::phase::Main, "frame diagnostics");
+       PortMemoryLog::Tick(SDL_GetTicksNS());
+       {
+         // The whole iteration, pacing included: what a player sees as a frame.
+@@ -1338,7 +1365,12 @@ int CMain::RsMain(int argc, const char* const* argv) {
          // would otherwise write one per frame.
          static uint64_t sLastStallLogNs = 0;
          static uint32_t sStallsUnlogged = 0;
@@ -8121,7 +8596,7 @@ index a06bcb00..b3162db6 100644
            if (sLastStallLogNs != 0 && workEndNs - sLastStallLogNs < 2000000000ull) {
              ++sStallsUnlogged;
            } else {
-@@ -1395,9 +1425,21 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -1395,9 +1427,21 @@ int CMain::RsMain(int argc, const char* const* argv) {
    } else {
      fprintf(stderr, "MP audio: no driver; SDL opened no audio device\n");
    }

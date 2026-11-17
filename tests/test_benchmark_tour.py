@@ -35,7 +35,7 @@ class BenchmarkTourTests(unittest.TestCase):
                            ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',
                            UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
             result=subprocess.run([str(self.exe),mode,tmp],env=env,capture_output=True,text=True,check=True)
-            p=Path(tmp)/'benchmarks/tour-v1/logs/benchmark-tour.jsonl'
+            p=Path(tmp)/'benchmarks'/('play-v2' if mode.startswith('play_') else 'tour-v1')/'logs/benchmark-tour.jsonl'
             rows=[json.loads(l) for l in p.read_text().splitlines()] if p.is_file() else []
             return rows,result.stderr
     def test_missing_request_has_no_effect(self):self.assertEqual(self.run_mode('absent')[0],[])
@@ -66,6 +66,30 @@ class BenchmarkTourTests(unittest.TestCase):
     def test_full_queue_aborts(self):
         rows,_=self.run_mode('queue_failure');self.assertEqual(rows[-1]['event'],'aborted')
         self.assertFalse(any(r['event']=='complete' for r in rows))
+    def test_v2_prefers_separate_optin_and_requires_observed_actions(self):
+        rows,_=self.run_mode('play_complete')
+        ends=[r for r in rows if r['event']=='measure_end']
+        self.assertEqual(len(ends),48);self.assertEqual(rows[-1]['event'],'complete')
+        self.assertTrue(all(r['tour_version']==2 and r['dawn_call_profile'] for r in rows))
+        self.assertTrue(all(r['movement_distance_m']>=1 for r in ends))
+        self.assertTrue(all(r['aim_degrees']>=5 for r in ends if r['view']==0))
+        self.assertTrue(all(r['power_projectiles']>0 and r['airborne_frames']>0 for r in ends if r['view']==1))
+        self.assertTrue(all(r['missile_projectiles']>0 for r in ends if r['view']==2))
+        self.assertTrue(all(r['bomb_objects']>0 and r['morphed_frames']>=30 for r in ends if r['view']==3))
+    def test_v2_queued_inputs_cannot_substitute_for_observed_actions(self):
+        rows,_=self.run_mode('play_no_actions')
+        self.assertEqual(rows[-1]['event'],'incomplete')
+        self.assertFalse(any(r['event']=='complete' for r in rows))
+        self.assertTrue(any(r['status']=='insufficient_action' for r in rows))
+    def test_v2_no_safe_terrain_never_reaches_measurement(self):
+        rows,_=self.run_mode('play_bad_pose')
+        self.assertEqual(rows[-1]['event'],'incomplete')
+        self.assertFalse(any(r['event']=='measure_begin' for r in rows))
+    def test_v2_guard_failure_invalidates_phase(self):
+        rows,_=self.run_mode('play_guard')
+        self.assertEqual(rows[-1]['event'],'incomplete')
+        self.assertTrue(any(r['event']=='measure_end' and r['status']=='route_guard' for r in rows))
+    def test_v2_invalid_marker_cannot_modify_paths(self):self.assertEqual(self.run_mode('play_invalid')[0],[])
     def test_failed_marker_write_stops_without_acceptance(self):
         rows,err=self.run_mode('log_failure')
         self.assertFalse(any(r['event']=='complete' for r in rows))
