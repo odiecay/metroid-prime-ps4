@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -18,7 +19,7 @@ def marker(event, seconds, session='launch-a', run='tour-a', visit=0, view=0, **
     return dict(schema=1, type='benchmark_tour', session_id=session, run_id=run,
                 event=event, monotonic_ns=int(seconds * S), frame=10, simulation_tick=10,
                 visit=visit, scene='Tallon Canyon', world='39F2DE28', mrea='2043C96E',
-                **{'pass': 1, 'view': view, 'status': 'ok', **changes})
+                **{'pass': 1, 'view': view, 'status': 'ok'}) | changes
 
 
 def window(start, end, session='launch-a', duration=16, **changes):
@@ -40,7 +41,78 @@ def tour(session='launch-a', run='tour-a', visit=0, base=0):
     return rows
 
 
+def coverage_tour():
+    source=(ROOT/'platform/ps4/benchmark_tour.cpp').read_text().split('CoverageScenes{{',1)[1].split('}};',1)[0]
+    plan=[dict(visit=i,scene=m[1],world=m[2],mrea=m[3],region=m[4],visual_targets=m[5])
+          for i,m in enumerate(re.finditer(r'\{"([^"]+)",0x([0-9A-F]+),0x([0-9A-F]+),"([^"]+)","([^"]+)"\}',source),1)]
+    common=dict(tour_version=3,coverage_scope='assisted_room_actions',planned_rooms=24,planned_phases=96,
+                workload='scripted_native_input_v2',input_source='virtual_gamecube_pad',
+                movement_distance_m=3,aim_degrees=10,power_projectiles=2,charged_projectiles=1,
+                missile_projectiles=1,bomb_objects=1,airborne_frames=10,morphed_frames=40,
+                enemy_lock_frames=0,unexpected_warps=0,jump_safe=True,observed_frames=25)
+    rows=[marker('start',0,**common,coverage_plan=plan)]
+    frames=[]
+    for scene in plan:
+        base=(scene['visit']-1)*80
+        metadata=common|scene
+        rows.append(marker('wait_ready',base,**metadata))
+        for view in range(4):
+            rows += [marker('measure_begin',base+1+view*20,view=view,**metadata),
+                     marker('measure_end',base+13+view*20,view=view,**metadata)]
+            frames.append(window(base+5+view*20,base+10+view*20))
+    rows.append(marker('complete',len(plan)*80,**common))
+    return frames,rows
+
+
 class BenchmarkTourAnalysisTests(unittest.TestCase):
+    def test_v3_region_coverage_requires_every_planned_moving_phase(self):
+        frames,rows=coverage_tour()
+        result=m.analyse(frames,rows)
+        coverage=result['runs'][0]['coverage']
+        self.assertTrue(coverage['room_workloads_complete'])
+        self.assertEqual(coverage['accepted_rooms'],24)
+        self.assertEqual(coverage['accepted_action_phases'],96)
+        self.assertEqual(result['counts']['coverage_complete_regions'],7)
+        self.assertEqual(result['counts']['accepted_complete_runs'],1)
+        self.assertIn('boss encounters and boss deaths',coverage['not_exercised'])
+        self.assertIn('visual correctness not verified',coverage['visual_targets'])
+        self.assertIn('not a complete-game playthrough',coverage['release_acceptance'])
+        self.assertIn('24/24 planned room workloads',m.report(result))
+    def test_v3_unvisited_rooms_cannot_disappear_from_a_complete_report(self):
+        frames,rows=coverage_tour()
+        rows=[row for row in rows if row['event'] in ('start','complete') or row['visit']!=24]
+        result=m.analyse(frames,rows)
+        self.assertEqual(result['counts']['visits'],24)
+        self.assertEqual(result['counts']['accepted_visits'],23)
+        self.assertEqual(result['counts']['accepted_complete_runs'],0)
+        visit=next(v for v in result['runs'][0]['visits'] if v['visit']==24)
+        self.assertIn('not_visited',visit['reasons'])
+        coverage=result['runs'][0]['coverage']
+        self.assertFalse(coverage['room_workloads_complete'])
+        crater=next(r for r in coverage['regions'] if r['region']=='Impact Crater')
+        self.assertEqual(crater['status'],'partial');self.assertIn('Phazon Core',crater['pending_rooms'])
+    def test_v3_render_only_fallback_cannot_claim_moving_gameplay(self):
+        for change in ({'input_source':'none'},{'movement_distance_m':0},{'power_projectiles':0},
+                       {'unexpected_warps':1},{'movement_distance_m':float('nan')}):
+            with self.subTest(change=change):
+                frames,rows=coverage_tour()
+                for row in rows:
+                    if row['event']=='measure_end' and row['visit']==1:row.update(change)
+                result=m.analyse(frames,rows)
+                self.assertEqual(result['counts']['accepted_visits'],23)
+                self.assertFalse(result['runs'][0]['coverage']['room_workloads_complete'])
+    def test_v3_manifest_and_observed_room_metadata_cannot_be_relabelled(self):
+        frames,rows=coverage_tour()
+        rows[0]['coverage_plan'][1]['mrea']=rows[0]['coverage_plan'][0]['mrea']
+        result=m.analyse(frames,rows)
+        self.assertIn('invalid_coverage_manifest',result['runs'][0]['issues'])
+        self.assertEqual(result['counts']['accepted_visits'],0)
+        frames,rows=coverage_tour()
+        for row in rows:
+            if row['visit']==1 and row['event']!='start':row['region']='Impact Crater'
+        result=m.analyse(frames,rows)
+        self.assertEqual(result['counts']['accepted_visits'],23)
+        self.assertIn('coverage_plan_mismatch',result['runs'][0]['visits'][0]['reasons'])
     def test_only_contained_full_windows_and_existing_report_are_used(self):
         frames = [window(t, t + 5) for t in range(0, 80, 5)]
         with patch.object(m.analyse_frametimes, 'report', wraps=m.analyse_frametimes.report) as old_report:
@@ -234,6 +306,24 @@ class BenchmarkTourAnalysisTests(unittest.TestCase):
             self.assertEqual(result['counts']['accepted_complete_runs'], 1)
             self.assertGreaterEqual(result['counts']['selected_windows'], 48)
             self.assertEqual(result['runs'][0]['configuration']['cache_policy'], 'isolated_persistent')
+
+    @unittest.skipUnless((ROOT / 'build/benchmark-tour-tests/tour').exists(), 'existing native tour contract binary required')
+    def test_actual_v3_markers_match_full_region_and_action_acceptance(self):
+        # Actual state-machine markers, synthetic profiling windows: this
+        # verifies the reporting contract, not hardware or gameplay coverage.
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run([str(ROOT/'build/benchmark-tour-tests/tour'),'coverage_complete',directory],
+                           check=True,capture_output=True,text=True)
+            rows,errors=m.load(Path(directory)/'benchmarks/coverage-v3/logs/benchmark-tour.jsonl','benchmark_tour')
+            self.assertFalse(errors)
+            start=rows[0]['monotonic_ns']//S;end=rows[-1]['monotonic_ns']//S
+            frames=[window(t,t+5,session=rows[0]['session_id']) for t in range(start,end+5,5)]
+            result=m.analyse(frames,rows)
+            self.assertEqual(result['counts']['accepted_visits'],24)
+            self.assertEqual(result['counts']['coverage_complete_regions'],7)
+            self.assertEqual(result['counts']['accepted_complete_runs'],1)
+            self.assertTrue(result['runs'][0]['coverage']['room_workloads_complete'])
+            self.assertEqual(result['runs'][0]['coverage']['accepted_action_phases'],96)
 
     def test_cli_latest_run_is_file_order_and_requires_exact_identity(self):
         with tempfile.TemporaryDirectory() as directory:

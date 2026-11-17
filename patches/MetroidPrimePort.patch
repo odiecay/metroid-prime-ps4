@@ -888,7 +888,7 @@ index 00000000..03871f26
 +};
 +} // namespace aurora::gfx::detail
 diff --git a/extern/aurora/lib/gfx/encoding.cpp b/extern/aurora/lib/gfx/encoding.cpp
-index 3c844ae9..5126ed39 100644
+index 3c844ae9..c97af9a9 100644
 --- a/extern/aurora/lib/gfx/encoding.cpp
 +++ b/extern/aurora/lib/gfx/encoding.cpp
 @@ -1,4 +1,7 @@
@@ -899,7 +899,7 @@ index 3c844ae9..5126ed39 100644
  #include "overdraw.hpp"
  #include "vis_query.hpp"
  
-@@ -38,6 +41,35 @@ namespace {
+@@ -38,6 +41,44 @@ namespace {
  constexpr Module Log{"aurora::gfx"};
  PipelineRef g_currentPipeline;
  BindGroupRef g_currentTextureGroup;
@@ -909,7 +909,16 @@ index 3c844ae9..5126ed39 100644
 +struct PassObjectLookups {
 +  PassLookupMemo<PipelineRef, wgpu::RenderPipeline> pipelines;
 +  PassLookupMemo<BindGroupRef, wgpu::BindGroup> textureGroups;
++  void publish() const {
++    trace::count("render pipeline memo hits", pipelines.hits(), trace::Render);
++    trace::count("render pipeline memo resolved misses", pipelines.resolved_misses(), trace::Render);
++    trace::count("render pipeline memo bypass segments", pipelines.bypassed(), trace::Render);
++    trace::count("render texture memo hits", textureGroups.hits(), trace::Render);
++    trace::count("render texture memo resolved misses", textureGroups.resolved_misses(), trace::Render);
++    trace::count("render texture memo bypass segments", textureGroups.bypassed(), trace::Render);
++  }
 +  void clear() {
++    publish();
 +    pipelines.clear();
 +    textureGroups.clear();
 +  }
@@ -920,7 +929,7 @@ index 3c844ae9..5126ed39 100644
 +  PassObjectLookups* m_previous;
 +public:
 +  ScopedPassObjectLookups() : m_previous(std::exchange(g_passObjectLookups, &m_lookups)) {}
-+  ~ScopedPassObjectLookups() { g_passObjectLookups = m_previous; }
++  ~ScopedPassObjectLookups() { m_lookups.publish(); g_passObjectLookups = m_previous; }
 +  ScopedPassObjectLookups(const ScopedPassObjectLookups&) = delete;
 +  ScopedPassObjectLookups& operator=(const ScopedPassObjectLookups&) = delete;
 +};
@@ -935,7 +944,7 @@ index 3c844ae9..5126ed39 100644
  
  void apply_viewport(const wgpu::RenderPassEncoder& pass, const Viewport& vp) {
    const float minDepth = gx::UseReversedZ ? 1.f - vp.zfar : vp.znear;
-@@ -112,7 +144,11 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
+@@ -112,7 +153,11 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
  
  void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, RenderPass& passInfo) {
    ZoneScoped;
@@ -947,7 +956,7 @@ index 3c844ae9..5126ed39 100644
  #ifdef AURORA_GFX_DEBUG_GROUPS
    std::vector<std::string> lastDebugGroupStack;
  #endif
-@@ -165,8 +201,15 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
+@@ -165,8 +210,15 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
        }
      } break;
      case CommandType::CustomDraw: {
@@ -964,7 +973,7 @@ index 3c844ae9..5126ed39 100644
        pass.SetBindGroup(0, resources().staticBindGroup);
        pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
        g_currentTextureGroup = 0;
-@@ -536,7 +579,11 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
+@@ -536,7 +588,11 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
  
  namespace detail {
  void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op) {
@@ -977,7 +986,7 @@ index 3c844ae9..5126ed39 100644
    switch (op.type) {
    case FrameOpType::RenderPass:
      if (op.renderPass != nullptr) {
-@@ -558,27 +605,91 @@ void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op)
+@@ -558,27 +614,91 @@ void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op)
  }
  } // namespace detail
  
@@ -1360,10 +1369,10 @@ index 24e4dfc8..7248a6f8 100644
    StagingHighWater copied;
 diff --git a/extern/aurora/lib/gfx/pass_lookup_memo.hpp b/extern/aurora/lib/gfx/pass_lookup_memo.hpp
 new file mode 100644
-index 00000000..3bcd3d2b
+index 00000000..b0597522
 --- /dev/null
 +++ b/extern/aurora/lib/gfx/pass_lookup_memo.hpp
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,90 @@
 +// SPDX-License-Identifier: MIT
 +#pragma once
 +
@@ -1377,8 +1386,8 @@ index 00000000..3bcd3d2b
 +// the pass ends, and discard the table after custom callbacks. Producer-side
 +// cache lookup/touch functions still stamp every recorded resource normally.
 +// Failed resolutions are never stored, so an async pipeline can appear later
-+// in the same pass. Collisions replace one owning reference; encoded commands
-+// retain their own references independently.
++// in the same pass. Keep the original primary replacement; a displaced entry
++// may use only its own empty secondary. Encoded commands own their references.
 +template <typename Key, typename Object, size_t Capacity = 64>
 +class PassLookupMemo {
 +  static_assert(Capacity != 0 && (Capacity & (Capacity - 1)) == 0);
@@ -1390,20 +1399,44 @@ index 00000000..3bcd3d2b
 +  uint32_t m_hits = 0;
 +  uint32_t m_misses = 0;
 +  bool m_bypass = false;
++  static size_t primary(Key key) noexcept {
++    const auto bits = static_cast<uint64_t>(key);
++    return (bits ^ (bits >> 32)) & (Capacity - 1);
++  }
++  static size_t secondary(Key key) noexcept {
++    const auto bits = static_cast<uint64_t>(key);
++    return ((bits >> 6) ^ (bits >> 17)) & (Capacity - 1);
++  }
 +
 +public:
++  uint32_t hits() const noexcept { return m_hits; }
++  uint32_t resolved_misses() const noexcept { return m_misses; }
++  bool bypassed() const noexcept { return m_bypass; }
 +  template <typename Resolve>
 +  const Object* find(Key key, Object& uncached, Resolve&& resolve) {
 +    // A working set that repeatedly collides should fall back to the original
 +    // lookup cost for this pass. The caller owns the fallback just as before.
 +    if (m_bypass) {
-+      return resolve(uncached) ? &uncached : nullptr;
++      if (!resolve(uncached)) return nullptr;
++      ++m_misses;
++      return &uncached;
 +    }
-+    const auto bits = static_cast<uint64_t>(key);
-+    Entry& entry = m_entries[(bits ^ (bits >> 32)) & (Capacity - 1)];
++    Entry& entry = m_entries[primary(key)];
 +    if (entry.object && entry.key == key) {
 +      ++m_hits;
 +      return &entry.object;
++    }
++    // An empty primary cannot have a reachable spare for this key.
++    if (entry.object) {
++      Entry& alternate = m_entries[secondary(key)];
++      if (alternate.object && alternate.key == key) {
++        std::swap(entry, alternate);
++        const size_t at = secondary(key);
++        if (alternate.object && at != primary(alternate.key) && at != secondary(alternate.key))
++          alternate.object = nullptr;
++        ++m_hits;
++        return &entry.object;
++      }
 +    }
 +    if (!resolve(uncached)) {
 +      return nullptr;
@@ -1411,6 +1444,10 @@ index 00000000..3bcd3d2b
 +    if (++m_misses >= Capacity * 2 && m_hits < m_misses / 4) {
 +      m_bypass = true;
 +      return &uncached;
++    }
++    if (entry.object) {
++      Entry& spare = m_entries[secondary(entry.key)];
++      if (!spare.object) spare = std::move(entry);
 +    }
 +    entry.object = std::move(uncached);
 +    entry.key = key;
@@ -2116,7 +2153,7 @@ index 1c162a55..3ee82153 100644
  Range push_verts(ArrayRef<T> data, size_t alignment) {
    return push_verts(reinterpret_cast<const uint8_t*>(data.data()), data.size() * sizeof(T), alignment);
 diff --git a/extern/aurora/lib/gfx/render_worker.cpp b/extern/aurora/lib/gfx/render_worker.cpp
-index 85783b60..8f548a50 100644
+index 85783b60..3e114f73 100644
 --- a/extern/aurora/lib/gfx/render_worker.cpp
 +++ b/extern/aurora/lib/gfx/render_worker.cpp
 @@ -1,4 +1,5 @@
@@ -2125,7 +2162,20 @@ index 85783b60..8f548a50 100644
  
  #include "../thread.hpp"
  
-@@ -34,9 +35,40 @@ void complete_sync(const std::shared_ptr<SyncState>& sync) {
+@@ -8,6 +9,12 @@
+ 
+ #include <tracy/Tracy.hpp>
+ 
++#if defined(PRIME_TRACE_TEST)
++// Host fixture barrier only: called while the full queue is still locked,
++// before cond_wait atomically releases it. Absent from native game builds.
++extern "C" void prime_worker_capacity_wait_observed(const void*) noexcept __attribute__((weak));
++#endif
++
+ namespace aurora::gfx::render_worker {
+ namespace {
+ constexpr size_t QueueCapacity = 256;
+@@ -34,9 +41,40 @@ void complete_sync(const std::shared_ptr<SyncState>& sync) {
  void worker_main(std::stop_token token) {
    g_workerThreadId = std::this_thread::get_id();
  
@@ -2167,7 +2217,7 @@ index 85783b60..8f548a50 100644
      if (!item) {
        if (closed || token.stop_requested()) {
          break;
-@@ -48,8 +80,11 @@ void worker_main(std::stop_token token) {
+@@ -48,8 +86,11 @@ void worker_main(std::stop_token token) {
        ZoneScopedN("QueueItem work");
        item->work();
      }
@@ -2180,7 +2230,7 @@ index 85783b60..8f548a50 100644
      if (item->type == ItemType::Shutdown) {
        break;
      }
-@@ -87,25 +122,44 @@ BoundedQueue::BoundedQueue(size_t capacity) : m_capacity(capacity) {}
+@@ -87,25 +128,47 @@ BoundedQueue::BoundedQueue(size_t capacity) : m_capacity(capacity) {}
  
  bool BoundedQueue::push(QueueItem item) {
    ZoneScoped;
@@ -2190,6 +2240,9 @@ index 85783b60..8f548a50 100644
 +  const bool blocked = !m_closed && m_items.size() >= m_capacity;
 +  const auto start = blocked ? trace::now_ns() : 0;
 +  const size_t depth = m_items.size();
++#if defined(PRIME_TRACE_TEST)
++  if (blocked && prime_worker_capacity_wait_observed) prime_worker_capacity_wait_observed(this);
++#endif
    m_notFull.wait(lock, [&] { return m_closed || m_items.size() < m_capacity; });
 -  if (m_closed) {
 -    return false;
@@ -2231,7 +2284,7 @@ index 85783b60..8f548a50 100644
    m_items.pop_front();
    lock.unlock();
    m_notFull.notify_one();
-@@ -167,6 +221,22 @@ std::optional<size_t> FrameSlotPool::try_acquire() {
+@@ -167,6 +230,22 @@ std::optional<size_t> FrameSlotPool::try_acquire() {
    return std::nullopt;
  }
  
@@ -5575,7 +5628,7 @@ index 55d850c7..16d3390e 100644
  // struct declares them, so a PBR draw's block grew by exactly 3 vec4.
  TEST_F(GxUniformLimitTest, PbrModelModulationIsPackedAfterRoomLights) {
 diff --git a/extern/aurora/tests/render_worker_test.cpp b/extern/aurora/tests/render_worker_test.cpp
-index 74e83edc..210b23c8 100644
+index 74e83edc..197119c2 100644
 --- a/extern/aurora/tests/render_worker_test.cpp
 +++ b/extern/aurora/tests/render_worker_test.cpp
 @@ -1,7 +1,9 @@
@@ -5588,10 +5641,24 @@ index 74e83edc..210b23c8 100644
  #include <future>
  #include <thread>
  #include <vector>
-@@ -15,9 +17,25 @@ using aurora::gfx::render_worker::FrameSlotPool;
+@@ -15,9 +17,39 @@ using aurora::gfx::render_worker::FrameSlotPool;
  using aurora::gfx::render_worker::ItemType;
  using aurora::gfx::render_worker::QueueItem;
  
++std::atomic<const void*> capacityWaitQueue = nullptr;
++std::atomic<std::promise<void>*> capacityWaitSignal = nullptr;
++struct CapacityWaitObservation {
++  std::promise<void> observed;
++  explicit CapacityWaitObservation(const BoundedQueue& queue) {
++    capacityWaitSignal.store(&observed, std::memory_order_release);
++    capacityWaitQueue.store(&queue, std::memory_order_release);
++  }
++  ~CapacityWaitObservation() {
++    capacityWaitQueue.store(nullptr, std::memory_order_release);
++    capacityWaitSignal.store(nullptr, std::memory_order_release);
++  }
++};
++
 +std::vector<aurora::trace::Event> take_trace() {
 +  std::vector<aurora::trace::Event> events;
 +  for (unsigned i = 0; i < aurora::trace::MaxThreads; ++i)
@@ -5615,7 +5682,7 @@ index 74e83edc..210b23c8 100644
  };
  
  TEST(RenderWorkerQueue, PreservesOrdering) {
-@@ -104,4 +122,187 @@ TEST(RenderWorkerFrameSlots, RecyclesReleasedSlots) {
+@@ -104,4 +136,221 @@ TEST(RenderWorkerFrameSlots, RecyclesReleasedSlots) {
    slots.release(second);
    EXPECT_EQ(slots.free_count(), 1u);
  }
@@ -5703,10 +5770,23 @@ index 74e83edc..210b23c8 100644
 +  (void)take_trace();
 +  BoundedQueue queue{1};
 +  ASSERT_TRUE(queue.push(QueueItem{.type = ItemType::BeginFrame, .frameId = 1}));
++  CapacityWaitObservation observation{queue};
++  auto entered = observation.observed.get_future();
++  std::promise<void> allowEntry;
++  auto entryGate = allowEntry.get_future().share();
 +  auto pushed = std::async(std::launch::async, [&] {
++    entryGate.wait();
 +    return queue.push(QueueItem{.type = ItemType::EndFrame, .frameId = 2, .traceFrameId = 9002});
 +  });
++  // A pending future alone cannot prove that its producer entered push.
++  // Deliberately hold it outside the queue, reproducing the old assumption.
 +  EXPECT_EQ(pushed.wait_for(5ms), std::future_status::timeout);
++  EXPECT_EQ(entered.wait_for(0ms), std::future_status::timeout);
++  allowEntry.set_value();
++  const auto observed = entered.wait_for(2s);
++  if (observed != std::future_status::ready) queue.close();
++  ASSERT_EQ(observed, std::future_status::ready);
++  EXPECT_EQ(pushed.wait_for(0ms), std::future_status::timeout);
 +  bool closed = false;
 +  const auto first = queue.pop_for(0ms, closed);
 +  ASSERT_TRUE(first);EXPECT_EQ(first->frameId, 1u);
@@ -5724,10 +5804,21 @@ index 74e83edc..210b23c8 100644
 +  (void)take_trace();
 +  BoundedQueue queue{1};
 +  ASSERT_TRUE(queue.push(QueueItem{.type = ItemType::BeginFrame, .frameId = 3}));
++  CapacityWaitObservation observation{queue};
++  auto entered = observation.observed.get_future();
++  std::promise<void> allowEntry;
++  auto entryGate = allowEntry.get_future().share();
 +  auto pushed = std::async(std::launch::async, [&] {
++    entryGate.wait();
 +    return queue.push(QueueItem{.type = ItemType::EndFrame, .frameId = 4, .traceFrameId = 9004});
 +  });
 +  EXPECT_EQ(pushed.wait_for(5ms), std::future_status::timeout);
++  EXPECT_EQ(entered.wait_for(0ms), std::future_status::timeout);
++  allowEntry.set_value();
++  const auto observed = entered.wait_for(2s);
++  if (observed != std::future_status::ready) queue.close();
++  ASSERT_EQ(observed, std::future_status::ready);
++  EXPECT_EQ(pushed.wait_for(0ms), std::future_status::timeout);
 +  queue.close();
 +  ASSERT_EQ(pushed.wait_for(1s), std::future_status::ready);EXPECT_FALSE(pushed.get());
 +  bool closed = false;
@@ -5738,6 +5829,16 @@ index 74e83edc..210b23c8 100644
 +  EXPECT_EQ(trace_value(events, "render queue closed wakes", 9004, aurora::trace::Main), 1u);
 +  EXPECT_EQ(trace_value(events, "render queue capacity depth sum", 9004, aurora::trace::Main), 1u);
 +}
++
++} // namespace
++
++extern "C" void prime_worker_capacity_wait_observed(const void* queue) noexcept {
++  if (capacityWaitQueue.load(std::memory_order_acquire) == queue) {
++    if (auto* observed = capacityWaitSignal.load(std::memory_order_acquire)) observed->set_value();
++  }
++}
++
++namespace {
 +
 +TEST(RenderWorkerQueue, ConsumerTimingOnlyCountsActualEmptyWaits) {
 +  BoundedQueue queue{1};bool closed = false;uint64_t blocked = UINT64_MAX;

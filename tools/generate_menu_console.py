@@ -63,9 +63,10 @@ def clipped(poly,xcut,less):
 
 class Ps4Mesh(Mesh):
     def polygon(self,points,colour,material=0):
-        # Original PS4's front and rear faces lean forwards as they rise.
+        # CUH-1000 rises away from its front controls and overhangs its rear I/O.
+        # Negative Y is the front: the top front edge must recede (+Y).
         # Width/height/depth follow Sony's 275 x 53 x 305 mm launch dimensions.
-        super().polygon([(x,y-.60*z,z)for x,y,z in points],colour,material)
+        super().polygon([(x,y+.60*z,z)for x,y,z in points],colour,material)
 
 def slab(mesh,w,d,z0,z1,upper):
     bevel=.014;outer=outline(w,d,.018);inner=outline(w-2*bevel,d-2*bevel,.012)

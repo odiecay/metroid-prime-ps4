@@ -62,11 +62,11 @@ def main():
     parser.add_argument('--host',required=True)
     parser.add_argument('--port',type=int,default=2121)
     parser.add_argument('--out',type=Path,required=True)
-    parser.add_argument('--follow-seconds',type=int,default=0)
+    parser.add_argument('--follow-seconds',type=int,default=0,help='Read-only capture duration, 0..7200 seconds')
     parser.add_argument('--candidate-profile',choices=['performance-v0021','original-hd-v0022','remastered-lite-v0023','remastered-enhanced-v0024','consolidated'])
     parser.add_argument('--benchmark-tour',action='store_true',help='Read the isolated automated room-tour logs')
     args=parser.parse_args()
-    if not 0<=args.follow_seconds<=600:parser.error('Follow duration must be 0..600 seconds')
+    if not 0<=args.follow_seconds<=7200:parser.error('Follow duration must be 0..7200 seconds')
     args.out.mkdir(parents=True,exist_ok=False)
     deadline=time.monotonic()+args.follow_seconds
     log_root=log_directory(args.candidate_profile,args.benchmark_tour)

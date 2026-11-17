@@ -34,7 +34,7 @@ class GfxPassLookupTests(unittest.TestCase):
         self.assertIn('g_currentPipeline = UINTPTR_MAX;', custom)
         self.assertIn('g_currentTextureGroup = 0;', custom)
 
-        out = ROOT / 'build/gfx-pass-lookup-host'
+        out = Path(os.environ.get('PRIME_LOOKUP_BUILD_DIR', str(ROOT / 'build/gfx-pass-lookup-host')))
         out.mkdir(exist_ok=True)
         (out / 'pass_lookup_memo.hpp').write_bytes((GFX / 'pass_lookup_memo.hpp').read_bytes())
         start = source.index('struct PassObjectLookups')
@@ -67,7 +67,7 @@ class GfxPassLookupTests(unittest.TestCase):
         obj = out / 'test.o'
         args[args.index('-o') + 1] = str(obj)
         args[args.index('-c') + 1] = str(ROOT / 'tests/gfx_pass_lookup.cpp')
-        args += extra + ['-UNDEBUG', '-I' + str(out)]
+        args += extra + ['-UNDEBUG', '-I' + str(out), '-I' + str(ROOT / 'game/MetroidPrimePort/extern/aurora/include')]
         result = subprocess.run(args, cwd=recipe['directory'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

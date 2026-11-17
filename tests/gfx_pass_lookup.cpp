@@ -17,6 +17,8 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <aurora/frame_trace.hpp>
+namespace trace=aurora::trace;
 namespace native=dawn::native;
 struct Device {
     wgpu::Instance instance;
@@ -170,9 +172,95 @@ wgpu::CommandBuffer record(Fixtures& f,bool memo,const std::vector<unsigned>& se
  }
  pass.End();return encoder.Finish();
 }
+void policy_checks(Fixtures& f){
+ using Key=PipelineRef;using Slot=std::optional<Key>;
+ std::array<Slot,64> direct{},model{};
+ auto primary=[](Key k){return size_t((k^(k>>32))&63);};
+ auto secondary=[](Key k){return size_t(((k>>6)^(k>>17))&63);};
+ PassLookupMemo<Key,wgpu::RenderPipeline> memo;wgpu::RenderPipeline fallback;
+ uint32_t hits=0,misses=0,baseHits=0,baseMisses=0;bool bypass=false,baseBypass=false;
+ const auto refs0=native::FromAPI(f.pipelines[0].Get())->GetRefCountForTesting();
+ const auto refs1=native::FromAPI(f.pipelines[1].Get())->GetRefCountForTesting();
+ std::mt19937_64 random(0x506173734d656d6f);std::array<Key,96> keys{};for(auto& k:keys)k=random()>>2;
+ uint64_t totalHits=0,totalBaselineHits=0,failed=0;
+ for(unsigned step=0;step<250000;++step){
+  const unsigned phase=(step/997)%4;
+  const bool succeeds=step%101!=100;
+  // Failed keys are unpublished identities, never previously cached objects.
+  // Retained valid objects are separately checked by the actual eviction test.
+  const Key key=!succeeds?UINT64_MAX-step:step%613==0?0:step%619==0?UINT64_MAX:phase==0?keys[random()%16]:phase==1?(random()%2?Key{1}:Key{4097}):phase==2?keys[random()%96]:Key(step*64+1);
+  const size_t home=primary(key),alt=secondary(key);
+  const bool baseHit=!baseBypass&&direct[home]&&*direct[home]==key;
+  if(baseHit)++baseHits;
+  else if(succeeds){if(!baseBypass&&++baseMisses>=128&&baseHits<baseMisses/4)baseBypass=true;if(!baseBypass)direct[home]=key;}
+  if(!model[home])assert(!model[alt]||*model[alt]!=key);
+  const bool hit=!bypass&&((model[home]&&*model[home]==key)||(model[alt]&&*model[alt]==key));
+  assert(!baseHit||hit);totalBaselineHits+=baseHit;totalHits+=hit;
+  if(hit){
+   ++hits;
+   if(!model[home]||*model[home]!=key){std::swap(model[home],model[alt]);if(model[alt]&&alt!=primary(*model[alt])&&alt!=secondary(*model[alt]))model[alt].reset();}
+  }else if(succeeds){
+   ++misses;
+   if(!bypass&&misses>=128&&hits<misses/4)bypass=true;
+   if(!bypass){if(model[home]&&!model[secondary(*model[home])])model[secondary(*model[home])]=model[home];model[home]=key;}
+  }
+  const auto* actual=memo.find(key,fallback,[&](auto& value){if(!succeeds){++failed;return false;}value=f.pipelines[key&1];return true;});
+  assert(bool(actual)==(hit||succeeds));if(actual)assert(actual->Get()==f.pipelines[key&1].Get());
+  assert(memo.hits()==hits&&memo.resolved_misses()==misses&&memo.bypassed()==bypass);
+  unsigned counts[2]{};for(const auto& k:model)if(k)++counts[*k&1];
+  if(fallback)++counts[fallback.Get()==f.pipelines[0].Get()?0:1];
+  assert(native::FromAPI(f.pipelines[0].Get())->GetRefCountForTesting()==refs0+counts[0]);
+  assert(native::FromAPI(f.pipelines[1].Get())->GetRefCountForTesting()==refs1+counts[1]);
+  if(step%997==996){memo.clear();fallback=nullptr;direct={};model={};hits=misses=baseHits=baseMisses=0;bypass=baseBypass=false;}
+ }
+ memo.clear();fallback=nullptr;assert(native::FromAPI(f.pipelines[0].Get())->GetRefCountForTesting()==refs0);assert(native::FromAPI(f.pipelines[1].Get())->GetRefCountForTesting()==refs1);
+ std::printf("PASS_SPARE_POLICY cases=250000 baseline_hits=%llu candidate_hits=%llu failure_retries=%llu all_baseline_hits_preserved=1 exact_reference_ownership=1\n",(unsigned long long)totalBaselineHits,(unsigned long long)totalHits,(unsigned long long)failed);
+}
+void published_lifetime_checks(Fixtures& f){
+ const auto refs0=native::FromAPI(f.pipelines[0].Get())->GetRefCountForTesting();
+ const auto refs1=native::FromAPI(f.pipelines[1].Get())->GetRefCountForTesting();
+ g_pipelines[4097]={f.pipelines[0],5097};g_cachedBindGroups[4097]={f.groups[0],6097};
+ {
+  auto encoder=f.d.device.CreateCommandEncoder();auto pass=f.begin(encoder);
+  g_currentPipeline=UINTPTR_MAX;g_currentTextureGroup=0;
+  {
+   ScopedPassObjectLookups scope;
+   for(auto key:{PipelineRef{1},PipelineRef{4097}}){assert(after_bind_pipeline(key,pass));after_bind_texture_group(key,pass);pass.Draw(3);}
+   // The pass still owns the originally resolved immutable objects, including
+   // the spare entry. A producer-map erase cannot revoke a recorded FrameRef.
+   g_pipelines.erase(1);g_cachedBindGroups.erase(1);wgpu::RenderPipeline missing;
+   assert(!get_pipeline(1,missing));assert(after_bind_pipeline(1,pass));after_bind_texture_group(1,pass);pass.Draw(3);
+   {
+    ScopedPassObjectLookupPause pause;assert(g_passObjectLookups==nullptr);
+    g_pipelines[1]={f.pipelines[0],1001};g_cachedBindGroups[1]={f.groups[0],2001};
+    wgpu::RenderPipeline fresh;assert(get_pipeline(1,fresh)&&fresh.Get()==f.pipelines[0].Get());
+    pass.SetPipeline(fresh);pass.SetBindGroup(2,find_bind_group(1));pass.Draw(3);
+   }
+   // This is the actual custom-callback contract from render_pass: clear BOTH
+   // memos and binding fast paths before the next recorded GX operation.
+   g_passObjectLookups->clear();g_currentPipeline=UINTPTR_MAX;g_currentTextureGroup=0;
+   assert(after_bind_pipeline(1,pass));after_bind_texture_group(1,pass);pass.Draw(3);
+  }
+  pass.End();auto commands=encoder.Finish();const auto normalized=normalize(commands);
+  std::vector<std::pair<uintptr_t,uintptr_t>> draws;uintptr_t pipe=0,group=0;
+  for(const auto& cmd:normalized){
+   if(cmd[0]==uint64_t(native::Command::SetRenderPipeline))pipe=cmd[1];
+   else if(cmd[0]==uint64_t(native::Command::SetBindGroup))group=cmd[2];
+   else if(cmd[0]==uint64_t(native::Command::Draw))draws.emplace_back(pipe,group);
+  }
+  const auto p0=uintptr_t(native::FromAPI(f.pipelines[0].Get())),p1=uintptr_t(native::FromAPI(f.pipelines[1].Get()));
+  const auto g0=uintptr_t(native::FromAPI(f.groups[0].Get())),g1=uintptr_t(native::FromAPI(f.groups[1].Get()));
+  assert((draws==std::vector<std::pair<uintptr_t,uintptr_t>>{{p1,g1},{p0,g0},{p1,g1},{p0,g0},{p0,g0}}));
+ }
+ assert(g_passObjectLookups==nullptr);g_pipelines.erase(4097);g_cachedBindGroups.erase(4097);f.populate();
+ assert(native::FromAPI(f.pipelines[0].Get())->GetRefCountForTesting()==refs0);
+ assert(native::FromAPI(f.pipelines[1].Get())->GetRefCountForTesting()==refs1);
+ std::puts("PUBLISHED_RESOURCE_LIFETIME owned_spare_survives_map_erase=1 callback_new_identity_observed=1 postcallback_old_identity_not_used=1 actual_native_draws=5 refcounts_return=1");
+}
 void correctness(){
  for(unsigned cycle=0;cycle<12;++cycle){
   Fixtures f(false);
+  if(cycle==0){policy_checks(f);published_lifetime_checks(f);}
   static_assert(sizeof(PassObjectLookups)==2080);
   static_assert(!std::is_copy_constructible_v<ScopedPassObjectLookups>);
   static_assert(!std::is_copy_constructible_v<ScopedPassObjectLookupPause>);

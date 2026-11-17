@@ -4,6 +4,7 @@ import argparse
 from collections import Counter, defaultdict
 import importlib.util
 import json
+import math
 from pathlib import Path
 import statistics
 
@@ -20,6 +21,81 @@ WINDOW_NS = 5_000_000_000
 STAGE_KINDS = frozenset(range(6))
 FAIL_EVENTS = {'scene_error', 'error', 'timeout', 'aborted'}
 TERMINAL_EVENTS = {'complete', 'aborted', 'incomplete'}
+COVERAGE_REGIONS = ('Frigate Orpheon', 'Tallon Overworld', 'Chozo Ruins', 'Magmoor Caverns',
+                    'Phendrana Drifts', 'Phazon Mines', 'Impact Crater')
+ACTION_FIELDS = ('movement_distance_m', 'aim_degrees', 'power_projectiles', 'charged_projectiles',
+                 'missile_projectiles', 'bomb_objects', 'airborne_frames', 'morphed_frames',
+                 'enemy_lock_frames', 'unexpected_warps', 'jump_safe')
+
+
+def coverage_manifest(start, expected_views):
+    if start.get('tour_version') != 3:
+        return None
+    plan = start.get('coverage_plan')
+    valid = (expected_views == 4 and start.get('coverage_scope') == 'assisted_room_actions'
+             and start.get('planned_rooms') == 24 and start.get('planned_phases') == 96
+             and isinstance(plan, list) and len(plan) == 24)
+    if not valid:
+        return []
+    for index, row in enumerate(plan, 1):
+        if (not isinstance(row, dict) or not integer(row.get('visit'))
+                or row['visit'] != index or row.get('region') not in COVERAGE_REGIONS):
+            return []
+        if any(not isinstance(row.get(k), str) or not row[k] for k in ('scene', 'visual_targets')):
+            return []
+        if any(not isinstance(row.get(k), str) or len(row[k]) != 8
+               or any(c not in '0123456789ABCDEF' for c in row[k]) for k in ('world', 'mrea')):
+            return []
+    if len({(r['world'], r['mrea']) for r in plan}) != len(plan):
+        return []
+    if {r['region'] for r in plan} != set(COVERAGE_REGIONS):
+        return []
+    return plan
+
+
+def action_problem(marker, view):
+    if (marker.get('workload') != 'scripted_native_input_v2'
+            or marker.get('input_source') != 'virtual_gamecube_pad'):
+        return 'unverified_native_action_workload'
+    for name in ('movement_distance_m', 'aim_degrees'):
+        value = marker.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            return 'invalid_action_observations'
+    if any(not integer(marker.get(k)) for k in ACTION_FIELDS[2:-1]):
+        return 'invalid_action_observations'
+    if not isinstance(marker.get('jump_safe'), bool):
+        return 'invalid_action_observations'
+    moved = marker['movement_distance_m'] >= (2 if view == 0 else 1)
+    action = (marker['aim_degrees'] >= 5 if view == 0 else
+              marker['power_projectiles'] > 0 and (not marker['jump_safe'] or marker['airborne_frames'] > 0)
+              if view == 1 else marker['missile_projectiles'] > 0 if view == 2 else
+              marker['morphed_frames'] >= 30 and marker['bomb_objects'] > 0)
+    return None if moved and action and marker['unexpected_warps'] == 0 else 'insufficient_action_evidence'
+
+
+def coverage_summary(plan, visits, status, issues):
+    if plan is None:
+        return None
+    by_id = {v['visit']: v for v in visits}
+    regions = []
+    for region in COVERAGE_REGIONS:
+        planned = [row for row in plan if row['region'] == region]
+        accepted = [row['scene'] for row in planned if by_id.get(row['visit'], {}).get('status') == 'accepted']
+        regions.append({'region': region, 'planned_rooms': len(planned), 'accepted_rooms': len(accepted),
+                        'status': 'measured' if planned and len(accepted) == len(planned) else
+                                  'partial' if accepted else 'not_measured',
+                        'pending_rooms': [row['scene'] for row in planned if row['scene'] not in accepted]})
+    accepted = sum(v['status'] == 'accepted' for v in visits)
+    return {'scope': 'assisted_room_actions', 'planned_rooms': len(plan), 'accepted_rooms': accepted,
+            'planned_action_phases': len(plan) * 4,
+            'accepted_action_phases': sum(len(v['views']) for v in visits if v['status'] == 'accepted'),
+            'room_workloads_complete': bool(plan) and accepted == len(plan) and status == 'complete' and not issues,
+            'regions': regions, 'visual_targets': 'planned stress categories; visual correctness not verified',
+            'not_exercised': ['boss encounters and boss deaths', 'normal progression and puzzles',
+                              'save/load and upgrade persistence', 'cinematics and ending',
+                              'elevator and frigate escape sequence', 'visual accuracy comparisons',
+                              'controller reconnect and audio synchronisation'],
+            'release_acceptance': 'pending; room-action coverage is not a complete-game playthrough'}
 
 
 def integer(value):
@@ -171,8 +247,16 @@ def analyse(frame_rows, marker_rows, expected_views=4):
         run['status'] = terminals[-1]['event'] if terminals else 'incomplete'
         if terminals and terminals[-1].get('status', 'ok') != 'ok':
             run['status'] = terminals[-1].get('status') or 'error'
+        plan = coverage_manifest(starts[0], expected_views) if starts else None
+        run['coverage_plan'] = plan
+        if plan == []:
+            run['issues'].append('invalid_coverage_manifest')
         for marker in run['markers']:
             event = marker['event']
+            if plan is not None and (marker.get('tour_version') != 3
+                    or marker.get('coverage_scope') != 'assisted_room_actions'
+                    or marker.get('planned_rooms') != 24 or marker.get('planned_phases') != 96):
+                run['issues'].append('changed_coverage_metadata')
             if event not in {'wait_ready', 'ready', 'warm_begin', 'measure_begin', 'measure_end', *FAIL_EVENTS}:
                 continue
             visit_id = marker.get('visit')
@@ -182,9 +266,12 @@ def analyse(frame_rows, marker_rows, expected_views=4):
             visit = run['visits'].setdefault(visit_id, {
                 'visit': visit_id, 'scene': marker.get('scene'), 'pass': marker.get('pass'),
                 'world': marker.get('world'), 'mrea': marker.get('mrea'), 'views': {}, 'issues': [],
+                'region': marker.get('region'), 'visual_targets': marker.get('visual_targets'),
             })
             if any(visit[field] != marker.get(field) for field in ('scene', 'pass', 'world', 'mrea')):
                 visit['issues'].append('changed_visit_identity')
+            if plan is not None and any(visit[field] != marker.get(field) for field in ('region', 'visual_targets')):
+                visit['issues'].append('changed_coverage_visit_metadata')
             if not isinstance(visit['scene'], str) or not visit['scene'] or not integer(visit['pass']) or visit['pass'] < 1:
                 visit['issues'].append('invalid_visit_metadata')
             retry_end = event == 'measure_end' and marker.get('status') == 'pipeline_compile_during_measure'
@@ -208,6 +295,11 @@ def analyse(frame_rows, marker_rows, expected_views=4):
                 visit['issues'].append('invalid_measure_attempt')
                 continue
             pair = visit['views'].setdefault(view, {}).setdefault(attempt, {'attempt': attempt})
+            if plan is not None and event == 'measure_end' and not retry_end:
+                pair['action_evidence'] = {name: marker.get(name) for name in ACTION_FIELDS}
+                problem = action_problem(marker, view)
+                if problem:
+                    visit['issues'].append(problem)
             if retry_end:
                 pair['failed_status'] = marker['status']
             if marker.get('shader_gate_required'):
@@ -220,6 +312,15 @@ def analyse(frame_rows, marker_rows, expected_views=4):
             if endpoint in pair:
                 visit['issues'].append('duplicate_' + event)
             pair[endpoint] = marker['monotonic_ns']
+        if plan:
+            expected = {row['visit']: row for row in plan}
+            for visit in run['visits'].values():
+                row = expected.get(visit['visit'])
+                if row is None or visit['pass'] != 1 or any(visit.get(k) != row.get(k) for k in
+                        ('scene', 'world', 'mrea', 'region', 'visual_targets')):
+                    visit['issues'].append('coverage_plan_mismatch')
+            for row in plan:
+                run['visits'].setdefault(row['visit'], {**row, 'pass': 1, 'views': {}, 'issues': ['not_visited']})
         for visit in run['visits'].values():
             for view, attempts in list(visit['views'].items()):
                 # Only the final attempt is eligible; never cherry-pick an old
@@ -289,6 +390,7 @@ def analyse(frame_rows, marker_rows, expected_views=4):
             visits.append({
                 'visit': visit['visit'], 'scene': visit['scene'], 'pass': visit['pass'],
                 'world': visit['world'], 'mrea': visit['mrea'],
+                'region': visit.get('region'), 'visual_targets': visit.get('visual_targets'),
                 'status': 'accepted' if accepted else 'excluded', 'reasons': reasons,
                 'views': per_view, 'selected_windows': len(selected),
                 'selected_window_duration_ns': sum(row['end_ns'] - row['start_ns'] for row in selected),
@@ -302,8 +404,10 @@ def analyse(frame_rows, marker_rows, expected_views=4):
             'session_id': key[0], 'run_id': key[1], 'status': run['status'],
             'issues': sorted(set(run['issues'])), 'first_index': run['first_index'], 'visits': visits,
             'configuration': {name: run['markers'][0][name] for name in
-                              ('workload', 'cache_policy', 'assisted_inventory', 'invulnerable')
+                              ('workload', 'cache_policy', 'assisted_inventory', 'invulnerable',
+                               'tour_version', 'coverage_scope', 'planned_rooms', 'planned_phases', 'nominal_minimum_seconds')
                               if name in run['markers'][0]},
+            'coverage': coverage_summary(run.get('coverage_plan'), visits, run['status'], run['issues']),
         })
     counts = {
         'runs': len(output), 'terminal_complete_runs': sum(run['status'] == 'complete' for run in output),
@@ -314,6 +418,9 @@ def analyse(frame_rows, marker_rows, expected_views=4):
         'selected_windows': len(used), 'input_frame_windows': len(frame_rows),
         'input_markers': len(marker_rows),
         'selected_frames': sum(v['main']['frames'] for run in output for v in run['visits'] if v['main']),
+        'coverage_runs': sum(run['coverage'] is not None for run in output),
+        'coverage_complete_regions': sum(r['status'] == 'measured' for run in output if run['coverage']
+                                         for r in run['coverage']['regions']),
     }
     counts['excluded_visits'] = counts['visits'] - counts['accepted_visits']
     return {'schema': 1, 'counts': counts, 'diagnostics': dict(sorted(diagnostics.items())), 'runs': output}
@@ -324,6 +431,11 @@ def report(result, details=False):
     lines = [f"Tour capture: {counts['runs']} run(s), {counts['accepted_visits']} accepted / "
              f"{counts['visits']} room/pass visits, {counts['selected_windows']} complete windows.", '']
     for run in result['runs']:
+        if run.get('coverage'):
+            coverage = run['coverage']
+            lines.append(f"Coverage: {coverage['accepted_rooms']}/{coverage['planned_rooms']} planned room workloads accepted; "
+                         f"{sum(r['status'] == 'measured' for r in coverage['regions'])}/7 regions fully sampled.")
+            lines.append('Bosses, progression, saves, cinematics and visual accuracy remain pending; this is assisted room-action coverage.')
         lines.extend([f"Run {run['run_id']} / session {run['session_id']}: {run['status']}.",
                       '| Room / pass | Status | Windows / frames | Mean ms | Window median ms | Worst window P95 ms | Worst ms | >20 ms |',
                       '|---|---|---:|---:|---:|---:|---:|---:|'])

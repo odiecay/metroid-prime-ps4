@@ -41,7 +41,8 @@ static void write(const fs::path& p,const std::string& v) { std::ofstream(p,std:
 int main(int argc,char** argv) {
     assert(argc==3);const std::string mode=argv[1];const fs::path root=argv[2];
     const fs::path live=root/"live";fs::create_directories(live);
-    const bool play=mode.starts_with("play_");
+    const bool coverage=mode.starts_with("coverage_");
+    const bool play=coverage||mode.starts_with("play_");
     std::string settings="render_scale=2.25\nmsaa=1\noriginal_experience=0\n";
     write(live/"port_settings.ini",settings);write(live/"memorycard.bin","PROTECTED-SAVE");
     setenv("MP_USER_PATH",live.c_str(),1);setenv("MP_CACHE_PATH",(live/"cache").c_str(),1);
@@ -52,11 +53,12 @@ int main(int argc,char** argv) {
     }
     write(root/"benchmark-tour.cfg",mode=="invalid"?"not-a-tour\n":"PROJECT_PRIME_BENCHMARK_TOUR_V1\n");
     if(play)write(root/"benchmark-play.cfg",mode=="play_invalid"?"WRONG_VERSION\n":"PROJECT_PRIME_BENCHMARK_PLAY_V2\n");
+    if(coverage)write(root/"benchmark-coverage.cfg",mode=="coverage_invalid"?"WRONG_VERSION\n":"PROJECT_PRIME_BENCHMARK_COVERAGE_V3\n");
     if(mode=="symlink") {
         fs::create_directories(root/"benchmarks");
         fs::create_directory_symlink(live,root/"benchmarks"/"tour-v1");
     }
-    if(mode=="invalid"||mode=="symlink"||mode=="play_invalid") {
+    if(mode=="invalid"||mode=="symlink"||mode=="play_invalid"||mode=="coverage_invalid") {
         bool failed=false;try { prime::prepare_benchmark_tour(root); }catch(...) {failed=true;}
         assert(failed);assert(!prime::benchmark_tour_enabled());
         assert(std::string(getenv("MP_USER_PATH"))==live);assert(read(live/"port_settings.ini")==settings);
@@ -88,7 +90,8 @@ int main(int argc,char** argv) {
         assert(permissionChanges==1);
         assert(!fs::exists(root/"benchmarks/play-v2/user/port_settings.ini.pending"));
     }
-    assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/(play?"play-v2":"tour-v1");
+    assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/(coverage?"coverage-v3":play?"play-v2":"tour-v1");
+    assert(std::sscanf(getenv("MP_BOOT_WORLD"),"%x:%x",&world,&area)==2);
     assert(prime::benchmark_play_enabled()==play);
     assert(std::string(getenv("MP_USER_PATH"))==bench/"user");
     assert(std::string(getenv("MP_CACHE_PATH"))==bench/"cache");
@@ -98,7 +101,8 @@ int main(int argc,char** argv) {
     if(mode=="log_failure")prime::benchmark_tour_log_failure_for_testing();
     if(mode=="queue_failure")rejectQueue=true;
     uint64_t tick=0,ns=1000000000ull;bool interrupted=false;
-    while(prime::benchmark_tour_enabled()&&tick<100000) {
+    const unsigned tickLimit=coverage?250000:100000;
+    while(prime::benchmark_tour_enabled()&&tick<tickLimit) {
         auto control=prime::benchmark_play_control();
         if(mode=="shader_busy") {
             shaders.queued=tick<450?3:0;shaders.background=tick<600?2:0;
@@ -114,10 +118,10 @@ int main(int argc,char** argv) {
            (mode=="shader_unstable"||(mode=="shader_retry"&&!interrupted))) {
             ++shaders.completed;interrupted=true;
         }
-        if(control.placing)prime::benchmark_play_placement(mode!="play_bad_pose",0,0,0,4,20,true,100);
+        if(control.placing)prime::benchmark_play_placement(mode!="play_bad_pose"&&mode!="coverage_bad_pose",0,0,0,4,20,true,100);
         if(control.measuring || control.rehearsing) {
             prime::BenchmarkPlayObservation sample;sample.valid=true;
-            if(mode!="play_no_actions") {
+            if(mode!="play_no_actions"&&mode!="coverage_no_actions") {
                 sample.x=control.inputTick*.01f;sample.yaw=std::sin(control.inputTick*.03f)*.15f;
                 sample.airborne=control.view==1&&control.inputTick<40;sample.morphed=control.view==3;
                 sample.power=control.view==1&&control.inputTick%20==0;
@@ -128,12 +132,12 @@ int main(int argc,char** argv) {
             prime::benchmark_play_observe(sample);
             if(mode=="play_guard"&&control.inputTick==100)prime::benchmark_play_fail("route_guard");
         }
-        ++tick;ns+=mode=="timeout"?121000000000ull:16666667ull;
-        bool ready=mode!="timeout";
+        ++tick;ns+=(mode=="timeout"||mode=="coverage_timeout")?121000000000ull:16666667ull;
+        bool ready=mode!="timeout"&&mode!="coverage_timeout";
         if(mode=="lost_ready"&&!interrupted&&tick==400) { ready=false;interrupted=true; }
         prime::benchmark_tour_tick_at_for_testing(world,area,tick,tick,ready,ns);
     }
-    assert(tick<100000);assert(!prime::benchmark_tour_enabled());
+    assert(tick<tickLimit);assert(!prime::benchmark_tour_enabled());
     assert(read(live/"port_settings.ini")==settings);assert(read(live/"memorycard.bin")=="PROTECTED-SAVE");
     if(mode=="complete") {
         assert(commands.size()==81); //22 inventory,48 fixed-yaw,11 cross-room loads

@@ -25,17 +25,17 @@ roughly **80 MB**; you add your own game image separately.
 
 ![DualShock 4 quick guide: original-style buttons with twin-stick aim](docs/images/ps4-controls.svg)
 
-## Download — Release Candidate 7
+## Download — Release Candidate 8
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.50-RC7.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.51-RC8.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
-RC7 adds collision reuse to Dawn’s bounded bind-group usage cache, retaining
-the same 64-reference limit and resource tracking. It keeps the earlier
-presentation, model, control and startup fixes. Host and native checks pass;
-the new cache’s PS4 performance comparison is pending.
-In matched v49 console tests, the presentation change reduced Fiery Shores’
-p95 frame time from 28.8 to 18.6 ms. Heavy Main Plaza views still ran around
+RC8 corrects the 3D PS4’s front and rear chassis slopes and streamlines Aurora’s
+pass lookups without increasing the cache size. It retains the proven native
+presentation changes and the earlier control and startup fixes. The latest
+renderer change’s PS4 performance comparison is pending.
+Matched v49 console tests reduced Fiery Shores’ p95 frame time from 28.8 to
+18.6 ms with the presentation fix. Heavy Main Plaza views still run around
 40–42 FPS. A locked 1080p60 and a complete playthrough have not been verified.
 Please include the room and what you were doing when reporting a problem.
 

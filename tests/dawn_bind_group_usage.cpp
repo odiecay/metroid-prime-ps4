@@ -407,28 +407,20 @@ void cache_invariants(Device& d) {
     std::array<native::BindGroupBase*,64> direct{};
     std::array<native::BindGroupBase*,64> model{};
     auto primary=[](auto* p){auto id=reinterpret_cast<uintptr_t>(p);return((id>>4)^(id>>11))%64;};
-    auto alternate=[](auto* p){auto id=reinterpret_cast<uintptr_t>(p);return((id>>6)^(id>>17))%64;};
     std::mt19937 rng(0x49641080);
     uint64_t hits=0,referenceHits=0;
     for(unsigned step=0;step<250000;++step) {
         const unsigned phase=(step/1000)%4;
         const unsigned index=phase==0?rng()%16:phase==1?rng()%96:phase==2?rng()%512:step%48;
         auto* group=native::FromAPI(groups[index].Get());
-        const size_t p=primary(group),a=alternate(group);
+        const size_t p=primary(group);
         const bool baseHit=direct[p]==group;
-        const bool modelHit=model[p]==group||model[a]==group;
+        const bool modelHit=model[p]==group;
         assert(!baseHit||modelHit);
         direct[p]=group;
-        if(model[p]!=group) {
-            if(model[a]==group) {
-                std::swap(model[p],model[a]);
-                if(model[a]&&a!=primary(model[a])&&a!=alternate(model[a]))model[a]=nullptr;
-            }
-            else {
-                if(model[p]&&!model[alternate(model[p])])model[alternate(model[p])]=model[p];
-                model[p]=group;
-            }
-        }
+        // Model the selected v49 primary-only policy. The rejected v50
+        // associative policy and its proof remain in its frozen archive.
+        model[p]=group;
         // Every occupied baseline primary must remain at exactly that slot.
         for(unsigned i=0;i<64;++i)assert(!direct[i]||direct[i]==model[i]);
         const auto beforeBase=reference.GetBindGroupUsageCountsForTesting();

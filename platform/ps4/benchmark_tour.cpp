@@ -21,10 +21,15 @@ namespace {
 namespace fs = std::filesystem;
 constexpr std::string_view Request = "PROJECT_PRIME_BENCHMARK_TOUR_V1\n";
 constexpr std::string_view PlayRequest = "PROJECT_PRIME_BENCHMARK_PLAY_V2\n";
+constexpr std::string_view CoverageRequest = "PROJECT_PRIME_BENCHMARK_COVERAGE_V3\n";
 constexpr uint64_t Second = 1000000000ull;
 constexpr unsigned WarmTicks = 180, ViewSettleTicks = 60, Passes = 2;
 constexpr uint64_t MeasureNs = 12 * Second, RoomTimeoutNs = 120 * Second;
-struct Scene { const char* name; uint32_t world, area; };
+struct Scene {
+    const char* name; uint32_t world, area;
+    const char* region = nullptr;
+    const char* visualTargets = nullptr;
+};
 // The pinned port_ap_world_data.inc room table supplies these exact IDs.
 constexpr std::array<Scene, 6> Scenes{{
     {"Tallon Canyon",       0x39F2DE28, 0x2043C96E},
@@ -34,9 +39,37 @@ constexpr std::array<Scene, 6> Scenes{{
     {"Research Lab Hydra",  0xA8BE6291, 0x43E4CC25},
     {"Main Quarry",         0xB1AC4D65, 0x643D038F},
 }};
+// Separate opt-in coverage plan. The six-room V2 comparison remains unchanged.
+// Targets describe intended workloads, not verified visual effects or progression.
+constexpr std::array<Scene, 24> CoverageScenes{{
+    {"Exterior Docking Hangar",0x158EFE17,0xD1241219,"Frigate Orpheon","exterior_geometry"},
+    {"Biotech Research Area 1",0x158EFE17,0x85578E54,"Frigate Orpheon","interior_materials"},
+    {"Deck Alpha Mech Shaft",0x158EFE17,0xC8971E99,"Frigate Orpheon","vertical_geometry"},
+    {"Landing Site",0x39F2DE28,0xB2701146,"Tallon Overworld","rain_vegetation"},
+    {"Tallon Canyon",0x39F2DE28,0x2043C96E,"Tallon Overworld","vegetation_geometry"},
+    {"Frigate Crash Site",0x39F2DE28,0xB9ABCD56,"Tallon Overworld","water_reflections"},
+    {"Root Cave",0x39F2DE28,0xBD8C8625,"Tallon Overworld","vegetation_vertical_geometry"},
+    {"Main Plaza",0x83F6FF6F,0xD5CDB809,"Chozo Ruins","complex_geometry"},
+    {"Arboretum",0x83F6FF6F,0x18AB6106,"Chozo Ruins","vegetation_geometry"},
+    {"Reflecting Pool",0x83F6FF6F,0x361ECAAC,"Chozo Ruins","water_reflections"},
+    {"Fiery Shores",0x3EF8237C,0xF5EF1862,"Magmoor Caverns","lava_particles"},
+    {"Lava Lake",0x3EF8237C,0xA4719C6A,"Magmoor Caverns","lava_heat"},
+    {"Geothermal Core",0x3EF8237C,0xC0498676,"Magmoor Caverns","vertical_geometry_heat"},
+    {"Phendrana Shorelines",0xA8BE6291,0xF7285979,"Phendrana Drifts","snow_ice_lighting"},
+    {"Research Lab Hydra",0xA8BE6291,0x43E4CC25,"Phendrana Drifts","complex_geometry_materials"},
+    {"Phendrana's Edge",0xA8BE6291,0x54DEF128,"Phendrana Drifts","vertical_geometry_fog"},
+    {"Gravity Chamber",0xA8BE6291,0x49175472,"Phendrana Drifts","water_lighting"},
+    {"Research Core",0xA8BE6291,0xA49B2544,"Phendrana Drifts","interior_lighting"},
+    {"Main Quarry",0xB1AC4D65,0x643D038F,"Phazon Mines","complex_geometry"},
+    {"Phazon Processing Center",0xB1AC4D65,0xAD2E7EB9,"Phazon Mines","vertical_geometry_lighting"},
+    {"Metroid Quarantine A",0xB1AC4D65,0xFB051F5A,"Phazon Mines","dark_materials_particles"},
+    {"Ore Processing",0xB1AC4D65,0x97D2B2F6,"Phazon Mines","complex_geometry_materials"},
+    {"Crater Entry Point",0xC13B09D1,0x93668996,"Impact Crater","endgame_materials"},
+    {"Phazon Core",0xC13B09D1,0xBD946AC3,"Impact Crater","phazon_particles_geometry"},
+}};
 enum class Phase { Waiting, ViewSettle, Rehearsing, ShaderWait, Measuring, Finished };
 struct State {
-    bool enabled{}, started{}, inventory{}, play{}, placementReady{}, jumpSafe{}, havePosition{}, rehearsed{};
+    bool enabled{}, started{}, inventory{}, play{}, coverage{}, placementReady{}, jumpSafe{}, havePosition{}, rehearsed{};
     unsigned shaderRetries{}, shaderStableFrames{};
     uint64_t lastShaderFrame{};
     AuroraPipelineReadiness shaders{}, measuredShaders{};
@@ -50,6 +83,8 @@ struct State {
     std::string runId, session;
     FILE* log{};
 } state;
+size_t scene_count() { return state.coverage ? CoverageScenes.size() : Scenes.size(); }
+const Scene& scene_at(size_t index) { return state.coverage ? CoverageScenes[index] : Scenes[index]; }
 
 uint64_t now_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -66,7 +101,7 @@ void json_text(FILE* file, const char* text) {
 bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
             uint64_t frame, uint32_t actualWorld = 0, uint32_t actualArea = 0) {
     if (!state.log) return false;
-    const auto& scene = Scenes[state.scene];
+    const auto& scene = scene_at(state.scene);
     std::fprintf(state.log, "{\"schema\":1,\"type\":\"benchmark_tour\",\"session_id\":");
     json_text(state.log, state.session.c_str());
     std::fputs(",\"run_id\":", state.log); json_text(state.log, state.runId.c_str());
@@ -78,7 +113,7 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         "\"invulnerable\":true,\"cache_policy\":\"isolated_persistent\","
         "\"workload\":\"%s\"",
         event, static_cast<unsigned long long>(ns), static_cast<unsigned long long>(frame),
-        static_cast<unsigned long long>(tick), static_cast<unsigned>(state.pass * Scenes.size() + state.scene + 1),
+        static_cast<unsigned long long>(tick), static_cast<unsigned>(state.pass * scene_count() + state.scene + 1),
         scene.name, state.pass + 1, state.view, state.view * 90, scene.world, scene.area,
         actualWorld, actualArea, status, static_cast<unsigned long long>(state.frames), state.errors,
         state.play ? "scripted_native_input_v2" : "stationary_authored_spawn_four_yaws");
@@ -89,7 +124,7 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         "\"morphed_frames\":%u,\"enemy_lock_frames\":%u,\"guard_stops\":%u,"
         "\"unexpected_warps\":%u,\"route_length_m\":%.4f,\"openness_m\":%.4f,"
         "\"jump_safe\":%s,\"setup_ns\":%llu,\"position\":[%.5f,%.5f,%.5f],\"route_yaw_degrees\":%.4f",
-        state.play ? "virtual_gamecube_pad" : "none", state.play ? 2u : 1u, state.play ? kinds[state.view < 4 ? state.view : 3] : "fixed_yaw",
+        state.play ? "virtual_gamecube_pad" : "none", state.coverage ? 3u : state.play ? 2u : 1u, state.play ? kinds[state.view < 4 ? state.view : 3] : "fixed_yaw",
         state.play ? "true" : "false", state.distance, state.aimDegrees, state.power, state.charged, state.missiles,
         state.bombs, state.airFrames, state.morphFrames, state.lockFrames, state.guardStops,
         state.warps, state.routeLength, state.openness, state.jumpSafe ? "true" : "false",
@@ -99,13 +134,32 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         "\"shaders_pending\":%u,\"shader_drop_pending\":%u,\"shader_prefetch_queued\":%u,\"shader_prefetch_active\":%u,\"shader_epoch\":%llu,"
         "\"shader_completed\":%llu,\"shader_failures\":%llu,\"shader_stable_frames\":%u,"
         "\"steering\":\"%s\",\"movement_basis\":\"%s\","
-        "\"twin_stick\":%s,\"remastered_movement\":%s}\n",
+        "\"twin_stick\":%s,\"remastered_movement\":%s",
         state.shaderRetries,state.shaders.queued,state.shaders.background,state.shaders.active,state.shaders.pending,
         state.shaders.dropPending,state.shaders.prefetchQueued,state.shaders.prefetchActive,static_cast<unsigned long long>(state.shaders.epoch),
         static_cast<unsigned long long>(state.shaders.completed),static_cast<unsigned long long>(state.shaders.failures),
         state.shaderStableFrames,state.play ? "closed_loop_route_v3" : "none",
         state.play ? "body_direct_aim_or_ball_control_flat" : "none",
         state.play ? "true" : "null",state.play ? "false" : "null");
+    if (state.coverage) {
+        std::fprintf(state.log, ",\"coverage_scope\":\"assisted_room_actions\",\"region\":");
+        json_text(state.log, scene.region);
+        std::fputs(",\"visual_targets\":",state.log);json_text(state.log,scene.visualTargets);
+        std::fprintf(state.log, ",\"planned_rooms\":%zu,\"planned_phases\":%zu,\"nominal_minimum_seconds\":2581",
+                     CoverageScenes.size(), CoverageScenes.size() * 4);
+        if (std::string_view(event) == "start") {
+            std::fputs(",\"coverage_plan\":[",state.log);
+            for (size_t i=0;i<CoverageScenes.size();++i) {
+                const auto& planned=CoverageScenes[i];
+                std::fprintf(state.log,"%s{\"visit\":%zu,\"scene\":",i?",":"",i+1);
+                json_text(state.log,planned.name);std::fputs(",\"region\":",state.log);json_text(state.log,planned.region);
+                std::fprintf(state.log,",\"world\":\"%08X\",\"mrea\":\"%08X\",\"visual_targets\":",planned.world,planned.area);
+                json_text(state.log,planned.visualTargets);std::fputc('}',state.log);
+            }
+            std::fputc(']',state.log);
+        }
+    }
+    std::fputs("}\n",state.log);
     if (std::ferror(state.log) || std::fflush(state.log) != 0) {
         std::fprintf(stderr, "[benchmark-tour] marker write failed; stopped without acceptance (run %s)\n", state.runId.c_str());
         state.phase = Phase::Finished; ++state.errors;
@@ -132,18 +186,18 @@ void finish(uint64_t ns, uint64_t tick, uint64_t frame) {
 }
 void next_scene(uint64_t ns, uint64_t tick, uint64_t frame) {
     if (state.phase == Phase::Finished) return;
-    if (++state.scene == Scenes.size()) {
+    if (++state.scene == scene_count()) {
         state.scene = 0;
         const unsigned passes = state.play ? 1u : Passes;
         if (++state.pass == passes) {
             // Keep the final marker's visit/scene identity within the actual tour.
-            state.pass = passes - 1; state.scene = Scenes.size() - 1;
+            state.pass = passes - 1; state.scene = scene_count() - 1;
             finish(ns, tick, frame); return;
         }
     }
     state.view = 0; state.settled = 0; state.frames = 0;
     state.phase = Phase::Waiting; state.deadline = ns + RoomTimeoutNs;
-    char line[64]; const auto& scene = Scenes[state.scene];
+    char line[64]; const auto& scene = scene_at(state.scene);
     std::snprintf(line, sizeof(line), "warp %08X %08X", scene.world, scene.area);
     if (!queue(line)) {
         ++state.errors; marker("aborted", "queue_full", ns, tick, frame);
@@ -208,7 +262,7 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
         if (!marker("start", "ok", ns, tick, frame, world, area) ||
             !marker("wait_ready", "ok", ns, tick, frame, world, area)) return;
     }
-    const auto& scene = Scenes[state.scene];
+    const auto& scene = scene_at(state.scene);
     const bool here = world == scene.world && area == scene.area;
     if (state.phase != Phase::Measuring && ns >= state.deadline) {
         scene_error(state.phase == Phase::ShaderWait ? "shader_timeout" : "timeout", ns, tick, frame, world, area); return;
@@ -279,9 +333,11 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
 } // namespace
 
 bool prepare_benchmark_tour(const fs::path& root) {
+    const fs::path coverageRequest = root / "benchmark-coverage.cfg";
+    const bool coverage = fs::exists(coverageRequest) || fs::is_symlink(coverageRequest);
     const fs::path playRequest = root / "benchmark-play.cfg";
-    const bool play = fs::exists(playRequest) || fs::is_symlink(playRequest);
-    const fs::path request = play ? playRequest : root / "benchmark-tour.cfg";
+    const bool play = coverage || fs::exists(playRequest) || fs::is_symlink(playRequest);
+    const fs::path request = coverage ? coverageRequest : play ? playRequest : root / "benchmark-tour.cfg";
     if (!fs::exists(request) && !fs::is_symlink(request)) return false;
     if (state.enabled) throw std::runtime_error("Benchmark tour was already configured");
     if (fs::is_symlink(request) || !fs::is_regular_file(request) || fs::file_size(request) > 128)
@@ -289,12 +345,12 @@ bool prepare_benchmark_tour(const fs::path& root) {
     std::ifstream input(request, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(input)), {});
     if (!input.eof() && input.fail()) throw std::runtime_error("Could not read benchmark request");
-    if (text != (play ? PlayRequest : Request)) throw std::runtime_error("Invalid benchmark request marker");
+    if (text != (coverage ? CoverageRequest : play ? PlayRequest : Request)) throw std::runtime_error("Invalid benchmark request marker");
     const char* user = std::getenv("MP_USER_PATH");
     const fs::path settings = user ? fs::path(user) / "port_settings.ini" : fs::path{};
     if (settings.empty() || fs::is_symlink(settings) || !fs::is_regular_file(settings) || fs::file_size(settings) > 1024 * 1024)
         throw std::runtime_error("Benchmark requires the current port_settings.ini for identical graphics settings");
-    directory(root / "benchmarks"); const auto base = root / "benchmarks" / (play ? "play-v2" : "tour-v1");
+    directory(root / "benchmarks"); const auto base = root / "benchmarks" / (coverage ? "coverage-v3" : play ? "play-v2" : "tour-v1");
     directory(base); directory(base / "user"); directory(base / "cache"); directory(base / "logs");
     directory(base / "cache" / "mesa");
     for (const auto& item : fs::recursive_directory_iterator(base))
@@ -328,6 +384,7 @@ bool prepare_benchmark_tour(const fs::path& root) {
     state.log = std::fopen(log.c_str(), "ab");
     if (!state.log) throw std::runtime_error("Could not open benchmark tour log");
     state.play = play;
+    state.coverage = coverage;
     state.session = prime_ps4_trace_session_id();
     state.runId = state.session + (play ? "-play-" : "-tour-") + std::to_string(now_ns());
     environment("MP_USER_PATH", (base / "user").string());
@@ -335,7 +392,8 @@ bool prepare_benchmark_tour(const fs::path& root) {
     environment("MESA_SHADER_CACHE_DIR", (base / "cache" / "mesa").string());
     environment("MP_PS4_LOG_ROOT", state.logRoot.string());
     environment("MP_PS4_PROFILE_LOG", (state.logRoot / "frame-profile.jsonl").string());
-    environment("MP_FAST_BOOT", "1"); environment("MP_BOOT_WORLD", "39F2DE28:2043C96E");
+    char boot[32];std::snprintf(boot,sizeof(boot),"%08X:%08X",scene_at(0).world,scene_at(0).area);
+    environment("MP_FAST_BOOT", "1"); environment("MP_BOOT_WORLD", boot);
     environment("MP_GODMODE", "1"); environment("MP_UPDATE_CHECK", "0");
     // No network console; the in-process queue is available without MP_CONSOLE.
     unsetenv("MP_CONSOLE");
@@ -348,7 +406,7 @@ fs::path benchmark_tour_log_root() { return state.logRoot; }
 bool benchmark_play_enabled() noexcept { return benchmark_tour_enabled() && state.play; }
 BenchmarkPlayControl benchmark_play_control() noexcept {
     return {benchmark_play_enabled(), state.phase == Phase::ViewSettle && !state.placementReady,
-        state.phase == Phase::Measuring, static_cast<unsigned>(state.pass * Scenes.size() + state.scene + 1),
+        state.phase == Phase::Measuring, static_cast<unsigned>(state.pass * scene_count() + state.scene + 1),
         state.view, state.inputTick, state.phase == Phase::Rehearsing};
 }
 void benchmark_play_observe(const BenchmarkPlayObservation& p) {

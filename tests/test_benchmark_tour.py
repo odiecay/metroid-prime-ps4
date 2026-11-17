@@ -1,6 +1,7 @@
 """Contract tests for the opt-in native tour; no game or console is simulated."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -36,7 +37,7 @@ class BenchmarkTourTests(unittest.TestCase):
                            ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',
                            UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
             result=subprocess.run([str(self.exe),mode,tmp],env=env,capture_output=True,text=True,check=True)
-            p=Path(tmp)/'benchmarks'/('play-v2' if mode.startswith('play_') else 'tour-v1')/'logs/benchmark-tour.jsonl'
+            p=Path(tmp)/'benchmarks'/('coverage-v3' if mode.startswith('coverage_') else 'play-v2' if mode.startswith('play_') else 'tour-v1')/'logs/benchmark-tour.jsonl'
             rows=[json.loads(l) for l in p.read_text().splitlines()] if p.is_file() else []
             return rows,result.stderr
     def test_missing_request_has_no_effect(self):self.assertEqual(self.run_mode('absent')[0],[])
@@ -123,6 +124,36 @@ class BenchmarkTourTests(unittest.TestCase):
         self.assertTrue(any(r['event']=='scene_error' and r['status']=='route_guard' for r in rows))
         self.assertFalse(any(r['event']=='measure_begin' for r in rows))
     def test_v2_invalid_marker_cannot_modify_paths(self):self.assertEqual(self.run_mode('play_invalid')[0],[])
+    def test_v3_covers_every_region_with_real_table_ids_and_unchanged_actions(self):
+        rows,_=self.run_mode('coverage_complete')
+        plan=rows[0]['coverage_plan']
+        self.assertEqual(len(plan),24)
+        source=(ROOT/'game/MetroidPrimePort/platform/port_ap_world_data.inc').read_text()
+        real={(m[2],m[3],m[5]) for m in re.finditer(r'\{(\d+), 0x([0-9A-F]+), 0x([0-9A-F]+), 0x([0-9A-F]+), "([^"]+)"\}',source)}
+        for scene in plan:
+            self.assertIn((scene['world'],scene['mrea'],scene['scene']),real)
+        self.assertEqual(len({r['region'] for r in plan}),7)
+        self.assertEqual(len({(r['world'],r['mrea']) for r in plan}),24)
+        begins=[r for r in rows if r['event']=='measure_begin']
+        ends=[r for r in rows if r['event']=='measure_end']
+        self.assertEqual(len(begins),96);self.assertEqual(len(ends),96)
+        self.assertEqual(rows[-1]['event'],'complete')
+        self.assertEqual({r['visit'] for r in ends},set(range(1,25)))
+        self.assertTrue(all(r['tour_version']==3 and r['pass']==1 for r in rows))
+        self.assertTrue(all(r['coverage_scope']=='assisted_room_actions' for r in rows))
+        self.assertTrue(all(r['planned_rooms']==24 and r['planned_phases']==96 for r in rows))
+        self.assertEqual(rows[0]['world'],'158EFE17');self.assertEqual(rows[0]['mrea'],'D1241219')
+        self.assertTrue(all(r['shader_stable_frames']>=8 for r in begins))
+        self.assertEqual(sum(r['event']=='rehearse_end' for r in rows),96)
+        self.assertGreaterEqual(rows[-1]['monotonic_ns']-rows[0]['monotonic_ns'],2580_000_000_000)
+    def test_v3_failures_remain_incomplete_without_render_only_fallback(self):
+        for mode,reason in [('coverage_bad_pose','no_safe_route'),('coverage_no_actions','prewarm_insufficient_action'),('coverage_timeout','timeout')]:
+            with self.subTest(mode=mode):
+                rows,_=self.run_mode(mode)
+                self.assertEqual(rows[-1]['event'],'incomplete')
+                self.assertEqual(sum(r['event']=='scene_error' and r['status']==reason for r in rows),24)
+                self.assertFalse(any(r['event']=='measure_begin' for r in rows))
+    def test_v3_invalid_request_preserves_current_settings(self):self.assertEqual(self.run_mode('coverage_invalid')[0],[])
     def test_failed_marker_write_stops_without_acceptance(self):
         rows,err=self.run_mode('log_failure')
         self.assertFalse(any(r['event']=='complete' for r in rows))
