@@ -74,6 +74,26 @@ int main() {
   assert(!EmbeddedPicture(1920, 1080));
   assert(!EmbeddedPicture(1280, 720));
   assert(!EmbeddedPicture(0, 0));
+#ifdef __ORBIS__
+  assert(EmbeddedPicture(960, 720));
+  assert(EmbeddedPicture(1280, 960));
+  assert(EmbeddedPicture(1920, 1440));
+  const unsigned scaledMovies[][2] = {{960, 720}, {1280, 960}, {1920, 1440}};
+  for (const auto& scaled : scaledMovies) {
+    assert(FillPicture(true, true, true, scaled[0], scaled[1]));
+    assert(!FillPicture(true, true, false, scaled[0], scaled[1]));
+    assert(!FillPicture(false, true, true, scaled[0], scaled[1]));
+    assert(!FillPicture(true, false, true, scaled[0], scaled[1]));
+  }
+#else
+  assert(!EmbeddedPicture(960, 720));
+  assert(!EmbeddedPicture(1280, 960));
+  assert(!EmbeddedPicture(1920, 1440));
+#endif
+  assert(!EmbeddedPicture(1280, 959));
+  assert(!EmbeddedPicture(1920, 1441));
+  assert(!EmbeddedPicture(800, 600));
+  assert(!EmbeddedPicture(3840, 2880));
   assert(FillPicture(true, true, true, 640, 480));
   assert(!FillPicture(false, true, true, 640, 480));
   assert(!FillPicture(true, false, true, 640, 480));

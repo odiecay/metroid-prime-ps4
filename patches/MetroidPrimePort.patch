@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 4a588938..8f99d55a 100644
+index 4a588938..d78ef748 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1,5 +1,9 @@
@@ -12,6 +12,16 @@ index 4a588938..8f99d55a 100644
  if(IOS)
      # platform/port_ios.mm. Enabled here: enabled where the target is made, it
      # comes after the subdirectories and leaves CMake without its compile rules.
+@@ -413,6 +417,9 @@ set(MP_PORT_SOURCES
+     platform/touch_pad.cpp
+     platform/glibc_compat.c
+     platform/ai_dma.cpp)
++if(PS4)
++    list(APPEND MP_PORT_SOURCES platform/port_startup.cpp)
++endif()
+ # The movie import's decoder: a separate ffmpeg program on the desktop. Android
+ # has none to start, so its own decoder (MediaCodec) and the port's JPEG encoder
+ # (compiled everywhere: the gallery uses it too) do the same job there.
 diff --git a/docs/SETTINGS.md b/docs/SETTINGS.md
 index 6f586088..0bd8efdf 100644
 --- a/docs/SETTINGS.md
@@ -448,7 +458,7 @@ index 447ead85..2535f266 100644
        std::make_shared<wgpu::SurfaceSourceAndroidNativeWindow>();
    desc->window = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr);
 diff --git a/extern/aurora/lib/dolphin/dvd/dvd.cpp b/extern/aurora/lib/dolphin/dvd/dvd.cpp
-index 8f7d8572..95939e2a 100644
+index 8f7d8572..7259db14 100644
 --- a/extern/aurora/lib/dolphin/dvd/dvd.cpp
 +++ b/extern/aurora/lib/dolphin/dvd/dvd.cpp
 @@ -1,4 +1,5 @@
@@ -778,39 +788,50 @@ index 8f7d8572..95939e2a 100644
    return TRUE;
  }
  
-@@ -1182,7 +1294,7 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
+@@ -1182,7 +1294,13 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
        return FALSE;
      }
  
 -    fileInfo->cb.userData = new CommandDataOverlay(handle);
-+    fileInfo->cb.userData = new CommandDataOverlay(handle,entrynum);
++    try {
++      fileInfo->cb.userData = new CommandDataOverlay(handle,entrynum);
++    } catch (...) {
++      // The backing handle is already open when wrapper allocation can fail.
++      s_overlayCallbacks.close(handle);
++      throw;
++    }
    } else {
      NodHandle* handle = nullptr;
      NodResult result = nod_partition_open_file(s_partition, entry.origEntryNum, &handle);
-@@ -1190,7 +1302,7 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
+@@ -1190,7 +1308,12 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
        return FALSE;
      }
  
 -    fileInfo->cb.userData = new CommandDataNod(handle);
-+    fileInfo->cb.userData = new CommandDataNod(handle,entrynum);
++    try {
++      fileInfo->cb.userData = new CommandDataNod(handle,entrynum);
++    } catch (...) {
++      nod_free(handle);
++      throw;
++    }
    }
  
    atomic_store_release(fileInfo->cb.state, DVD_STATE_END);
-@@ -1413,7 +1525,7 @@ s32 DVDReadPrio(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset, s32 p
+@@ -1413,7 +1536,7 @@ s32 DVDReadPrio(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset, s32 p
    if (!DVDReadAsyncPrio(fileInfo, addr, length, offset, nullptr, prio)) {
      return DVD_RESULT_FATAL_ERROR;
    }
 -  s_worker.wait(&fileInfo->cb);
-+  s_worker.wait(&fileInfo->cb, true);
++  aurora_dvd_wait_command(&fileInfo->cb, true);
    const s32 state = atomic_load_acquire(fileInfo->cb.state);
    if (state == DVD_STATE_END) {
      return static_cast<s32>(atomic_load_relaxed(fileInfo->cb.transferredSize));
-@@ -1440,7 +1552,7 @@ s32 DVDSeekPrio(DVDFileInfo* fileInfo, s32 offset, s32 prio) {
+@@ -1440,7 +1563,7 @@ s32 DVDSeekPrio(DVDFileInfo* fileInfo, s32 offset, s32 prio) {
    if (!DVDSeekAsyncPrio(fileInfo, offset, nullptr, prio)) {
      return DVD_RESULT_FATAL_ERROR;
    }
 -  s_worker.wait(&fileInfo->cb);
-+  s_worker.wait(&fileInfo->cb, true);
++  aurora_dvd_wait_command(&fileInfo->cb, true);
    const s32 state = atomic_load_acquire(fileInfo->cb.state);
    if (state == DVD_STATE_END) {
      return DVD_RESULT_GOOD;
@@ -2650,7 +2671,7 @@ index 99029c05..f6644981 100644
  }
  
 diff --git a/extern/aurora/lib/gx/command_processor.cpp b/extern/aurora/lib/gx/command_processor.cpp
-index 7609e30e..a5594dc9 100644
+index 7609e30e..c7935d96 100644
 --- a/extern/aurora/lib/gx/command_processor.cpp
 +++ b/extern/aurora/lib/gx/command_processor.cpp
 @@ -1,4 +1,6 @@
@@ -2660,7 +2681,13 @@ index 7609e30e..a5594dc9 100644
  
  #include "../gfx/bloom.hpp"
  #include "../gfx/volfog.hpp"
-@@ -20,11 +22,13 @@
+@@ -15,16 +17,19 @@
+ #include "dolphin/gd/GDGeometry.h"
+ #include "dolphin/gx/GXAurora.h"
+ #include "gx.hpp"
++#include "fifo_small_copy.hpp"
+ #include "pipeline.hpp"
+ #include "regs.hpp"
  #include "resident.hpp"
  #include "shader_info.hpp"
  #include "texture.hpp"
@@ -2674,7 +2701,7 @@ index 7609e30e..a5594dc9 100644
  #include <bit>
  #include <cmath>
  #include <cstdint>
-@@ -99,6 +103,23 @@ u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxC
+@@ -99,6 +104,23 @@ u16 prepare_idx_buffer(ByteBuffer& buf, GXPrimitive prim, u16 vtxStart, u16 vtxC
    return static_cast<u16>(numIndices);
  }
  
@@ -2698,7 +2725,7 @@ index 7609e30e..a5594dc9 100644
  // GX FIFO opcodes - use CP_ prefix to avoid clashing with GXCommandList.h macros
  constexpr u8 CP_CMD_NOP = GX_NOP;
  constexpr u8 CP_CMD_LOAD_CP_REG = GX_LOAD_CP_REG;
-@@ -165,12 +186,80 @@ struct DrawCache {
+@@ -165,12 +187,99 @@ struct DrawCache {
    u8 lineMode = 0;
    bool hasPipeline = false;
    gfx::Range uniformRange{};
@@ -2713,6 +2740,25 @@ index 7609e30e..a5594dc9 100644
 +uint64_t sLdrUniformReuses = 0, sLdrUniformKeyMisses = 0, sLdrUniformDirtyBuilds = 0;
 +draw_profile::Metrics sDrawPrepMetrics;
 +uint64_t sPrimitiveBatchGroups = 0, sPrimitiveBatchPrimitives = 0;
++
++detail::FifoSmallCopyCounters sSmallCopyMetrics;
++// Read once per process; A/B changes require a full application restart.
++static bool small_copy_enabled() noexcept {
++#if defined(__ORBIS__)
++  constexpr bool Default = true;
++#else
++  constexpr bool Default = false;
++#endif
++  static const bool enabled = env_flag("MP_GX_SMALL_COPY", Default);
++  return enabled;
++}
++static bool record_small_copy_batch(const detail::FifoSmallCopyPreflight& copy,
++                                   uint64_t bytes) noexcept {
++  const bool requested = small_copy_enabled(); // one lookup per committed batch
++  sSmallCopyMetrics.record(copy, bytes, requested);
++  return requested && copy.allSmall;
++}
++
 +
 +bool draw_prep_profile_enabled() noexcept {
 +  static const bool enabled = env_flag("MP_GX_DRAW_PREP_PROFILE", false);
@@ -2779,7 +2825,7 @@ index 7609e30e..a5594dc9 100644
  
  // Port (from MP2 653e85a27): a vertex array is copied into a frame's storage once, not once per
  // slot and bind. The game sets a model's arrays again for each of its draws that follows another
-@@ -191,6 +280,10 @@ struct FrameArrayKey {
+@@ -191,6 +300,10 @@ struct FrameArrayKey {
    }
  };
  absl::flat_hash_map<FrameArrayKey, gfx::Range> sFrameArrays;
@@ -2790,7 +2836,7 @@ index 7609e30e..a5594dc9 100644
  // Per attribute: cleared since its last array, so the next one set there is copied afresh.
  bool sArrayFresh[GX_VA_MAX_ATTR] = {};
  
-@@ -203,14 +296,23 @@ bool frame_array_reuse() noexcept {
+@@ -203,14 +316,23 @@ bool frame_array_reuse() noexcept {
  }
  
  // The frame's copy of the array, made now if this frame has none; an overflowed range is not kept.
@@ -2815,7 +2861,7 @@ index 7609e30e..a5594dc9 100644
    if (reuse && range.size != 0 && !gfx::overflowed(range)) {
      sFrameArrays.emplace(FrameArrayKey{data, size}, range);
    }
-@@ -356,6 +458,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
+@@ -356,6 +478,8 @@ ProcessResult process(const u8* data, u32 size) noexcept {
      }
  
      case CP_CMD_INVAL_VTX: {
@@ -2824,7 +2870,7 @@ index 7609e30e..a5594dc9 100644
        for (auto& array : g_gxState.arrays) {
          array.cachedRange = {};
        }
-@@ -700,7 +804,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
+@@ -700,7 +824,8 @@ static bool check_indexed_arrays(const u8* vtxData, GXVtxFmt fmt, GXPrimitive pr
  }
  
  static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange, gfx::Range idxRange,
@@ -2834,7 +2880,7 @@ index 7609e30e..a5594dc9 100644
    auto& state = g_gxState;
    auto& cache = sDrawCache;
    if (drop_overflowed_draw(vertRange, "vertex") || drop_overflowed_draw(idxRange, "index")) {
-@@ -716,7 +821,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -716,7 +841,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
      auto& array = state.arrays[i];
      if (array.cachedRange.size == 0 && !resident::array_range(array.data, array.size, array.cachedRange)) {
@@ -2843,7 +2889,7 @@ index 7609e30e..a5594dc9 100644
        if (drop_overflowed_draw(array.cachedRange, "storage")) {
          array.cachedRange = {};
          return;
-@@ -725,8 +830,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -725,8 +850,9 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      immediates.arrayStart[i - GX_VA_POS] = array.cachedRange.offset + array.baseIndex * array.stride;
    }
  
@@ -2854,7 +2900,7 @@ index 7609e30e..a5594dc9 100644
                               cache.lineMode == lineMode && cache.config.msaaSamples == gfx::get_sample_count() &&
                               // The pass's target, not only the FIFO's switch: a new frame (reset to LDR),
                               // an offscreen pass or a colour pass must not keep an HDR pipeline, or back.
-@@ -738,8 +844,27 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -738,8 +864,27 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
                               (cache.config.shaderConfig.pbr == 0 ||
                                (cache.config.shaderConfig.pbrPlain | cache.config.shaderConfig.pbrNoDebug << 1) ==
                                    pbr_static_flags());
@@ -2882,7 +2928,7 @@ index 7609e30e..a5594dc9 100644
      const auto prevSampledTextures = cache.shaderInfo.sampledTextures;
      const auto prevSampledIndTextures = cache.shaderInfo.sampledIndTextures;
      const bool prevUsesVolFog = cache.shaderInfo.usesVolFog;
-@@ -747,7 +872,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -747,7 +892,21 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool prevActorDecal = cache.shaderInfo.actorDecal;
      const bool prevUsesShell = cache.shaderInfo.usesShell;
      const bool prevUsesLightmap = cache.shaderInfo.usesLightmap;
@@ -2905,7 +2951,7 @@ index 7609e30e..a5594dc9 100644
      // GX_AURORA_PORT_DEPTH_PREPASS: pass 2 shades an eligible draw where the depth is equal without
      // writing it, yet it casts as the draw it stands for (LEQUAL, writing). Its config can equal a
      // plain EQUAL draw's, which doesn't cast, so it bypasses the memo.
-@@ -761,9 +900,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -761,9 +920,11 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      const bool blocking = blocking_pipelines();
      const gfx::PipelineRef ref = xxh3_hash(cache.config, static_cast<HashType>(gfx::ShaderType::GX));
      auto memoIt = blocking || prepassShade ? sPipelineMemo.end() : sPipelineMemo.find(ref);
@@ -2917,7 +2963,7 @@ index 7609e30e..a5594dc9 100644
        const auto& memo = memoIt->second;
        cache.shaderInfo = memo.shaderInfo;
        cache.pipelineRef = ref;
-@@ -772,9 +913,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -772,9 +933,12 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
        cache.cutPipelineRef = memo.cutPipelineRef;
        cache.cutCaster = memo.cutCaster;
      } else {
@@ -2930,7 +2976,7 @@ index 7609e30e..a5594dc9 100644
        // Only an opaque surface that writes depth casts: the shadow map's vertex-only pass can't
        // alpha-test or blend. The game draws most opaque surfaces as a ONE/ZERO blend.
        const auto& sc = cache.config.shaderConfig;
-@@ -796,12 +940,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -796,12 +960,16 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          return config;
        };
        if (cache.shadowCaster) {
@@ -2947,7 +2993,7 @@ index 7609e30e..a5594dc9 100644
        }
        if (!prepassShade) {
          sPipelineMemo.insert_or_assign(cache.pipelineRef, PipelineMemo{
-@@ -816,9 +964,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -816,9 +984,14 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      cache.fmt = fmt;
      cache.lineMode = lineMode;
      cache.hasPipeline = true;
@@ -2965,7 +3011,7 @@ index 7609e30e..a5594dc9 100644
      if (!hadPipeline || prevSampledTextures != cache.shaderInfo.sampledTextures ||
          prevSampledIndTextures != cache.shaderInfo.sampledIndTextures ||
          prevUsesVolFog != cache.shaderInfo.usesVolFog || prevUsesLightmap != cache.shaderInfo.usesLightmap ||
-@@ -828,19 +981,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -828,19 +1001,23 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
@@ -2989,7 +3035,7 @@ index 7609e30e..a5594dc9 100644
      cache.bindGeneration = texture::current_bind_generation();
      state.dirty &= ~DirtyTextures;
      // For texture_size_bias uniform
-@@ -849,13 +1006,34 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -849,13 +1026,34 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
      }
    }
  
@@ -3025,7 +3071,7 @@ index 7609e30e..a5594dc9 100644
      state.dirty &= ~DirtyUniform;
    }
    if (cache.config.shaderConfig.fogRangeEnabled) {
-@@ -872,6 +1050,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -872,6 +1070,7 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
    }
    immediates.fogRangeBase = cache.fogRange.offset / sizeof(u32);
  
@@ -3033,7 +3079,7 @@ index 7609e30e..a5594dc9 100644
    state.dirty &= ~DirtyImmediates;
  
    uint32_t instanceCount = 1;
-@@ -923,15 +1102,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
+@@ -923,15 +1122,19 @@ static void push_gx_draw(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Rang
          actorConfig.cullMode = GX_CULL_BACK;
        }
        actorConfig.msaaSamples = 1;
@@ -3054,7 +3100,7 @@ index 7609e30e..a5594dc9 100644
    ZoneScoped;
    u32 numIndices = 0;
    gfx::Range idxRange;
-@@ -944,11 +1127,315 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
+@@ -944,11 +1147,356 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
      idxBuf.clear();
    }
  
@@ -3067,6 +3113,7 @@ index 7609e30e..a5594dc9 100644
 +struct MixedPrefix {
 +  size_t end;
 +  uint32_t primitives, vertices, vertexBytes, indexBytes;
++  detail::FifoSmallCopyPreflight copy;
 +};
 +static bool triangle_family(u8 opcode) noexcept {
 +  switch (opcode & CP_OPCODE_MASK) {
@@ -3093,6 +3140,7 @@ index 7609e30e..a5594dc9 100644
 +[[gnu::noinline]] static bool try_batch_mixed_tail(GXPrimitive firstPrim, GXVtxFmt fmt, u16 firstCount,
 +    u32 stride, ByteReader& reader, DrawData* draw, uint64_t vertexEnd, uint64_t indexEnd,
 +    size_t vertexHeadroom, size_t indexHeadroom, MixedPrefix prefix) noexcept {
++  auto copy = prefix.copy;
 +  const size_t maxVertex = std::min<size_t>(64 * 1024, vertexHeadroom);
 +  const size_t maxIndex = std::min<size_t>(256 * 1024, indexHeadroom);
 +  if (!prefix.primitives || prefix.vertexBytes > maxVertex || prefix.indexBytes > maxIndex ||
@@ -3110,6 +3158,7 @@ index 7609e30e..a5594dc9 100644
 +    if (!indices || indices > UINT16_MAX || bytes > reader.size() - pos - 3 ||
 +        bytes > maxVertex - vertexBytes || indices * sizeof(u16) > maxIndex - indexBytes ||
 +        uint64_t(draw->vtxCount) + vertices + count > UINT16_MAX) break;
++    copy.add(bytes);
 +    ++primitives; vertices += count; vertexBytes += bytes; indexBytes += indices * sizeof(u16);
 +    pos += 3 + bytes;
 +  }
@@ -3121,17 +3170,24 @@ index 7609e30e..a5594dc9 100644
 +  size_t at = reader.offset(), written = 0;
 +  u16* out = reinterpret_cast<u16*>(indexOut);
 +  uint32_t base = draw->vtxCount; GXPrimitive prim = firstPrim; u16 count = firstCount;
-+  for (uint32_t i = 0; i < primitives; ++i) {
-+    const size_t bytes = size_t(count) * stride;
-+    std::memcpy(vertexOut + written, reader.data() + at, bytes);
-+    out = prim == GX_TRIANGLESTRIP ? write_prepared_strip(out, u16(base), count) :
-+                                   write_prepared_indexed(out, prim, u16(base), count);
-+    base += count; written += bytes; at += bytes;
-+    if (i + 1 != primitives) {
-+      prim = static_cast<GXPrimitive>(reader.data()[at] & CP_OPCODE_MASK);
-+      count = (u16(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3;
++  const auto writePayloads = [&]<bool Small>() noexcept {
++    for (uint32_t i = 0; i < primitives; ++i) {
++      const size_t bytes = size_t(count) * stride;
++      if constexpr (Small)
++        detail::copy_small_fifo_payload(vertexOut + written, reader.data() + at, bytes);
++      else
++        std::memcpy(vertexOut + written, reader.data() + at, bytes);
++      out = prim == GX_TRIANGLESTRIP ? write_prepared_strip(out, u16(base), count) :
++                                     write_prepared_indexed(out, prim, u16(base), count);
++      base += count; written += bytes; at += bytes;
++      if (i + 1 != primitives) {
++        prim = static_cast<GXPrimitive>(reader.data()[at] & CP_OPCODE_MASK);
++        count = (u16(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3;
++      }
 +    }
-+  }
++  };
++  if (record_small_copy_batch(copy, vertexBytes)) writePayloads.template operator()<true>();
++  else writePayloads.template operator()<false>();
 +  CHECK(at == pos, "mixed primitive source length");
 +  CHECK(size_t(reinterpret_cast<u8*>(out) - indexOut) == indexBytes, "mixed primitive index length");
 +  CHECK(!gfx::overflowed(vertexRange) && !gfx::overflowed(indexRange), "mixed primitive reservation failed");
@@ -3146,6 +3202,7 @@ index 7609e30e..a5594dc9 100644
 +// Keep the non-strip draw path's instruction footprint and register pressure
 +// unchanged; only strips already eligible for the original merge enter here.
 +[[gnu::noinline]] static bool try_batch_strips(GXVtxFmt fmt, u16 vtxCount, u32 vtxSize, ByteReader& reader, DrawData* lastDraw) noexcept {
++  detail::FifoSmallCopyPreflight copy{draw_prep_profile_enabled()};
 +  constexpr GXPrimitive prim = GX_TRIANGLESTRIP;
 +  // Stay inside already allocated inline/device bytes; use the original path at
 +  // any capacity boundary, diagnostic array checking, state change or non-strip.
@@ -3171,6 +3228,7 @@ index 7609e30e..a5594dc9 100644
 +          uint64_t(lastDraw->vtxCount) + batchVertices + count > UINT16_MAX ||
 +          batchVertexBytes + vertexBytes > vertexHeadroom ||
 +          batchIndexBytes + indexBytes > indexHeadroom) break;
++      copy.add(vertexBytes);
 +      batchVertexBytes += vertexBytes; batchIndexBytes += indexBytes;
 +      batchVertices += count; ++batchPrims; pos += vertexBytes;
 +      if (reader.size() - pos < 3 || reader.data()[pos] != opcode) break;
@@ -3182,7 +3240,7 @@ index 7609e30e..a5594dc9 100644
 +      if (mixed_tail_follows(reader, end, prim, fmt) &&
 +          try_batch_mixed_tail(prim, fmt, vtxCount, vtxSize, reader, lastDraw, vertexEnd, indexEnd,
 +                               vertexHeadroom, indexHeadroom,
-+                               {end, batchPrims, batchVertices, batchVertexBytes, batchIndexBytes})) return true;
++                               {end, batchPrims, batchVertices, batchVertexBytes, batchIndexBytes, copy})) return true;
 +    }
 +    if (batchPrims > 1) {
 +      uint8_t* vertexOut = nullptr;
@@ -3194,16 +3252,23 @@ index 7609e30e..a5594dc9 100644
 +      size_t at = reader.offset(), written = 0;
 +      uint32_t precedingVertices = lastDraw->vtxCount;
 +      count = vtxCount;
-+      for (uint32_t i = 0; i < batchPrims; ++i) {
-+        const size_t bytes = size_t(count) * vtxSize;
-+        std::memcpy(vertexOut + written, reader.data() + at, bytes);
-+        indexCursor = write_prepared_strip(indexCursor, u16(precedingVertices), count);
-+        precedingVertices += count; written += bytes; at += bytes;
-+        if (i + 1 != batchPrims) {
-+          count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2];
-+          at += 3;
++      const auto writePayloads = [&]<bool Small>() noexcept {
++        for (uint32_t i = 0; i < batchPrims; ++i) {
++          const size_t bytes = size_t(count) * vtxSize;
++          if constexpr (Small)
++            detail::copy_small_fifo_payload(vertexOut + written, reader.data() + at, bytes);
++          else
++            std::memcpy(vertexOut + written, reader.data() + at, bytes);
++          indexCursor = write_prepared_strip(indexCursor, u16(precedingVertices), count);
++          precedingVertices += count; written += bytes; at += bytes;
++          if (i + 1 != batchPrims) {
++            count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2];
++            at += 3;
++          }
 +        }
-+      }
++      };
++      if (record_small_copy_batch(copy, batchVertexBytes)) writePayloads.template operator()<true>();
++      else writePayloads.template operator()<false>();
 +      CHECK(size_t(reinterpret_cast<u8*>(indexCursor) - indexOut) == batchIndexBytes, "batch index length");
 +      CHECK(!gfx::overflowed(batchedVerts) && !gfx::overflowed(batchedIndices), "inline batch reservation failed");
 +      CHECK(vertexEnd == batchedVerts.offset && indexEnd == batchedIndices.offset, "non-contiguous inline batch");
@@ -3246,6 +3311,7 @@ index 7609e30e..a5594dc9 100644
 +// cursors stay frame-owned and advance together, without allocating or spilling.
 +[[gnu::noinline]] static bool try_batch_indexed(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, u32 vtxSize,
 +                                               ByteReader& reader, DrawData* lastDraw) noexcept {
++  detail::FifoSmallCopyPreflight copy{draw_prep_profile_enabled()};
 +  static const bool enabled = env_flag("MP_GX_PRIMITIVE_BATCH", true) && env_flag("MP_GX_INDEXED_BATCH", true);
 +  if (!enabled || testing::vertexArrayCheck.load(std::memory_order_relaxed)) return false;
 +  const uint64_t vertexEnd = uint64_t(lastDraw->vertRange.offset) + lastDraw->vertRange.size;
@@ -3266,7 +3332,7 @@ index 7609e30e..a5594dc9 100644
 +    return mixed_tail_follows(reader, next, prim, fmt) &&
 +        try_batch_mixed_tail(prim, fmt, vtxCount, vtxSize, reader, lastDraw, vertexEnd, indexEnd,
 +                             vertexHeadroom, indexHeadroom,
-+                             {next, 1, vtxCount, firstVertexBytes, firstIndices * u32(sizeof(u16))});
++                             {next, 1, vtxCount, firstVertexBytes, firstIndices * u32(sizeof(u16)), detail::FifoSmallCopyPreflight::one(firstVertexBytes, copy.collect)});
 +  }
 +  const size_t maxVertexBytes = std::min<size_t>(64 * 1024, vertexHeadroom);
 +  const size_t maxIndexBytes = std::min<size_t>(256 * 1024, indexHeadroom);
@@ -3281,6 +3347,7 @@ index 7609e30e..a5594dc9 100644
 +    if (nextVertices > reader.size() - pos || nextVertices > maxVertexBytes - vertexBytes ||
 +        nextIndexBytes > maxIndexBytes - indexBytes || nextIndices > UINT16_MAX ||
 +        uint64_t(lastDraw->vtxCount) + vertices + count > UINT16_MAX) break;
++    copy.add(nextVertices);
 +    vertices += count; vertexBytes += nextVertices; indexBytes += nextIndexBytes;
 +    ++primitives; pos += nextVertices;
 +    if (reader.size() - pos < 3 || reader.data()[pos] != opcode) break;
@@ -3291,7 +3358,7 @@ index 7609e30e..a5594dc9 100644
 +    if (mixed_tail_follows(reader, end, prim, fmt) &&
 +        try_batch_mixed_tail(prim, fmt, vtxCount, vtxSize, reader, lastDraw, vertexEnd, indexEnd,
 +                             vertexHeadroom, indexHeadroom,
-+                             {end, primitives, vertices, vertexBytes, indexBytes})) return true;
++                             {end, primitives, vertices, vertexBytes, indexBytes, copy})) return true;
 +  }
 +  if (primitives < 2) return false;
 +  uint8_t* vertexOut = nullptr; uint8_t* indexOut = nullptr;
@@ -3300,13 +3367,22 @@ index 7609e30e..a5594dc9 100644
 +                                vertexOut, indexOut, vertexRange, indexRange)) return false;
 +  u16* out = reinterpret_cast<u16*>(indexOut);
 +  size_t at = reader.offset(), written = 0; uint32_t base = lastDraw->vtxCount; count = vtxCount;
-+  for (uint32_t i = 0; i < primitives; ++i) {
-+    const size_t bytes = size_t(count) * vtxSize;
-+    std::memcpy(vertexOut + written, reader.data() + at, bytes);
-+    out = write_prepared_indexed(out, prim, u16(base), count);
-+    base += count; written += bytes; at += bytes;
-+    if (i + 1 != primitives) { count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3; }
-+  }
++  const auto writePayloads = [&]<bool Small>() noexcept {
++    for (uint32_t i = 0; i < primitives; ++i) {
++      const size_t bytes = size_t(count) * vtxSize;
++      if constexpr (Small)
++        detail::copy_small_fifo_payload(vertexOut + written, reader.data() + at, bytes);
++      else
++        std::memcpy(vertexOut + written, reader.data() + at, bytes);
++      out = write_prepared_indexed(out, prim, u16(base), count);
++      base += count; written += bytes; at += bytes;
++      if (i + 1 != primitives) {
++        count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3;
++      }
++    }
++  };
++  if (record_small_copy_batch(copy, vertexBytes)) writePayloads.template operator()<true>();
++  else writePayloads.template operator()<false>();
 +  CHECK(size_t(reinterpret_cast<u8*>(out) - indexOut) == indexBytes, "batch index length");
 +  CHECK(!gfx::overflowed(vertexRange) && !gfx::overflowed(indexRange), "inline batch reservation failed");
 +  CHECK(vertexEnd == vertexRange.offset && indexEnd == indexRange.offset, "non-contiguous inline batch");
@@ -3328,6 +3404,7 @@ index 7609e30e..a5594dc9 100644
 +}
 +
 +[[gnu::noinline]] static bool try_batch_triangles(GXVtxFmt fmt, u16 vtxCount, u32 vtxSize, ByteReader& reader, DrawData* lastDraw) noexcept {
++  detail::FifoSmallCopyPreflight copy{draw_prep_profile_enabled()};
 +  static const bool enabled = env_flag("MP_GX_PRIMITIVE_BATCH", true) && env_flag("MP_GX_TRIANGLE_BATCH", true);
 +  if (!enabled || testing::vertexArrayCheck.load(std::memory_order_relaxed)) return false;
 +  const uint64_t vertexEnd = uint64_t(lastDraw->vertRange.offset) + lastDraw->vertRange.size;
@@ -3342,6 +3419,7 @@ index 7609e30e..a5594dc9 100644
 +    const uint32_t nextBytes = uint32_t(count) * vtxSize;
 +    if (nextBytes > reader.size() - pos || nextBytes > maxBatchBytes - bytes ||
 +        uint64_t(lastDraw->vtxCount) + vertices + count > UINT16_MAX) break;
++    copy.add(nextBytes);
 +    bytes += nextBytes; vertices += count; ++primitives; pos += nextBytes;
 +    if (reader.size() - pos < 3 || reader.data()[pos] != opcode) break;
 +    count = (uint16_t(reader.data()[pos + 1]) << 8) | reader.data()[pos + 2];
@@ -3351,12 +3429,21 @@ index 7609e30e..a5594dc9 100644
 +  uint8_t* destination = nullptr; gfx::Range range{};
 +  if (!gfx::map_inline_vertices(vertexEnd, bytes, destination, range)) return false;
 +  size_t at = reader.offset(), written = 0; count = vtxCount;
-+  for (uint32_t i = 0; i < primitives; ++i) {
-+    const size_t length = size_t(count) * vtxSize;
-+    std::memcpy(destination + written, reader.data() + at, length);
-+    written += length; at += length;
-+    if (i + 1 != primitives) { count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3; }
-+  }
++  const auto writePayloads = [&]<bool Small>() noexcept {
++    for (uint32_t i = 0; i < primitives; ++i) {
++      const size_t length = size_t(count) * vtxSize;
++      if constexpr (Small)
++        detail::copy_small_fifo_payload(destination + written, reader.data() + at, length);
++      else
++        std::memcpy(destination + written, reader.data() + at, length);
++      written += length; at += length;
++      if (i + 1 != primitives) {
++        count = (uint16_t(reader.data()[at + 1]) << 8) | reader.data()[at + 2]; at += 3;
++      }
++    }
++  };
++  if (record_small_copy_batch(copy, bytes)) writePayloads.template operator()<true>();
++  else writePayloads.template operator()<false>();
 +  lastDraw->vertRange.size += bytes;
 +  lastDraw->vtxCount += vertices;
 +  gfx::detail::add_merged_draw_count(primitives);
@@ -3371,7 +3458,7 @@ index 7609e30e..a5594dc9 100644
    u32 vtxSize;
    if (g_gxState.lastVtxFmt == fmt)
      LIKELY { vtxSize = g_gxState.lastVtxSize; }
-@@ -982,6 +1469,17 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -982,6 +1530,17 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
    auto* lastDraw = cleanState ? gfx::get_last_draw_command<DrawData>() : nullptr;
    const bool canMerge = lastDraw != nullptr && lastDraw->instanceCount == 1;
  
@@ -3389,7 +3476,7 @@ index 7609e30e..a5594dc9 100644
    // Push raw vertex data to buffer. Merged draws must remain contiguous with the previous range.
    const auto vertexData = reader.take(totalVtxBytes);
    gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), canMerge ? 0 : 4);
-@@ -1026,10 +1524,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+@@ -1026,10 +1585,11 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
      lastDraw->vtxCount += vtxCount;
      lastDraw->indexCount += numIndices;
      gfx::detail::increment_merged_draw_count();
@@ -3402,7 +3489,7 @@ index 7609e30e..a5594dc9 100644
  }
  
  // How many indices prepare_idx_buffer makes of a draw, or 0 for one it cannot make into
-@@ -1151,6 +1650,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1151,6 +1711,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      return;
    }
    for (const resident::Chunk& chunk : entry->chunks) {
@@ -3410,7 +3497,7 @@ index 7609e30e..a5594dc9 100644
      const gfx::Range vertRange{entry->vert.offset + chunk.vertOffset, chunk.vertSize};
      const gfx::Range idxRange{entry->idx.offset + chunk.idxOffset, chunk.idxCount * u32(sizeof(u16))};
      // The same vertices as they are in the list's bytes, which is what the array check reads.
-@@ -1158,7 +1658,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
+@@ -1158,7 +1719,7 @@ static void call_resident_dl(const void* key, u32 size) noexcept {
      if (check_indexed_arrays(vtxData, chunk.fmt, GX_TRIANGLES, chunk.vtxCount, current_vtx_size(chunk.fmt))) UNLIKELY {
        continue;
      }
@@ -3419,7 +3506,7 @@ index 7609e30e..a5594dc9 100644
    }
    // The next draw must not merge into these: its vertices are not after them.
    sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
-@@ -1209,12 +1709,28 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1209,12 +1770,28 @@ void handle_aurora(ByteReader& reader) noexcept {
      g_gxState.dirty |= DirtyUniform;
    } else if (subCmd >= GX_AURORA_LOAD_ARRAYBASE && subCmd <= (GX_AURORA_LOAD_ARRAYBASE | 0x0f)) {
      const u32 attrIdx = subCmd - GX_AURORA_LOAD_ARRAYBASE + GX_VA_POS;
@@ -3451,7 +3538,7 @@ index 7609e30e..a5594dc9 100644
      if (array.data != newData || array.size != arraySize || array.le != le) {
        // Only an indexed attribute's array, or TEX7's under pbr (bind_pos_active), is in the
        // pipeline config (a VCD or pbr change dirties it anyway).
-@@ -1226,15 +1742,6 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1226,15 +1803,6 @@ void handle_aurora(ByteReader& reader) noexcept {
          // Endianness is baked into the shader
          g_gxState.dirty |= DirtyPipeline;
        }
@@ -3467,7 +3554,7 @@ index 7609e30e..a5594dc9 100644
        array.data = newData;
        array.size = arraySize;
        array.le = le;
-@@ -1242,23 +1749,25 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1242,23 +1810,25 @@ void handle_aurora(ByteReader& reader) noexcept {
        g_gxState.dirty |= DirtyImmediates;
      }
    } else if (subCmd == GX_AURORA_LOAD_TEXOBJ) {
@@ -3503,7 +3590,7 @@ index 7609e30e..a5594dc9 100644
      if (slot.data != newData || slot.userData != newUserData || slot.mWidth != newWidth || slot.mHeight != newHeight ||
          slot.mFormat != static_cast<u32>(newFormat) || slot.tlut != newTlut || slot.flags != newFlags ||
          slot.texObjId != newTexObjId || slot.texDataVersion != newTexDataVersion) {
-@@ -1376,6 +1885,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1376,6 +1946,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      call_resident_dl(key, size);
    } else if (subCmd == GX_AURORA_DRAW_INDEXED) {
      ZoneScopedN("DRAW_INDEXED");
@@ -3511,7 +3598,7 @@ index 7609e30e..a5594dc9 100644
      const u8 cmd = reader.read<u8>();
      const u16 vtxCount = reader.read<u16>();
      const u32 indexCount = reader.read<u32>();
-@@ -1400,7 +1910,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1400,7 +1971,7 @@ void handle_aurora(ByteReader& reader) noexcept {
      } else {
        const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
        if (indexCount != 0) {
@@ -3520,7 +3607,7 @@ index 7609e30e..a5594dc9 100644
        }
      }
    } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
-@@ -1496,6 +2006,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1496,6 +2067,7 @@ void handle_aurora(ByteReader& reader) noexcept {
        sDrawCache.hasPipeline = false;
        sDrawCache.bindGeneration = 0;
        sDrawCache.uniformRange = {};
@@ -3528,7 +3615,7 @@ index 7609e30e..a5594dc9 100644
        sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
        st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
      }
-@@ -1889,6 +2400,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1889,6 +2461,7 @@ void handle_aurora(ByteReader& reader) noexcept {
        sDrawCache.hasPipeline = false;
        sDrawCache.bindGeneration = 0;
        sDrawCache.uniformRange = {};
@@ -3536,7 +3623,7 @@ index 7609e30e..a5594dc9 100644
        sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
        st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
      } else if (mode == 3) {
-@@ -1896,6 +2408,7 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -1896,6 +2469,7 @@ void handle_aurora(ByteReader& reader) noexcept {
        sDrawCache.hasPipeline = false;
        sDrawCache.bindGeneration = 0;
        sDrawCache.uniformRange = {};
@@ -3544,7 +3631,7 @@ index 7609e30e..a5594dc9 100644
        sDrawCache.lastDrawFmt = GX_MAX_VTXFMT;
        st.dirty |= DirtyPipeline | DirtyUniform | DirtyTextures;
      }
-@@ -2056,11 +2569,67 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -2056,11 +2630,82 @@ void handle_aurora(ByteReader& reader) noexcept {
    }
  }
  
@@ -3573,6 +3660,21 @@ index 7609e30e..a5594dc9 100644
 +}
  
  void clear_draw_cache() noexcept {
++  const auto copies = sSmallCopyMetrics.take();
++  if (copies.smallBatches || copies.fallbackBatches) {
++    trace::count("GX copy eligible batches", copies.eligibleBatches, trace::Main);
++    trace::count("GX copy eligible bytes", copies.eligibleBytes, trace::Main);
++    trace::count("GX copy small batches", copies.smallBatches, trace::Main);
++    trace::count("GX copy small bytes", copies.smallBytes, trace::Main);
++    trace::count("GX copy fallback batches", copies.fallbackBatches, trace::Main);
++    trace::count("GX copy fallback bytes", copies.fallbackBytes, trace::Main);
++    constexpr const char* names[detail::SmallCopyBins] = {
++        "GX copy payloads 0-16B", "GX copy payloads 17-32B", "GX copy payloads 33-47B",
++        "GX copy payloads exact48B", "GX copy payloads 49-64B", "GX copy payloads 65-128B",
++        "GX copy payloads 129-256B", "GX copy payloads over256B"};
++    for (size_t i = 0; i < detail::SmallCopyBins; ++i) trace::count(names[i], copies.lengths[i], trace::Main);
++  }
++
 +  if (sPrimitiveBatchGroups) {
 +    trace::count("GX primitive batch groups", sPrimitiveBatchGroups, trace::Main);
 +    trace::count("GX primitive batched primitives", sPrimitiveBatchPrimitives, trace::Main);
@@ -3697,10 +3799,10 @@ index 00000000..4417ab32
 +};
 +} // namespace aurora::gx::fifo::draw_profile
 diff --git a/extern/aurora/lib/gx/fifo.cpp b/extern/aurora/lib/gx/fifo.cpp
-index 15cb7395..07a8b0c7 100644
+index 15cb7395..b74e4529 100644
 --- a/extern/aurora/lib/gx/fifo.cpp
 +++ b/extern/aurora/lib/gx/fifo.cpp
-@@ -2,6 +2,9 @@
+@@ -2,9 +2,13 @@
  
  #include "../thread.hpp"
  #include "command_processor.hpp"
@@ -3710,7 +3812,11 @@ index 15cb7395..07a8b0c7 100644
  
  #include <algorithm>
  #include <atomic>
-@@ -29,13 +32,19 @@ constexpr uint32_t kDrawBatchSize = 1;
++#include <bit>
+ #include <cstring>
+ #include <limits>
+ #include <mutex>
+@@ -29,13 +33,19 @@ constexpr uint32_t kDrawBatchSize = 1;
  
  bool sFrameActive = false;
  uint32_t sPendingDraws = 0;
@@ -3725,8 +3831,8 @@ index 15cb7395..07a8b0c7 100644
 +std::atomic<uint32_t> sCompletionWakes{0};
 +alignas(64) uint64_t sStreamBase = 0;
 +alignas(64) std::mutex sBufferMutex;
-+alignas(64) std::atomic<uint32_t> sWorkerWake{0};
-+std::atomic<bool> sWorkerSleeping{false};
++alignas(64) std::atomic<int64_t> sWorkerEvent{0};
++std::atomic<uint32_t> sWorkerWaitReturns{0};
  thread::Thread sWorkerThread;
  std::atomic<DrawDoneCallback> sDrawDoneCallback{nullptr};
 +#if defined(__ORBIS__) || defined(PRIME_TRACE_TEST)
@@ -3735,7 +3841,29 @@ index 15cb7395..07a8b0c7 100644
  
  void dispatch_draw_done() noexcept {
    if (const auto callback = sDrawDoneCallback.load(std::memory_order_acquire); callback != nullptr) {
-@@ -62,7 +71,22 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
+@@ -43,9 +53,18 @@ void dispatch_draw_done() noexcept {
+   }
+ }
+ 
+-void wake_worker() noexcept {
+-  sWorkerWake.fetch_add(1, std::memory_order_release);
+-  sWorkerWake.notify_all();
++void wake_worker_on_stop() noexcept {
++  // Only stop changes the event without publishing bytes. The producer is
++  // quiescent before request_stop; all published work is drained before exit.
++  sWorkerEvent.fetch_add(1, std::memory_order_release);
++  sWorkerEvent.notify_all();
++}
++
++void notify_worker(uint64_t target) noexcept {
++  // Match libc++ Orbis contention_t exactly: unsigned64 still launders through
++  // its hashed platform counter. Equality uses all absolute watermark bits.
++  sWorkerEvent.store(std::bit_cast<int64_t>(target), std::memory_order_release);
++  sWorkerEvent.notify_all();
+ }
+ 
+ void process_to(uint64_t target, std::memory_order order) noexcept {
+@@ -62,7 +81,22 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
                      published);
        const auto start = static_cast<uint32_t>(processed - sStreamBase);
        const auto size = static_cast<uint32_t>(target - processed);
@@ -3758,7 +3886,7 @@ index 15cb7395..07a8b0c7 100644
      }
      AURORA_ASSERT(result.bytesProcessed > 0 && result.bytesProcessed <= target - processed,
                    "FIFO processor made invalid progress: processed {} of {} remaining bytes", result.bytesProcessed,
-@@ -72,7 +96,14 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
+@@ -72,25 +106,32 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
      }
      processed += result.bytesProcessed;
      sProcessed.store(processed, order);
@@ -3774,36 +3902,36 @@ index 15cb7395..07a8b0c7 100644
    }
  }
  
-@@ -80,17 +111,24 @@ void worker_main(std::stop_token token) noexcept {
-   std::stop_callback wakeOnStop{token, wake_worker};
+ void worker_main(std::stop_token token) noexcept {
+-  std::stop_callback wakeOnStop{token, wake_worker};
++  std::stop_callback wakeOnStop{token, wake_worker_on_stop};
    while (true) {
-     const uint32_t event = sWorkerWake.load(std::memory_order_acquire);
-+    // The acquire/release exchange pairs with the producer's exchange. If
-+    // it published before we armed this wait, the recheck sees that work;
-+    // if it publishes afterwards, it changes the wake counter before wait.
-+    sWorkerSleeping.exchange(true, std::memory_order_acq_rel);
+-    const uint32_t event = sWorkerWake.load(std::memory_order_acquire);
++    const int64_t event = sWorkerEvent.load(std::memory_order_acquire);
      const uint64_t processed = sProcessed.load(std::memory_order_relaxed);
      const uint64_t published = sPublished.load(std::memory_order_acquire);
      if (published != processed) {
-+      sWorkerSleeping.store(false, std::memory_order_release);
        process_to(published, std::memory_order_release);
        continue;
      }
- 
-     if (token.stop_requested()) {
-+      sWorkerSleeping.store(false, std::memory_order_release);
-       break;
-     }
-     sWorkerWake.wait(event, std::memory_order_acquire);
-+    sWorkerSleeping.store(false, std::memory_order_release);
+-
+-    if (token.stop_requested()) {
+-      break;
+-    }
+-    sWorkerWake.wait(event, std::memory_order_acquire);
++    if (token.stop_requested()) break;
++    // Publishing after the snapshot always changes this value. Publishing
++    // before the snapshot is visible through its release/acquire ordering.
++    sWorkerEvent.wait(event, std::memory_order_acquire);
++    sWorkerWaitReturns.fetch_add(1, std::memory_order_relaxed);
    }
  }
  
-@@ -115,13 +153,29 @@ void stop_worker() {
+@@ -115,13 +156,29 @@ void stop_worker() {
  } // namespace
  
  ProcessingMode processing_mode() noexcept { return kProcessingMode; }
-+uint32_t wake_count() noexcept { return sWorkerWake.load(std::memory_order_relaxed); }
++uint32_t wake_count() noexcept { return sWorkerWaitReturns.load(std::memory_order_relaxed); }
 +uint32_t completion_wake_count() noexcept { return sCompletionWakes.load(std::memory_order_relaxed); }
 +uint32_t drain_waiter_count() noexcept { return sDrainWaiters.load(std::memory_order_acquire); }
  
@@ -3830,21 +3958,22 @@ index 15cb7395..07a8b0c7 100644
    AURORA_ASSERT(detail::sBufferData != nullptr, "fifo::init: failed to allocate {} bytes", initialCapacity);
    detail::sBufferSize = 0;
    detail::sBufferCapacity = initialCapacity;
-@@ -135,7 +189,13 @@ void init() {
+@@ -135,7 +192,13 @@ void init() {
    sStreamBase = 0;
    sPublished.store(0, std::memory_order_relaxed);
    sProcessed.store(0, std::memory_order_relaxed);
+-  sWorkerWake.store(0, std::memory_order_relaxed);
 +  sDrainWaiters.store(0, std::memory_order_relaxed);
 +  sCompletionWakes.store(0, std::memory_order_relaxed);
-   sWorkerWake.store(0, std::memory_order_relaxed);
-+  sWorkerSleeping.store(false, std::memory_order_relaxed);
++  sWorkerEvent.store(0, std::memory_order_relaxed);
++  sWorkerWaitReturns.store(0, std::memory_order_relaxed);
 +#if defined(__ORBIS__) || defined(PRIME_TRACE_TEST)
 +  sBatchMetrics = {};
 +#endif
  
    start_worker();
  }
-@@ -147,24 +207,52 @@ void begin_frame() noexcept { sFrameActive = true; }
+@@ -147,24 +210,52 @@ void begin_frame() noexcept { sFrameActive = true; }
  void end_frame() noexcept {
    sFrameActive = false;
    clear_draw_cache(); // command_processor
@@ -3898,20 +4027,21 @@ index 15cb7395..07a8b0c7 100644
      grow();
    } else {
      grow();
-@@ -184,7 +272,9 @@ void publish() noexcept {
+@@ -184,7 +275,7 @@ void publish() noexcept {
      sPendingDraws = 0;
      sPublished.store(target, std::memory_order_release);
      if (kProcessingMode == ProcessingMode::Thread) {
 -      wake_worker();
-+      // Publishing every completed draw is unchanged. A busy decoder will
-+      // recheck the watermark itself; only a sleeping decoder needs a wake.
-+      if (sWorkerSleeping.exchange(false, std::memory_order_acq_rel)) wake_worker();
++      notify_worker(target);
      } else {
        process_to(target, std::memory_order_relaxed);
      }
-@@ -254,13 +344,25 @@ void drain() {
+@@ -252,15 +343,27 @@ void drain() {
+     break;
+   case ProcessingMode::Thread: {
      sPublished.store(target, std::memory_order_release);
-     wake_worker();
+-    wake_worker();
++    notify_worker(target);
  
 -    uint64_t processed = sProcessed.load(std::memory_order_acquire);
 -    if (processed < target) {
@@ -3941,14 +4071,17 @@ index 15cb7395..07a8b0c7 100644
    }
    }
 diff --git a/extern/aurora/lib/gx/fifo.hpp b/extern/aurora/lib/gx/fifo.hpp
-index ecdaf707..c641a1a8 100644
+index ecdaf707..7b0932d9 100644
 --- a/extern/aurora/lib/gx/fifo.hpp
 +++ b/extern/aurora/lib/gx/fifo.hpp
-@@ -25,6 +25,9 @@ enum class ProcessingMode : uint8_t {
+@@ -25,6 +25,12 @@ enum class ProcessingMode : uint8_t {
    Thread
  };
  ProcessingMode processing_mode() noexcept;
++// Completed worker wait() returns, including immediate changed-value returns;
++// not published bytes and not a count of kernel wake syscalls.
 +uint32_t wake_count() noexcept;
++// Notification calls made while a drain waiter is registered.
 +uint32_t completion_wake_count() noexcept;
 +uint32_t drain_waiter_count() noexcept;
  
@@ -3990,6 +4123,81 @@ index 00000000..6c01b213
 +  }
 +};
 +}
+diff --git a/extern/aurora/lib/gx/fifo_small_copy.hpp b/extern/aurora/lib/gx/fifo_small_copy.hpp
+new file mode 100644
+index 00000000..a2ab6a82
+--- /dev/null
++++ b/extern/aurora/lib/gx/fifo_small_copy.hpp
+@@ -0,0 +1,69 @@
++#pragma once
++#include <array>
++#include <cassert>
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++
++namespace aurora::gx::fifo::detail {
++inline constexpr std::size_t SmallCopyLimit = 256;
++inline constexpr std::size_t SmallCopyBins = 8;
++// The exact48-byte bucket separates a common FIFO payload from nearby sizes.
++constexpr std::size_t small_copy_bin(std::uint32_t bytes) noexcept {
++  if (bytes <= 16) return 0;
++  if (bytes <= 32) return 1;
++  if (bytes < 48) return 2;
++  if (bytes == 48) return 3;
++  if (bytes <= 64) return 4;
++  if (bytes <= 128) return 5;
++  return bytes <= SmallCopyLimit ? 6 : 7;
++}
++struct FifoSmallCopyPreflight {
++  std::array<std::uint32_t, SmallCopyBins> lengths{};
++  bool allSmall = true;
++  bool collect = false;
++  explicit FifoSmallCopyPreflight(bool profile = false) noexcept : collect(profile) {}
++  void add(std::uint32_t bytes) noexcept {
++    allSmall &= bytes <= SmallCopyLimit;
++    if (collect) ++lengths[small_copy_bin(bytes)];
++  }
++  static FifoSmallCopyPreflight one(std::uint32_t bytes, bool profile) noexcept {
++    FifoSmallCopyPreflight result{profile}; result.add(bytes); return result;
++  }
++};
++struct FifoSmallCopyCounters {
++  std::uint64_t eligibleBatches = 0, eligibleBytes = 0;
++  std::uint64_t smallBatches = 0, smallBytes = 0;
++  std::uint64_t fallbackBatches = 0, fallbackBytes = 0;
++  std::array<std::uint64_t, SmallCopyBins> lengths{};
++  void record(const FifoSmallCopyPreflight& preflight, std::uint64_t bytes, bool requested) noexcept {
++    if (!preflight.collect) return;
++    if (preflight.allSmall) { ++eligibleBatches; eligibleBytes += bytes; }
++    if (requested && preflight.allSmall) { ++smallBatches; smallBytes += bytes; }
++    else { ++fallbackBatches; fallbackBytes += bytes; }
++    for (std::size_t i = 0; i < SmallCopyBins; ++i) lengths[i] += preflight.lengths[i];
++  }
++  FifoSmallCopyCounters take() noexcept { auto result = *this; *this = {}; return result; }
++};
++
++template <std::size_t Bytes>
++inline void copy_fifo_constant(std::uint8_t* dst, const std::uint8_t* src) noexcept {
++#if defined(__clang__) && __has_builtin(__builtin_memcpy_inline)
++  __builtin_memcpy_inline(dst, src, Bytes);
++#else
++  std::memcpy(dst, src, Bytes);
++#endif
++}
++// Preconditions: disjoint FIFO/staging allocations, and the COMPLETE accepted
++// batch preflight proves every payload<=256. Exact-sized operations touch no
++// byte outside either range. Larger batches use the original libc write loop.
++inline void copy_small_fifo_payload(std::uint8_t* dst, const std::uint8_t* src,
++                                    std::size_t length) noexcept {
++  assert(length <= SmallCopyLimit);
++  while (length >= 16) { copy_fifo_constant<16>(dst, src); dst += 16; src += 16; length -= 16; }
++  if (length & 8) { copy_fifo_constant<8>(dst, src); dst += 8; src += 8; }
++  if (length & 4) { copy_fifo_constant<4>(dst, src); dst += 4; src += 4; }
++  if (length & 2) { copy_fifo_constant<2>(dst, src); dst += 2; src += 2; }
++  if (length & 1) { copy_fifo_constant<1>(dst, src); }
++}
++} // namespace aurora::gx::fifo::detail
 diff --git a/extern/aurora/lib/gx/gx.cpp b/extern/aurora/lib/gx/gx.cpp
 index 8f209dba..572ac1be 100644
 --- a/extern/aurora/lib/gx/gx.cpp
@@ -5051,7 +5259,7 @@ index 99bf0f79..0155fc6e 100644
    TRY_WARN(SDL_SetWindowSize(g_window, width, height), "Failed to set window size: {}", SDL_GetError());
  }
 diff --git a/extern/aurora/tests/CMakeLists.txt b/extern/aurora/tests/CMakeLists.txt
-index a8e977d9..d4bee509 100644
+index a8e977d9..87499724 100644
 --- a/extern/aurora/tests/CMakeLists.txt
 +++ b/extern/aurora/tests/CMakeLists.txt
 @@ -186,7 +186,7 @@ if (AURORA_ENABLE_GX)
@@ -5063,6 +5271,20 @@ index a8e977d9..d4bee509 100644
    target_link_libraries(render_worker_tests PRIVATE
      gtest
      gtest_main
+@@ -247,8 +247,12 @@ if (TARGET aurora::dvd)
+     test_dvd.cpp
+     dvd_test_stubs.cpp
+     ../lib/logging.cpp
++    # Compile the real worker with tracing in this test only. Its definitions
++    # satisfy the static library's DVD symbols, so that member is not pulled.
++    ../lib/dolphin/dvd/dvd.cpp
+   )
+-  target_link_libraries(dvd_tests PRIVATE aurora::dvd gtest gtest_main)
++  target_compile_definitions(dvd_tests PRIVATE PRIME_TRACE_TEST=1)
++  target_link_libraries(dvd_tests PRIVATE aurora::dvd Tracy::TracyClient gtest gtest_main)
+   aurora_copy_runtime_dlls(dvd_tests)
+ 
+   # Pass disc image path as a compile definition if provided
 diff --git a/extern/aurora/tests/gfx_recording_test.cpp b/extern/aurora/tests/gfx_recording_test.cpp
 index aa2a8fcc..c0a6c27f 100644
 --- a/extern/aurora/tests/gfx_recording_test.cpp
@@ -6293,10 +6515,17 @@ index ad6f8d81..ab839635 100644
  TEST_F(SceneHdrTest, WaterAndFogApplyCompile) {
    size_t compiled = 0;
 diff --git a/extern/aurora/tests/test_dvd.cpp b/extern/aurora/tests/test_dvd.cpp
-index 7982c66f..dd781bdc 100644
+index 7982c66f..ab6302c7 100644
 --- a/extern/aurora/tests/test_dvd.cpp
 +++ b/extern/aurora/tests/test_dvd.cpp
-@@ -8,6 +8,10 @@
+@@ -1,5 +1,6 @@
+ #include <dolphin/dvd.h>
+ #include <aurora/dvd.h>
++#include <aurora/frame_trace.hpp>
+ 
+ #include <gtest/gtest.h>
+ 
+@@ -8,6 +9,10 @@
  #include <cstring>
  #include <thread>
  #include <vector>
@@ -6307,7 +6536,7 @@ index 7982c66f..dd781bdc 100644
  
  // =============================================================================
  // Tests that do NOT require a disc image
-@@ -176,6 +180,157 @@ protected:
+@@ -176,6 +181,218 @@ protected:
    static void TearDownTestSuite() { aurora_dvd_close(); }
  };
  
@@ -6379,6 +6608,67 @@ index 7982c66f..dd781bdc 100644
 +  std::unique_lock lock(f.mutex);f.callbackEntered=true;f.cv.notify_all();
 +  f.cv.wait_for(lock,std::chrono::seconds(3),[&]{return f.releaseCallback;});
 +}
++
++#if defined(PRIME_TRACE_TEST)
++TEST_F(DVDDiscTest, SynchronousReadAndSeekTraceTheCallerFrameExactlyOnce) {
++  for (bool seek : {false, true}) {
++    MandatoryReadFixture f;
++    ASSERT_TRUE(f.Queue());
++    DVDFileInfo file{};
++    ASSERT_TRUE(DVDOpen(f.names.back().c_str(), &file));
++    MandatoryReadFixture::Buffer buffer;
++    buffer.data.fill(0xee);
++    for (unsigned slot=0; slot<aurora::trace::MaxThreads; ++slot)
++      aurora::trace::drain(slot, [](const auto&) {});
++    AuroraDvdWaitMetrics before{};
++    aurora_dvd_wait_metrics(&before);
++    std::atomic_bool sawWaiting=false;
++    std::thread release([&] {
++      const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
++      AuroraDvdWaitMetrics current{};
++      do {
++        aurora_dvd_wait_metrics(&current);
++        if (current.waiting>before.waiting) break;
++        std::this_thread::yield();
++      } while (std::chrono::steady_clock::now()<deadline);
++      sawWaiting=current.waiting>before.waiting;
++      f.Release();
++    });
++    const uint64_t frame=0x445644000001ULL+unsigned(seek);
++    s32 result;
++    {
++      aurora::trace::Frame caller(aurora::trace::Main, frame);
++      result=seek ? DVDSeekPrio(&file, 0, 2)
++                  : DVDReadPrio(&file, buffer.data.data(), buffer.data.size(), 0, 2);
++    }
++    release.join();
++    EXPECT_TRUE(sawWaiting);
++    EXPECT_EQ(result, seek ? DVD_RESULT_GOOD : s32(buffer.data.size()));
++    if (!seek) for (auto byte : buffer.data) EXPECT_EQ(byte, f.Count-1);
++    AuroraDvdWaitMetrics after{};
++    aurora_dvd_wait_metrics(&after);
++    EXPECT_EQ(after.samples, before.samples+1);
++    EXPECT_EQ(after.untracked, before.untracked);
++    EXPECT_EQ(after.waiting, before.waiting);
++    unsigned waits=0, callerRing=aurora::trace::MaxThreads, waitRing=callerRing;
++    for (unsigned slot=0; slot<aurora::trace::MaxThreads; ++slot) {
++      aurora::trace::drain(slot, [&](const aurora::trace::Event& event) {
++        if (event.frame!=frame || !event.name) return;
++        if (!std::strcmp(event.name,"complete frame wall")) callerRing=slot;
++        if (std::strcmp(event.name,"mandatory asset read wait (inclusive)")) return;
++        ++waits; waitRing=slot;
++        EXPECT_EQ(event.lane, aurora::trace::Main);
++        EXPECT_EQ(event.kind, aurora::trace::Inclusive);
++        EXPECT_GT(event.value, 0u);
++      });
++    }
++    EXPECT_EQ(waits, 1u);
++    EXPECT_NE(callerRing, aurora::trace::MaxThreads);
++    EXPECT_EQ(waitRing, callerRing);
++    DVDClose(&file);
++  }
++}
++#endif
 +
 +TEST_F(DVDDiscTest, MandatoryWaitMetricsAccountForQueueServiceAndCallbackOwnership) {
 +  MandatoryReadFixture f;ASSERT_TRUE(f.Queue());
@@ -6487,6 +6777,20 @@ index 8048d20b..009c6e07 100644
    mutable float mSpread = 1.f;
    mutable float mSpreadCenterX = 0.f;
    mutable float mSpreadY = 1.f;
+diff --git a/include/Kyoto/Audio/CStaticAudioPlayer.hpp b/include/Kyoto/Audio/CStaticAudioPlayer.hpp
+index 005e8f22..27748ad0 100644
+--- a/include/Kyoto/Audio/CStaticAudioPlayer.hpp
++++ b/include/Kyoto/Audio/CStaticAudioPlayer.hpp
+@@ -34,6 +34,9 @@ public:
+   void SetVolume(uchar vol);
+ 
+ private:
++#ifdef TARGET_PC
++  void CancelAndDrainReads();
++#endif
+   rstl::string x0_filepath;
+   int x10_rsfRem;
+   int x14_rsfLength;
 diff --git a/include/Kyoto/Graphics/CCubeModel.hpp b/include/Kyoto/Graphics/CCubeModel.hpp
 index eb02b631..2edd5401 100644
 --- a/include/Kyoto/Graphics/CCubeModel.hpp
@@ -6668,6 +6972,26 @@ index 9f56615a..aa85530e 100644
    const std::string fileSettings = SettingsText();
  
    // Environment variables are explicit per-run overrides and win over the file.
+diff --git a/platform/debug_ui/overlays.cpp b/platform/debug_ui/overlays.cpp
+index cb71259d..70e441b8 100644
+--- a/platform/debug_ui/overlays.cpp
++++ b/platform/debug_ui/overlays.cpp
+@@ -574,6 +574,7 @@ void HoldBackgroundShadersOnFrontEnd() {
+ // frame): after half a second, a count and a bar since the toast opened. Once that queue has
+ // drained, shaders met in game compile without it.
+ void DrawShaderCompilationToast() {
++#if !defined(__ORBIS__)
+   static double sQueuedSince = -1.0;
+   static uint32_t sBase = 0; // createdPipelines when the toast opened
+   static bool sStartupDone = false;
+@@ -614,6 +615,7 @@ void DrawShaderCompilationToast() {
+     TopToastPlaced(viewport);
+   }
+   ImGui::End();
++#endif
+ }
+ 
+ // The panel's hotkey hint, from the live Port menu/Screenshot bindings.
 diff --git a/platform/debug_ui/settings.cpp b/platform/debug_ui/settings.cpp
 index 48cc1a97..caa16d42 100644
 --- a/platform/debug_ui/settings.cpp
@@ -6715,13 +7039,20 @@ index dcb11f8d..d690b7bc 100644
    quit.type = SDL_EVENT_QUIT;
    SDL_PushEvent(&quit);
 diff --git a/platform/debug_ui/video.cpp b/platform/debug_ui/video.cpp
-index 20a0e4be..b2bcf94e 100644
+index 20a0e4be..0acd3e3e 100644
 --- a/platform/debug_ui/video.cpp
 +++ b/platform/debug_ui/video.cpp
-@@ -538,11 +538,13 @@ void DrawVideoQuality() {
+@@ -533,16 +533,20 @@ void DrawVideoQuality() {
+   }
+   ImGui::SetItemTooltip("Smooths polygon edges, at about 4x the framebuffer memory.");
+   EndOriginalLocked(locked);
++#if !defined(__ORBIS__)
+   if (ImGui::Checkbox("Show shader compilation", &sShowShaderCompilation)) {
+     MarkDirty();
    }
    ImGui::SetItemTooltip("A small progress bar while the shader cache compiles at startup (longest on the first\n"
                          "start after an install or update). Draws whose shader isn't ready yet are skipped.");
++#endif
 +#if !defined(__ORBIS__)
    if (ImGui::Checkbox("Show F1 hint at launch", &sShowMenuHint)) {
      MarkDirty();
@@ -6760,10 +7091,10 @@ index 7f56f5ac..37991667 100644
  // Renders each actor registered since the last call into its depth map and decals the room geometry under it.
 diff --git a/platform/include/port_frontend_layout.h b/platform/include/port_frontend_layout.h
 new file mode 100644
-index 00000000..90ba7d6e
+index 00000000..dadcdcc5
 --- /dev/null
 +++ b/platform/include/port_frontend_layout.h
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,74 @@
 +#ifndef PORT_FRONTEND_LAYOUT_H
 +#define PORT_FRONTEND_LAYOUT_H
 +
@@ -6793,7 +7124,18 @@ index 00000000..90ba7d6e
 +}
 +
 +inline bool EmbeddedPicture(unsigned width, unsigned height) {
-+  return width == 640 && height == 480;
++  if (width == 640 && height == 480) {
++    return true;
++  }
++#ifdef __ORBIS__
++  // PC-prepared 1.5x/2x/3x copies retain the authored 4:3 raster and its cinema
++  // bars. Use the same picture crop and GUI camera as the original movie.
++  // Genuine widescreen replacements keep their independent framing.
++  return (width == 960 && height == 720) || (width == 1280 && height == 960) ||
++         (width == 1920 && height == 1440);
++#else
++  return false;
++#endif
 +}
 +
 +inline bool FillPicture(bool enabled, bool widescreen, bool menuMovie,
@@ -7208,6 +7550,33 @@ index 00000000..3a825859
 +  return false;
 +}
 +} // namespace PortShadowDemand
+diff --git a/platform/include/port_startup.h b/platform/include/port_startup.h
+new file mode 100644
+index 00000000..45686d02
+--- /dev/null
++++ b/platform/include/port_startup.h
+@@ -0,0 +1,21 @@
++// SPDX-License-Identifier: MIT
++#ifndef METROID_PRIME_PORT_PORT_STARTUP_H
++#define METROID_PRIME_PORT_PORT_STARTUP_H
++
++#if defined(__ORBIS__)
++namespace PortStartup {
++// Main-thread monotonic stage diagnostics only. No rendering, input or game objects.
++void Begin();
++void Stop();
++void Stage(const char* name);
++
++class Scope {
++public:
++  Scope() { Begin(); }
++  ~Scope() { Stop(); }
++  Scope(const Scope&) = delete;
++  Scope& operator=(const Scope&) = delete;
++};
++} // namespace PortStartup
++#endif
++#endif
 diff --git a/platform/include/port_utf8_path.h b/platform/include/port_utf8_path.h
 index 3d7d93f9..041a1acb 100644
 --- a/platform/include/port_utf8_path.h
@@ -7232,7 +7601,7 @@ index 3d7d93f9..041a1acb 100644
  }
  
 diff --git a/platform/input/port_input_devices.cpp b/platform/input/port_input_devices.cpp
-index be9fb5fa..69d226aa 100644
+index be9fb5fa..df9509d4 100644
 --- a/platform/input/port_input_devices.cpp
 +++ b/platform/input/port_input_devices.cpp
 @@ -1,4 +1,7 @@
@@ -7266,7 +7635,46 @@ index be9fb5fa..69d226aa 100644
    Bind(p, Action::SaveState, Make(Device::Key, SDL_SCANCODE_F5));
    Bind(p, Action::LoadState, Make(Device::Key, SDL_SCANCODE_F9));
    Bind(p, Action::Screenshot, Make(Device::Key, SDL_SCANCODE_F12));
-@@ -987,7 +994,8 @@ void BuildBaseProfile(Profile& out) {
+@@ -976,18 +983,47 @@ std::vector<SPadInfo> ConnectedPads() {
+ 
+ static void BindMenuDefaults(Profile& p);
+ 
++// Map-only defaults use the existing semantic rows, not a global stick swap.
++// An unset row has always meant a fallback rather than disabling that map
++// direction. Refill missing rows after overlays too: older full/replace
++// profiles and explicit empty rows must receive the PS4 fallback, while real
++// custom map bindings retain their inputs. No saved profile is rewritten.
++static void BindMapDefaults(Profile& p) {
++#ifdef __ORBIS__
++  struct Row { Action action; int axis, direction; };
++  static constexpr Row rows[] = {
++      {Action::MapRotateUp, SDL_GAMEPAD_AXIS_RIGHTY, -1},
++      {Action::MapRotateDown, SDL_GAMEPAD_AXIS_RIGHTY, 1},
++      {Action::MapRotateLeft, SDL_GAMEPAD_AXIS_RIGHTX, -1},
++      {Action::MapRotateRight, SDL_GAMEPAD_AXIS_RIGHTX, 1},
++      {Action::MapPanUp, SDL_GAMEPAD_AXIS_LEFTY, -1},
++      {Action::MapPanDown, SDL_GAMEPAD_AXIS_LEFTY, 1},
++      {Action::MapPanLeft, SDL_GAMEPAD_AXIS_LEFTX, -1},
++      {Action::MapPanRight, SDL_GAMEPAD_AXIS_LEFTX, 1},
++  };
++  for (const Row& row : rows) {
++    const bool bound = std::any_of(p.bindings.begin(), p.bindings.end(), [&](const Binding& b) {
++      return b.action == row.action && b.count != 0 && PortInput::BindingFamily(b) == PortInput::Family::Pad;
++    });
++    if (!bound) BindIn(p, row.action, Make(Device::PadAxis, row.axis, row.direction), PortInput::kCtxMap);
++  }
++#endif
++}
++
+ void BuildBaseProfile(Profile& out) {
+   out = Profile{};
+   BindController(out);
+   BindKeyboard(out);
+   BindPortControls(out);
+   BindMenuDefaults(out);
++  BindMapDefaults(out);
+   for (const PortInput::TouchBallControl& c : PortInput::kTouchBallControls) {
+     Bind(out, c.row, Make(Device::Touch, c.control));
    }
  }
  
@@ -7276,7 +7684,7 @@ index be9fb5fa..69d226aa 100644
  // (and no pad one while a pad is connected), F1 opens it again, so a hand-edited
  // controls.toml or an unplugged pad can't lock anyone out of the settings.
  void KeepPortMenuReachable(Profile& p) {
-@@ -995,11 +1003,17 @@ void KeepPortMenuReachable(Profile& p) {
+@@ -995,11 +1031,17 @@ void KeepPortMenuReachable(Profile& p) {
    for (const Binding& b : p.bindings) {
      if (b.action != Action::PortMenu || b.count == 0) continue;
      const PortInput::Family family = PortInput::BindingFamily(b);
@@ -7294,7 +7702,15 @@ index be9fb5fa..69d226aa 100644
  }
  
  void BuildProfile(Profile& out) {
-@@ -1155,19 +1169,19 @@ static u32 PromptNative(const Input& in) {
+@@ -1007,6 +1049,7 @@ void BuildProfile(Profile& out) {
+   const SActiveProfiles user = ActiveUserProfiles();
+   if (user.sel.base != nullptr) PortInput::Overlay(out, PortInput::WithoutStockTouch(*user.sel.base));
+   if (user.sel.pad != nullptr) PortInput::Overlay(out, PortInput::WithoutStockTouch(*user.sel.pad));
++  BindMapDefaults(out);
+   PortInput::BindStockTouch(out, TurboHz());
+   PublishTouchBound(out);
+   // After the overlay: a controls.toml touch binding of the same action must not
+@@ -1155,19 +1198,19 @@ static u32 PromptNative(const Input& in) {
  
  u32 PromptNativeButton(const Input& in) { return PromptNative(in); }
  
@@ -7318,7 +7734,7 @@ index be9fb5fa..69d226aa 100644
  }
  
  // The first of `actions` with a single input from `family`: one that applies in
-@@ -1179,7 +1193,7 @@ static bool PromptInputFor(std::initializer_list< Action > actions, PortInput::F
+@@ -1179,7 +1222,7 @@ static bool PromptInputFor(std::initializer_list< Action > actions, PortInput::F
    for (const uint16_t want : {contexts, static_cast< uint16_t >(~PortInput::kCtxLayers)}) {
      for (const Action a : actions) {
        for (const Binding& b : sPromptBindings) {
@@ -7327,7 +7743,7 @@ index be9fb5fa..69d226aa 100644
              PortInput::BindingFamily(b) == family) {
            out = b.inputs[0];
            return true;
-@@ -1216,6 +1230,27 @@ bool PromptButtonInput(unsigned padButton, PortInput::Family family, Input& out)
+@@ -1216,6 +1259,27 @@ bool PromptButtonInput(unsigned padButton, PortInput::Family family, Input& out)
    return PromptInputFor({menu->menu, game}, family, out);
  }
  
@@ -7355,22 +7771,59 @@ index be9fb5fa..69d226aa 100644
  uint16_t PromptContexts() { return GameContexts(); }
  
  bool PromptAxisInput(PADAxis axis, PortInput::Family family, Input& out) {
+diff --git a/platform/input/port_input_remap_ui.cpp b/platform/input/port_input_remap_ui.cpp
+index c26847d4..f702ce8d 100644
+--- a/platform/input/port_input_remap_ui.cpp
++++ b/platform/input/port_input_remap_ui.cpp
+@@ -1404,11 +1404,21 @@ const char* GameHint(Action a) {
+   case Action::MapRotateUp:
+   case Action::MapRotateDown:
+   case Action::MapRotateLeft:
+-  case Action::MapRotateRight: return "Control stick when unset";
++  case Action::MapRotateRight:
++#ifdef __ORBIS__
++    return "Right stick when unset";
++#else
++    return "Control stick when unset";
++#endif
+   case Action::MapPanUp:
+   case Action::MapPanDown:
+   case Action::MapPanLeft:
+-  case Action::MapPanRight: return "C-stick when unset";
++  case Action::MapPanRight:
++#ifdef __ORBIS__
++    return "Left stick when unset";
++#else
++    return "C-stick when unset";
++#endif
+   default: break;
+   }
+   const PortInput::BallRow* ball = PortInput::FindBallRow(a);
 diff --git a/platform/main.cpp b/platform/main.cpp
-index ffa06b1d..fd1a7f4b 100644
+index ffa06b1d..d9c34cfe 100644
 --- a/platform/main.cpp
 +++ b/platform/main.cpp
-@@ -85,6 +85,10 @@
+@@ -42,6 +42,7 @@
+ #include "port_storage_report.h"
+ #include "port_gpu_driver.h"
+ #include "port_imgui_fonts.h"
++#include "port_startup.h"
+ 
+ #include <SDL3/SDL_dialog.h>
+ #include <SDL3/SDL_events.h>
+@@ -85,6 +86,11 @@
  
  extern "C" int metroid_main(int argc, char** argv);
  extern "C" void AIPortShutdown(void);
 +#ifdef __ORBIS__
 +extern "C" void prime_ps4_lifecycle_install();
++extern "C" int prime_ps4_quit_requested();
 +extern "C" void prime_ps4_shutdown_stage(const char*);
 +#endif
  
  namespace {
  #if defined(__ANDROID__)
-@@ -1191,7 +1195,12 @@ int main(int argc, char** argv) {
+@@ -1191,7 +1197,12 @@ int main(int argc, char** argv) {
          .desiredBackend = DesiredGraphicsBackend(),
          .msaa = static_cast<uint32_t>(PortDebug::Msaa()),
          .maxTextureAnisotropy = static_cast<uint16_t>(PortDebug::Anisotropy()),
@@ -7384,7 +7837,7 @@ index ffa06b1d..fd1a7f4b 100644
          .startFullscreen = PortDebug::Fullscreen(),
          .allowJoystickBackgroundEvents = false,
          .pauseOnFocusLost = false,
-@@ -1203,8 +1212,13 @@ int main(int argc, char** argv) {
+@@ -1203,8 +1214,13 @@ int main(int argc, char** argv) {
          .windowPosY = -1,
          // 720p by default (the F1 overlay's sidebar needs the height); Aurora
          // shrinks it to fit a smaller desktop.
@@ -7398,7 +7851,7 @@ index ffa06b1d..fd1a7f4b 100644
  #if !defined(__ANDROID__)
          .iconRGBA8 = windowIcon,
          .iconWidth = 64,
-@@ -1398,6 +1412,10 @@ int main(int argc, char** argv) {
+@@ -1398,10 +1414,21 @@ int main(int argc, char** argv) {
      PortDebug::BeginDriverWorkarounds(userFolder, dawnEnableToggles, dawnDisableToggles);
      config.dawnEnableToggles = dawnEnableToggles.c_str();
      config.dawnDisableToggles = dawnDisableToggles.c_str();
@@ -7409,22 +7862,62 @@ index ffa06b1d..fd1a7f4b 100644
      // Before aurora_initialize loads the pipeline cache: its rows take the running per-pixel
      // lighting, so the seed's lit pipelines build at boot instead of on each room's first draw.
      aurora_set_per_pixel_lighting(PortDebug::PerPixelLighting());
-@@ -1557,6 +1575,7 @@ int main(int argc, char** argv) {
++#ifdef __ORBIS__
++    PortStartup::Scope startupFeedback;
++#endif
+     aurora_initialize(argc, argv, &config);
++#ifdef __ORBIS__
++    prime_ps4_lifecycle_install();
++    PortStartup::Stage("Graphics initialized");
++#endif
+     // The settings file, JSON and the logs read and write numbers with the C
+     // library, in the "C" format. A toolkit loaded with the window (a GTK
+     // decoration plugin, an input method) may call setlocale(LC_ALL, ""), which
+@@ -1473,6 +1500,9 @@ int main(int argc, char** argv) {
+ 
+     // Disc image: an explicit argument or MP_DISC, else the path saved on a
+     // previous launch, else a copy beside the executable, else ask for one.
++#ifdef __ORBIS__
++    PortStartup::Stage("Checking game data");
++#endif
+     PortDebug::LoadDiscPath();
+ #if defined(__ANDROID__)
+     // Remembered as the disc path, so the lookup below finds it.
+@@ -1556,7 +1586,11 @@ int main(int argc, char** argv) {
+     aurora_dvd_set_read_error_callback(NoteDiscReadFailure);
      PortRemastered::RemoveLegacyImport();
      PortStorageReport::StartLogging();
++#ifdef __ORBIS__
++    PortStartup::Stage("Preparing game resources");
++#endif
      PortMods::Initialize();
 +    GXPortSetSunShadowPotential(PortMods::SunShadowPotential()?GX_TRUE:GX_FALSE);
      // Video-relevant settings in one line, so GPU-driver triage (issues #7,
      // #8) needs nothing but the log.
      {
-@@ -1601,19 +1620,34 @@ int main(int argc, char** argv) {
+@@ -1598,22 +1632,49 @@ int main(int argc, char** argv) {
+ 
+     // Prime the window/event state so the game's first aurora_begin_frame can
+     // succeed (the game submits GX during early init, before its main loop).
++#ifdef __ORBIS__
++    bool startupExit = prime_ps4_quit_requested() != 0;
++    for (const AuroraEvent* event = aurora_update(); event != nullptr && event->type != AURORA_NONE; ++event) {
++        if (event->type == AURORA_EXIT) startupExit = true;
++    }
++#else
      aurora_update();
++#endif
  
      int result = 1;
 +#ifdef __ORBIS__
-+    prime_ps4_lifecycle_install();
++    PortStartup::Stage("Starting game engine");
 +#endif
      try {
++#ifdef __ORBIS__
++        if (startupExit || prime_ps4_quit_requested()) {
++            result = 0;
++        } else
++#endif
          result = metroid_main(argc, argv);
      } catch (const std::exception& error) {
          PortLog::Write( "metroid_prime_port: %s\n", error.what());
@@ -7518,7 +8011,7 @@ index cc3f10bf..1ac6cf9f 100644
      return sAssets.get();
    }
 diff --git a/platform/port_mods.cpp b/platform/port_mods.cpp
-index b2b021bd..fbed32fd 100644
+index b2b021bd..5ed7e960 100644
 --- a/platform/port_mods.cpp
 +++ b/platform/port_mods.cpp
 @@ -3,6 +3,10 @@
@@ -7555,7 +8048,26 @@ index b2b021bd..fbed32fd 100644
        // A room's lighting goes with its geometry: Remastered's lights are made for its rooms.
        return PortRoomEffects::ParseFileName(name, id) ? "effects" : "geometry";
      }
-@@ -400,6 +413,11 @@ bool AnyModEnabled() {
+@@ -328,7 +341,17 @@ namespace {
+ // name order as the others - a later name still wins - and a shared mod of the same name never
+ // shadows it; a legacy shared import keeps standing in until a private one is installed.
+ std::vector<PortRemasteredStorage::ModFolder> ScanModFolders(const std::string& sharedFolder) {
+-  return PortRemasteredStorage::ScanFolders(sharedFolder, PortRemastered::InstalledModFolder());
++  auto mods = PortRemasteredStorage::ScanFolders(sharedFolder, PortRemastered::InstalledModFolder());
++#ifdef __ORBIS__
++  // Packaged menu movies join the ordinary mod ordering and disabled-name
++  // settings. Reading /app0 needs no extraction or saved-path changes.
++  const std::string builtinMenus = "/app0/menus/hd-menu";
++  std::error_code ec;
++  if (fs::is_directory(builtinMenus, ec)) {
++    return PortRemasteredStorage::OrderMods(std::move(mods), builtinMenus);
++  }
++#endif
++  return mods;
+ }
+ 
+ bool HasRoomGeometryNow(const std::vector<PortRemasteredStorage::ModFolder>& mods) {
+@@ -400,6 +423,11 @@ bool AnyModEnabled() {
  
  const Status& CurrentStatus() { return sStatus; }
  
@@ -7567,7 +8079,7 @@ index b2b021bd..fbed32fd 100644
  const char* StaleRemasteredImport() { return sStatus.staleImport.empty() ? nullptr : sStatus.staleImport.c_str(); }
  
  namespace {
-@@ -635,6 +653,12 @@ void FinishReload() {
+@@ -635,6 +663,12 @@ void FinishReload() {
  }
  
  void Initialize() {
@@ -7580,7 +8092,7 @@ index b2b021bd..fbed32fd 100644
    ++sResourceGeneration;
    sResourceProviders.clear();
    sRoomEffectsProviders.clear();
-@@ -764,6 +788,20 @@ void Initialize() {
+@@ -764,6 +798,20 @@ void Initialize() {
      };
      int partsLeftOut = 0;
      std::vector<fs::path> files;
@@ -7601,7 +8113,7 @@ index b2b021bd..fbed32fd 100644
      for (fs::recursive_directory_iterator it(modDir, fs::directory_options::skip_permission_denied, ec), end;
           !ec && it != end; it.increment(ec)) {
        const std::string name = ToUtf8(it->path().filename());
-@@ -786,6 +824,7 @@ void Initialize() {
+@@ -786,6 +834,7 @@ void Initialize() {
          files.push_back(it->path());
        }
      }
@@ -7609,7 +8121,7 @@ index b2b021bd..fbed32fd 100644
      if (partsLeftOut > 0) {
        Message(info.name + ": " + std::to_string(partsLeftOut) + " files left out (" + info.hidden + ")");
      }
-@@ -809,11 +848,38 @@ void Initialize() {
+@@ -809,11 +858,38 @@ void Initialize() {
        aurora_reserve_frame_buffers();
      }
      std::sort(files.begin(), files.end());
@@ -7649,7 +8161,7 @@ index b2b021bd..fbed32fd 100644
        if (ec) {
          Message(info.name + ": cannot read " + relative);
          continue;
-@@ -917,6 +983,11 @@ void Initialize() {
+@@ -917,6 +993,11 @@ void Initialize() {
            continue;
          }
          loose[{type, id}] = {type, id, ToUtf8(file), size, info.name};
@@ -7661,7 +8173,7 @@ index b2b021bd..fbed32fd 100644
          sResourceProviders[{type, id}] = ToUtf8(modDir);
          looseMod[{type, id}] = modIndex;
          if (type == 0x54585452) { // 'TXTR': an earlier mod's image was made for another texture
-@@ -945,7 +1016,9 @@ void Initialize() {
+@@ -945,7 +1026,9 @@ void Initialize() {
          continue;
        }
        replaced[entry] = {ToUtf8(file), size, modIndex};
@@ -8508,6 +9020,54 @@ index b48c16bd..66ab0119 100644
    sPendingBlob = std::move(blob);
    sInstallPending = true;
    sPlacePending = false;
+diff --git a/platform/port_startup.cpp b/platform/port_startup.cpp
+new file mode 100644
+index 00000000..b00976f8
+--- /dev/null
++++ b/platform/port_startup.cpp
+@@ -0,0 +1,42 @@
++// SPDX-License-Identifier: MIT
++// Startup diagnostics only. The system artwork remains until the game's
++// ordinary first frame; this helper owns no UI, frame, input or GPU resource.
++#include "port_startup.h"
++
++#if defined(__ORBIS__)
++#include "port_log.h"
++#include <SDL3/SDL_timer.h>
++#include <cstdint>
++#include <cstring>
++
++namespace PortStartup {
++namespace {
++bool sActive = false;
++uint64_t sBegan = 0;
++uint64_t sStageBegan = 0;
++char sStage[96] = "Preparing graphics";
++} // namespace
++
++void Begin() {
++  sActive = true;
++  sBegan = sStageBegan = SDL_GetTicksNS();
++  std::snprintf(sStage, sizeof(sStage), "%s", "Preparing graphics");
++  PortLog::Write("port: startup: preparing graphics; monotonic_ns=%llu\n",
++                 static_cast<unsigned long long>(sBegan));
++}
++
++void Stop() { sActive = false; }
++
++void Stage(const char* name) {
++  if (!sActive || name == nullptr || std::strcmp(sStage, name) == 0) {
++    return;
++  }
++  const uint64_t now = SDL_GetTicksNS();
++  PortLog::Write("port: startup: %s -> %s; stage %.1f ms, total %.1f ms\n", sStage, name,
++                 static_cast<double>(now - sStageBegan) / 1000000.0,
++                 static_cast<double>(now - sBegan) / 1000000.0);
++  sStageBegan = now;
++  std::snprintf(sStage, sizeof(sStage), "%s", name);
++}
++} // namespace PortStartup
++#endif
 diff --git a/platform/port_watchdog.cpp b/platform/port_watchdog.cpp
 index 8371b1ba..ae9fb208 100644
 --- a/platform/port_watchdog.cpp
@@ -8625,6 +9185,128 @@ index f70c1a68..0305ea6e 100644
      }
      x28_vertWorkspace = rstl::auto_ptr< float[] >(static_cast< float* >(ptr));
      x30_normalWorkspace =
+diff --git a/src/Kyoto/Audio/CStaticAudioPlayer.cpp b/src/Kyoto/Audio/CStaticAudioPlayer.cpp
+index 6770cf17..0ff4b8e8 100644
+--- a/src/Kyoto/Audio/CStaticAudioPlayer.cpp
++++ b/src/Kyoto/Audio/CStaticAudioPlayer.cpp
+@@ -11,6 +11,9 @@
+ 
+ #include <dolphin/ai.h>
+ #include <dolphin/os.h>
++#ifdef TARGET_PC
++#include <stdexcept>
++#endif
+ 
+ static CStaticAudioPlayer* sCurrentPlayer = nullptr;
+ static rstl::reserved_vector< FAudioCallback, 4 > sAICallbacks;
+@@ -81,9 +84,17 @@ CStaticAudioPlayer::CStaticAudioPlayer(const rstl::string& filepath, const int l
+ , x28_dmaLeft((uchar*)CMemory::Alloc(640, IAllocator::kHI_RoundUpLen))
+ , x30_dmaRight((uchar*)CMemory::Alloc(640, IAllocator::kHI_RoundUpLen))
+ , xc0_volume(32768) {
++#ifdef TARGET_PC
++  try {
++#endif
+   CDvdFile dvdFile(filepath.data());
+   x10_rsfRem = dvdFile.GetFileSize();
+   x14_rsfLength = x10_rsfRem;
++#ifdef TARGET_PC
++  if (x14_rsfLength <= 0) {
++    throw std::runtime_error("Empty static audio file");
++  }
++#endif
+   int bufferCount = ((x10_rsfRem - 1) + 0x20000) / 0x20000;
+   x48_buffers.reserve(bufferCount);
+   x38_dvdRequests.reserve(bufferCount);
+@@ -96,19 +107,58 @@ CStaticAudioPlayer::CStaticAudioPlayer(const rstl::string& filepath, const int l
+ 
+     rstl::auto_ptr< rstl::game_memory< uchar > > buf((uchar*)CMemory::Alloc(uVar1, IAllocator::kHI_RoundUpLen));
+     x48_buffers.push_back(buf);
++#ifdef TARGET_PC
++    // Reserve both owner vectors before enqueueing. Keep the temporary request
++    // owner too, so an insertion failure drains its writer before buffer unwind.
++    rstl::auto_ptr< CDvdRequest > request(
++        dvdFile.AsyncSeekRead(buf.get(), uVar1, kSO_Current, 0));
++    x38_dvdRequests.push_back(request);
++#else
+     x38_dvdRequests.push_back(dvdFile.SyncReadBlocking(buf.get(), uVar1));
++#endif
++  }
++#ifdef TARGET_PC
++  } catch (...) {
++    // Buffers are destroyed before requests by member unwind. Retire every
++    // writer and callback first, including a partially queued preload.
++    CancelAndDrainReads();
++    throw;
+   }
++#endif
+ }
+ 
+ CStaticAudioPlayer::~CStaticAudioPlayer() {
+   StopMixOut();
++#ifdef TARGET_PC
++  CancelAndDrainReads();
++  // game_memory returns every buffer and DMA allocation to CMemory after all
++  // writes and completion callbacks retire.
++#else
+   for (int i = 0; i < x48_buffers.size(); ++i) {
+     CMemory::Free(x48_buffers[i].release());
+   }
+   CMemory::Free(x28_dmaLeft.release());
+   CMemory::Free(x30_dmaRight.release());
++#endif
+ }
+ 
++#ifdef TARGET_PC
++void CStaticAudioPlayer::CancelAndDrainReads() {
++  for (int i = 0; i < x38_dvdRequests.size(); ++i) {
++    x38_dvdRequests[i]->PostCancelRequest();
++  }
++  for (int i = 0; i < x38_dvdRequests.size(); ++i) {
++    try {
++      x38_dvdRequests[i]->WaitUntilComplete();
++    } catch (...) {
++      // Completion reports read errors only after waiting for callbacks.
++      // CRealDvdRequest destruction also drains without throwing.
++    }
++  }
++  x38_dvdRequests.clear();
++}
++#endif
++
+ const bool CStaticAudioPlayer::IsReady() const {
+   // Every chunk has to be resident before playback; checking only the last one
+   // let the mixer start on buffers whose DVD reads had not landed yet.
+@@ -116,6 +166,17 @@ const bool CStaticAudioPlayer::IsReady() const {
+     if (!x38_dvdRequests[i]->IsComplete()) {
+       return false;
+     }
++#ifdef TARGET_PC
++    // The final aligned read may include padding past EOF; only source bytes
++    // are required. Errors stay on the game thread, before installing the mixer.
++    const int remaining = x14_rsfLength - i * 0x20000;
++    const int expected = remaining < 0x20000 ? remaining : 0x20000;
++    const int transferred = x38_dvdRequests[i]->PortTransferred();
++    if (x38_dvdRequests[i]->PortCancelled() ||
++        (transferred >= 0 && transferred < expected)) {
++      throw std::runtime_error("Incomplete static audio preload");
++    }
++#endif
+   }
+   return true;
+ }
+@@ -125,6 +186,12 @@ void CStaticAudioPlayer::StartMixOut() {
+     return;
+   }
+ 
++#ifdef TARGET_PC
++  if (!IsReady()) {
++    return;
++  }
++#endif
++  // Destruction retires callbacks as well as the completed reads before mixing.
+   x38_dvdRequests.clear();
+   x18_curSamp = 0;
+   g72x_init_state(&x58_leftState);
 diff --git a/src/Kyoto/CDvdRequest.cpp b/src/Kyoto/CDvdRequest.cpp
 index c568a3a6..a75804e2 100644
 --- a/src/Kyoto/CDvdRequest.cpp
@@ -8691,10 +9373,32 @@ index 075babeb..d6804bb3 100644
    if (memIt != x14_memFactories.end()) {
      FMemFactoryFunc factory = memIt->second;
 diff --git a/src/Kyoto/CResFactory.cpp b/src/Kyoto/CResFactory.cpp
-index ed778e71..cffce5f6 100644
+index ed778e71..522b6850 100644
 --- a/src/Kyoto/CResFactory.cpp
 +++ b/src/Kyoto/CResFactory.cpp
-@@ -89,6 +89,15 @@ rstl::auto_ptr< IObj > CResFactory::Build(const SObjectTag& tag, const CVParamTr
+@@ -10,6 +10,9 @@
+ 
+ #include <dolphin/ar.h>
+ #include <dolphin/os.h>
++#ifdef __ORBIS__
++#include <aurora/frame_trace.hpp>
++#endif
+ 
+ #ifdef TARGET_PC
+ #include "Kyoto/CPakFile.hpp"
+@@ -82,6 +85,11 @@ CResFactory::LoadList::iterator CResFactory::FindInLoadList(const SObjectTag& ta
+ }
+ 
+ rstl::auto_ptr< IObj > CResFactory::Build(const SObjectTag& tag, const CVParamTransfer& params) {
++#ifdef __ORBIS__
++  // Includes nested dependency waits, decompression and factory CPU work.
++  // This is deliberately not named a pure I/O or GPU wait.
++  aurora::trace::Scope construction("resource token construction (inclusive)");
++#endif
+   AUTO(it, FindInLoadList(tag));
+   if (it != x84_loadList.end()) {
+     IObj** target = it->x10_target;
+@@ -89,6 +97,15 @@ rstl::auto_ptr< IObj > CResFactory::Build(const SObjectTag& tag, const CVParamTr
        ARQPoll();
        while (!PumpResource(it, 0)) {
          ARQPoll();
@@ -8710,6 +9414,55 @@ index ed778e71..cffce5f6 100644
        }
      }
      return rstl::auto_ptr< IObj >(*target);
+diff --git a/src/Kyoto/DolphinCDvdFile.cpp b/src/Kyoto/DolphinCDvdFile.cpp
+index 9479493d..f6013ab6 100644
+--- a/src/Kyoto/DolphinCDvdFile.cpp
++++ b/src/Kyoto/DolphinCDvdFile.cpp
+@@ -22,6 +22,10 @@
+ #include <mutex>
+ #include <stdexcept>
+ #include <string>
++#ifdef __ORBIS__
++#include <aurora/frame_trace.hpp>
++#include <optional>
++#endif
+ 
+ static CDvdFile* sFirstARAM = nullptr;
+ 
+@@ -256,6 +260,16 @@ void CDvdFile::StartARAMFileLoad() {
+ }
+ 
+ void CDvdFile::StallForARAMFile() {
++#ifdef __ORBIS__
++  // The file owner retires this control object; DVD/ARQ callbacks update its
++  // fields under AramFileStateMutex, but never replace this owning pointer.
++  // Include the first readiness-lock acquisition and completed-load retirement,
++  // while already-retired files do not read a profiling clock on every access.
++  std::optional<aurora::trace::Scope> preloadWait;
++  if (mARAMFile.get() != nullptr) {
++    preloadWait.emplace("ARAM file preload readiness (DVD/ARQ inclusive)");
++  }
++#endif
+   while (!IsARAMFileLoaded()) {
+     ARQPoll();
+     OSYieldThread();
+@@ -356,14 +370,13 @@ CDvdRequest* CDvdFile::AsyncSeekRead(void* dest, uint len, ESeekOrigin origin, i
+     request = rs_new CARAMDvdRequest(CARAMManager::DMAToMRAM(
+         mARAMBuffer + mOffset, dest, roundedLen, CARAMManager::kDMAPrio_One));
+   } else {
+-    CRealDvdRequest* req = rs_new CRealDvdRequest();
++    rstl::auto_ptr< CRealDvdRequest > req(rs_new CRealDvdRequest());
+     DVDFileInfo* info = req->FileInfo();
+     if (!DVDFastOpen(mFileEntry, info) ||
+         !DVDReadAsync(info, dest, (len + 31) & ~31, mOffset, internalCallback)) {
+-      delete req;
+       throw std::runtime_error(std::string("Could not start disc read: ") + mFilename.data());
+     }
+-    request = req;
++    request = req.release();
+   }
+ 
+   UpdateFilePos(len);
 diff --git a/src/Kyoto/Graphics/CCubeModel.cpp b/src/Kyoto/Graphics/CCubeModel.cpp
 index 5a6bfc5a..8631d2c4 100644
 --- a/src/Kyoto/Graphics/CCubeModel.cpp
@@ -8806,10 +9559,26 @@ index 5a6bfc5a..8631d2c4 100644
  
  void CCubeModel::DrawNormal(const float* positions, const float* normals,
 diff --git a/src/Kyoto/Graphics/CCubeMoviePlayer.cpp b/src/Kyoto/Graphics/CCubeMoviePlayer.cpp
-index 75a1d38f..06c701df 100644
+index 75a1d38f..eed03cea 100644
 --- a/src/Kyoto/Graphics/CCubeMoviePlayer.cpp
 +++ b/src/Kyoto/Graphics/CCubeMoviePlayer.cpp
-@@ -138,21 +138,23 @@ static void MyTHPGXYuv2RgbSetup(bool field, bool deinterlace) {
+@@ -63,6 +63,15 @@ static void MyTHPGXRestore() {
+ }
+ 
+ static void MyTHPGXYuv2RgbSetup(bool field, bool deinterlace) {
++#ifdef __ORBIS__
++  // Orbis presents complete progressive frames. The retail field mask below
++  // discards alternate output lines for 480i scan-out; scaling that mask to
++  // 1080p introduces black lines/moire. Keep the decoded movie and its baked
++  // grain intact, selecting only the full-frame YUV conversion here. The
++  // caller's video-filter setting and playback/field timing remain unchanged.
++  deinterlace = true;
++  CGX::SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
++#endif
+   GXVtxDescList attr[3] = {
+       {GX_VA_POS, GX_DIRECT},
+       {GX_VA_TEX0, GX_DIRECT},
+@@ -138,21 +147,23 @@ static void MyTHPGXYuv2RgbSetup(bool field, bool deinterlace) {
    CGX::SetTevKColor(GX_KCOLOR2, kColor2);
  }
  
@@ -8837,7 +9606,7 @@ index 75a1d38f..06c701df 100644
    GXLoadTexObj(&vTex, GX_TEXMAP2);
  
    // Each draw makes new objects for a new frame: destroyed now, the draw still samples them, but
-@@ -512,7 +514,7 @@ void CMoviePlayer::Update(float dt) {
+@@ -512,7 +523,7 @@ void CMoviePlayer::Update(float dt) {
  }
  
  void CMoviePlayer::DrawFrame(const CVector3f& v1, const CVector3f& v2, const CVector3f& v3,
@@ -8846,7 +9615,7 @@ index 75a1d38f..06c701df 100644
    if (xd0_drawTexSlot == -1) {
      return;
    }
-@@ -525,7 +527,7 @@ void CMoviePlayer::DrawFrame(const CVector3f& v1, const CVector3f& v2, const CVe
+@@ -525,7 +536,7 @@ void CMoviePlayer::DrawFrame(const CVector3f& v1, const CVector3f& v2, const CVe
    const bool deinterlace = xf4_25_deinterlace;
    MyTHPGXYuv2RgbSetup(field, deinterlace);
    MyTHPYuv2RgbTextureSetup(texture.Y(), texture.U(), texture.V(), x6c_videoInfo.mXSize,
@@ -9304,6 +10073,98 @@ index 15a68aa5..9d94be42 100644
  
  bool CInventoryScreen::InputDisabled() const {
    if (CMath::AbsF(x19c_samusDoll->GetViewInterpolation()) > 0.f) {
+diff --git a/src/MetroidPrime/CMFGame.cpp b/src/MetroidPrime/CMFGame.cpp
+index 328289a7..ad18c24b 100644
+--- a/src/MetroidPrime/CMFGame.cpp
++++ b/src/MetroidPrime/CMFGame.cpp
+@@ -41,6 +41,9 @@
+ #include "port_savestate.h"
+ #include "MetroidPrime/HUD/CSamusHud.hpp"
+ #include <dolphin/gx/GXExtra.h>
++#ifdef __ORBIS__
++#include <aurora/frame_trace.hpp>
++#endif
+ 
+ CMFGame::CMFGame(rstl::ncrc_ptr< CStateManager > stateManager,
+                  rstl::ncrc_ptr< CInGameGuiManager > guiManager,
+@@ -520,6 +523,9 @@ CMFGameLoader::CMFGameLoader()
+ : CIOWin(rstl::string_l("CMFGameLoader"))
+ , x2c_24_initialized(false)
+ , x2c_25_transitionFinished(false) {
++#ifdef __ORBIS__
++  aurora::trace::Scope loaderSetup("loader setup (inclusive)");
++#endif
+   gResFactoryUnknown = 1;
+   CModel::DisableTextureTimeout();
+   if (gpMain->GetRestartMode() == CMain::kRM_Default ||
+@@ -594,15 +600,33 @@ CIOWin::EMessageReturn CMFGameLoader::OnMessage(const CArchitectureMessage& mess
+         if (!it->IsLoaded())
+           ++loadingCount;
+       }
+-      transManager->Update(dt);
++      {
++#ifdef __ORBIS__
++        aurora::trace::Scope transition("loader transition update (inclusive)");
++#endif
++        transManager->Update(dt);
++      }
+       if (loadingCount)
+         return kMR_Exit;
+       x2c_24_initialized = true;
+     } else {
+-      transManager->Update(dt);
++      {
++#ifdef __ORBIS__
++        aurora::trace::Scope transition("loader transition update (inclusive)");
++#endif
++        transManager->Update(dt);
++      }
+     }
+     if (x14_stateManager.IsNull()) {
+-      transManager->WaitForModelsAndTextures();
++      {
++#ifdef __ORBIS__
++        aurora::trace::Scope cleanup("loader texture and delayed resource cleanup (inclusive)");
++#endif
++        transManager->WaitForModelsAndTextures();
++      }
++#ifdef __ORBIS__
++      aurora::trace::Scope stateCreate("loader state manager construction (inclusive)");
++#endif
+       CWorldState& world = gpGameState->CurrentWorldState();
+       const rstl::ncrc_ptr< CStateManager >& stateManager = rstl::ncrc_ptr< CStateManager >(
+           rs_new CStateManager(world.Mailbox(), world.MapWorldInfo(), gpGameState->PlayerState(),
+@@ -610,17 +634,28 @@ CIOWin::EMessageReturn CMFGameLoader::OnMessage(const CArchitectureMessage& mess
+       x14_stateManager = stateManager;
+     }
+     if (!x14_stateManager->IsFullyInitialized()) {
++#ifdef __ORBIS__
++      aurora::trace::Scope stateLoad("loader world initialization (inclusive)");
++#endif
+       CWorldState& world = gpGameState->CurrentWorldState();
+       x14_stateManager->InitializeState(world.GetWorldAssetId(), world.GetCurrentArea(),
+                                         world.GetDesiredAreaAssetId());
+       return kMR_Exit;
+     }
+     if (x18_guiManager.IsNull()) {
++#ifdef __ORBIS__
++      aurora::trace::Scope guiCreate("loader GUI construction (inclusive)");
++#endif
+       gpGameState->CurrentWorldState().SetDesiredAreaAssetId(kInvalidAssetId);
+       x18_guiManager = rs_new CInGameGuiManager(*x14_stateManager, queue);
+     }
+-    if (!x18_guiManager->CheckLoadComplete(*x14_stateManager))
+-      return kMR_Exit;
++    {
++#ifdef __ORBIS__
++      aurora::trace::Scope guiLoad("loader GUI dependency preparation (inclusive)");
++#endif
++      if (!x18_guiManager->CheckLoadComplete(*x14_stateManager))
++        return kMR_Exit;
++    }
+     x1c_loadList.clear();
+     transManager->StartTextFadeOut();
+     x2c_25_transitionFinished = transManager->IsTransitionFinished();
 diff --git a/src/MetroidPrime/CPauseScreenFrame.cpp b/src/MetroidPrime/CPauseScreenFrame.cpp
 index bb803219..7a0cbbf5 100644
 --- a/src/MetroidPrime/CPauseScreenFrame.cpp
@@ -9450,7 +10311,7 @@ index 6d1dbf2c..bb257fcb 100644
          x4_view =
              CTransform4f::LookAt(light.GetPosition(), centerPoint, CVector3f(0.0f, 0.0f, -1.0f));
 diff --git a/src/MetroidPrime/main.cpp b/src/MetroidPrime/main.cpp
-index a06bcb00..89b99c03 100644
+index a06bcb00..f267c0eb 100644
 --- a/src/MetroidPrime/main.cpp
 +++ b/src/MetroidPrime/main.cpp
 @@ -1,3 +1,4 @@
@@ -9458,7 +10319,15 @@ index a06bcb00..89b99c03 100644
  #include "MetroidPrime/CActor.hpp"
  #include "port_env.h"
  #include "MetroidPrime/CMain.hpp"
-@@ -26,6 +27,11 @@
+@@ -15,6 +16,7 @@
+ #include <SDL3/SDL_timer.h>
+ 
+ #include "port_debug.h"
++#include "port_startup.h"
+ #include "port_photo.h"
+ #include "port_pointer.h"
+ #include "port_savestate.h"
+@@ -26,6 +28,11 @@
  #include "port_prompts.h"
  #include "port_crash.h"
  #include "port_watchdog.h"
@@ -9470,7 +10339,65 @@ index a06bcb00..89b99c03 100644
  
  #include "stdint.h"
  #include "stdio.h"
-@@ -970,7 +976,17 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -895,6 +902,9 @@ bool CMain::CheckReset() {
+ }
+ 
+ int CMain::RsMain(int argc, const char* const* argv) {
++#ifdef __ORBIS__
++  PortStartup::Stage("Loading engine resources");
++#endif
+   PPCSetFpIEEEMode();
+   CStopwatch timer;
+   LCEnable();
+@@ -902,6 +912,9 @@ int CMain::RsMain(int argc, const char* const* argv) {
+   rstl::single_ptr< CGameGlobalObjects > gameGlobalObjects(
+       rs_new CGameGlobalObjects(x0_osContext, x6d_memorySys));
+   x128_gameGlobalObjects = gameGlobalObjects.get();
++#ifdef __ORBIS__
++  PortStartup::Stage("Initializing game systems");
++#endif
+ 
+   for (int i = 0; i < 4; ++i) {
+     AddFrameTime(xf0_tickTimes, 0.3f);
+@@ -911,7 +924,13 @@ int CMain::RsMain(int argc, const char* const* argv) {
+   x118_averageTickTime = 0.3f;
+   x11c_averageDrawTime = 0.2f;
+   InitializeSubsystems();
++#ifdef __ORBIS__
++  PortStartup::Stage("Loading game packages");
++#endif
+   gameGlobalObjects->PostInitialize(x0_osContext, x6d_memorySys);
++#ifdef __ORBIS__
++  PortStartup::Stage("Loading game options");
++#endif
+   x70_tweaks.RegisterTweaks();
+   AddWorldPaks();
+ 
+@@ -931,7 +950,13 @@ int CMain::RsMain(int argc, const char* const* argv) {
+     rstl::single_ptr< CGameArchitectureSupport > archSupport(
+         rs_new CGameArchitectureSupport(x0_osContext));
+     x164_archSupport = archSupport.get();
++#ifdef __ORBIS__
++    PortStartup::Stage("Preparing audio");
++#endif
+     archSupport->PreloadAudio();
++#ifdef __ORBIS__
++    PortStartup::Stage("Preparing main menu");
++#endif
+ 
+     srand(timer.GetElapsedMicros());
+ 
+@@ -944,6 +969,9 @@ int CMain::RsMain(int argc, const char* const* argv) {
+     }
+     // Port: there is no save region across launches; the settings file keeps the options.
+     PortDebug::RestoreGameOptions();
++#ifdef __ORBIS__
++    PortStartup::Stage("Game initialization complete");
++#endif
+ 
+     double dt = 1.0 / 60.0;
+     uint64_t nextFrameDeadline = SDL_GetTicksNS();
+@@ -970,7 +998,17 @@ int CMain::RsMain(int argc, const char* const* argv) {
  #endif
      try {
      while (!x160_24_finished) {
@@ -9488,7 +10415,7 @@ index a06bcb00..89b99c03 100644
        bool presented = false;
        PortWatchdog::Heartbeat(s_frameLog + 1);
        if ((s_frameLog++ % 60) == 0 && (frameLogAll || s_frameLog == 1)) {
-@@ -999,10 +1015,13 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -999,10 +1037,13 @@ int CMain::RsMain(int argc, const char* const* argv) {
              PortPointer::HandleEvent(event->sdl);
            }
            if (event->type == AURORA_EXIT) {
@@ -9503,7 +10430,7 @@ index a06bcb00..89b99c03 100644
              PortSaveState::ResumeQuitCleanly();
              x160_24_finished = true;
            } else if (event->type == AURORA_SDL_EVENT && event->sdl.type == SDL_EVENT_KEY_DOWN &&
-@@ -1049,6 +1068,9 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -1049,6 +1090,9 @@ int CMain::RsMain(int argc, const char* const* argv) {
          }
        }
        const uint64_t eventsDoneNs = SDL_GetTicksNS();
@@ -9513,7 +10440,7 @@ index a06bcb00..89b99c03 100644
        // SDL/compositor relative capture owns cursor visibility and warp handling.
  #ifdef MP_ENABLE_SMOKE_DRIVER
        if (PortSmokeMouseEnabled()) {
-@@ -1215,7 +1237,10 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -1215,7 +1259,10 @@ int CMain::RsMain(int argc, const char* const* argv) {
            idleMicros = idleTime * 1000000;
          else
            idleMicros = 0;
@@ -9525,7 +10452,7 @@ index a06bcb00..89b99c03 100644
  
          gpRender->EndScene();
          aurora::phase::set(aurora::phase::Main, "after EndScene");
-@@ -1301,7 +1326,9 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -1301,7 +1348,9 @@ int CMain::RsMain(int argc, const char* const* argv) {
        } else {
          nextFrameDeadline = SDL_GetTicksNS();
        }
@@ -9535,7 +10462,7 @@ index a06bcb00..89b99c03 100644
        PortMemoryLog::Tick(SDL_GetTicksNS());
        {
          // The whole iteration, pacing included: what a player sees as a frame.
-@@ -1338,7 +1365,12 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -1338,7 +1387,12 @@ int CMain::RsMain(int argc, const char* const* argv) {
          // would otherwise write one per frame.
          static uint64_t sLastStallLogNs = 0;
          static uint32_t sStallsUnlogged = 0;
@@ -9549,7 +10476,30 @@ index a06bcb00..89b99c03 100644
            if (sLastStallLogNs != 0 && workEndNs - sLastStallLogNs < 2000000000ull) {
              ++sStallsUnlogged;
            } else {
-@@ -1395,9 +1427,21 @@ int CMain::RsMain(int argc, const char* const* argv) {
+@@ -1365,8 +1419,12 @@ int CMain::RsMain(int argc, const char* const* argv) {
+           sSkipped = 0;
+         }
+       }
+-      if (firstFrameNs == 0 && presented)
++      if (firstFrameNs == 0 && presented) {
+         firstFrameNs = SDL_GetTicksNS();
++#ifdef __ORBIS__
++        PortStartup::Stage("First game frame queued");
++#endif
++      }
+     }
+     } catch (...) {
+       // Port: an exception out of the loop would unwind into ~CResLoader, which
+@@ -1378,7 +1436,7 @@ int CMain::RsMain(int argc, const char* const* argv) {
+   // this before; a run that never reached the loop has nothing to say.
+   if (firstFrameNs != 0) {
+     fprintf(stderr, "MP startup: first frame %llu ms after the main loop began, %u frames run\n",
+-            static_cast< unsigned long long >(firstFrameNs / 1000000ull), s_frameLog);
++            static_cast< unsigned long long >((firstFrameNs - loopBeganNs) / 1000000ull), s_frameLog);
+     // The whole loop's wall time, so a test run's speed (MP_TURBO or not) is a
+     // number rather than a guess from the log's timestamps.
+     fprintf(stderr, "MP run: %u frames in %.1f s\n", s_frameLog,
+@@ -1395,9 +1453,21 @@ int CMain::RsMain(int argc, const char* const* argv) {
    } else {
      fprintf(stderr, "MP audio: no driver; SDL opened no audio device\n");
    }

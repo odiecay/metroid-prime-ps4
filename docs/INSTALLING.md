@@ -1,8 +1,12 @@
-# Installing Project Prime on PS4
+# Playing Metroid Prime on PS4
 
-Download and unpack the **one release ZIP**. It includes the PS4 PKG in `PS4/`,
-the Windows helper in `GamePrep/`, controls and these instructions. You'll also
-need a homebrew-enabled PS4 and your own original GameCube Metroid Prime image.
+Setup has two parts: install the application, then put your game image where
+it can find it. After that, launch Metroid Prime from the PS4 home screen.
+
+The player download is **one ZIP**, with the PS4 PKG in `PS4/`, the Windows
+helper in `GamePrep/`, controls, licences and these instructions. Check the
+[README download section](../README.md#download) for availability. You'll need a
+homebrew-enabled PS4 and your own original GameCube Metroid Prime image.
 PS4 Slim has been tested; there isn't an established firmware or PS4 Pro list.
 
 ## 1. Get the ISO ready
@@ -52,7 +56,17 @@ The tested USA image is about 1.36 GiB. Leave additional room for the applicatio
 saves and caches. The first launch can take longer while shaders are prepared.
 The game reads the ISO directly; there is no texture-pack extraction step.
 
-## Controls and updates
+## Your first session
+
+The game uses PlayStation button prompts and DualShock 4 vibration. You can
+keep the original-style buttons with twin-stick aiming, or choose the Modern
+preset for trigger-based shooting. The [controls guide](CONTROLS.md) covers
+both layouts, scanning, beams and visors.
+
+Save at the game's save stations. Pausing or closing the application is not a
+substitute for saving your progress.
+
+## Controls, saves and updates
 
 - **Options:** pause.
 - **Hold touchpad click for about 0.8 seconds:** port graphics/controller settings.
@@ -64,6 +78,9 @@ Back up `user/` before changing builds. Keep that folder when updating or
 clearing a cache. Updates use the same application identity, `PRME00013`.
 FTP is only needed for copying files and collecting logs, not for playing.
 
+For a picture of how the game runs, see [Performance Benchmarks](PERFORMANCE.md).
+It targets 60 FPS, with demanding scenes falling below that target.
+
 ## Accepted game versions
 
 | GameCube disc | Reader accepts | PS4 gameplay testing |
@@ -73,5 +90,18 @@ FTP is only needed for copying files and collecting logs, not for playing.
 
 Disc number must be zero. Japanese, Wii/Trilogy and Switch images are not supported.
 This build does not use Switch keys or Remastered assets.
+
+## If setup does not work
+
+- **The game image is not found:** check the exact filename and path above.
+  Copy the ISO itself, and let the transfer finish before launching.
+- **GamePrep rejects the image:** read the displayed reason and check the
+  accepted versions. Renaming a compressed image does not convert it.
+- **An update changes how the controls feel:** check the selected preset and
+  remapping in the port settings. Keep your save folder while investigating.
+
+For a reproducible game issue, include the package version, room, action and
+whether it repeats. Relevant diagnostic logs help; do not attach your game
+image or save data to a public issue.
 
 Source and command-line tools: [GitHub](https://github.com/odiecay/metroid-prime-ps4).

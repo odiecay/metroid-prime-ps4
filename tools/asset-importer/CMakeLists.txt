@@ -56,3 +56,18 @@ set(MP_USE_MOLD OFF CACHE BOOL "" FORCE)
 set(MP_USE_CCACHE OFF CACHE BOOL "" FORCE)
 set(MP_BUNDLED_DEPS ON CACHE BOOL "" FORCE)
 add_subdirectory("${PRIME_ROOT}/game/MetroidPrimePort" importer)
+
+# Original menu preparation only; reuse the upstream JPEG/THP writer and the
+# same bounded portable decoder used by the native game. No runtime changes.
+add_executable(prime_menu_movie
+  "${PRIME_ROOT}/tools/prepare_menu_movie.cpp"
+  "${PRIME_ROOT}/game/MetroidPrimePort/platform/port_remastered_movie.cpp"
+  "${PRIME_ROOT}/game/MetroidPrimePort/extern/aurora/lib/dolphin/thp/THPDec.cpp")
+target_include_directories(prime_menu_movie PRIVATE
+  "${PRIME_ROOT}/game/MetroidPrimePort/platform/include"
+  "${PRIME_ROOT}/game/MetroidPrimePort/extern/aurora/include")
+target_compile_definitions(prime_menu_movie PRIVATE TARGET_PC)
+target_link_libraries(prime_menu_movie PRIVATE fmt::fmt)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+  target_compile_options(prime_menu_movie PRIVATE -O2 -msse4.2 -mpopcnt -mcx16 -mtune=btver2 -mno-avx)
+endif()

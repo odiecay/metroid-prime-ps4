@@ -1,4 +1,14 @@
-# Building
+# Building the native PS4 port
+
+This guide builds the application from the pinned engine and PS4 integration.
+If you just want to play, use [the installation guide](INSTALLING.md); the
+player ZIP includes the ready-to-run Windows GamePrep helper.
+
+The [technical guide](TECHNICAL.md) explains why the graphics driver, runtime
+and platform layer must be built as a matched stack. The
+[source guide](SOURCE.md) identifies the upstream projects and exported patches.
+
+## Build environment
 
 Cross-compilation currently uses a Linux x86-64 host, Python 3.12+, LLVM/Clang
 19.1.7, Ninja, CMake 3.31.10 and the matched native Orbis SDK/Mesa bundle.
@@ -11,6 +21,8 @@ SDK headers, generated headers and clean Mesa Git blobs. Before applying the
 PS4 CPU instruction flags, `tools/build_radv_command_overlay.py` must reproduce
 the original SDK object's code, relocations and symbols. It writes a private
 object and leaves the SDK archive unchanged. `tools/build_game.py` invokes it.
+
+## Compile the game
 
 ```sh
 python3 -m venv .tools
@@ -28,11 +40,18 @@ The target is native Orbis. The FreeBSD compiler triple does not add a desktop
 userspace. Keep the pinned runtime, ABI overlays, linker script and platform
 patches together. The shared SDK remains read-only.
 
+## Package and verify
+
 Use `python3 tools/package.py --help` for the versioned packaging inputs. The
 packager verifies native ELF mappings, constructs the PKG and independently
 extracts its executable and metadata. Packaging never installs or launches it.
 
-## Tests and PC tools
+Private package artwork is an explicit `--private-artwork` input and remains
+outside Git. The supplied ISO is runtime data and does not belong in a package.
+Keep the package receipt and frozen source inputs together so a later hardware
+capture can be tied to the executable that was actually tested.
+
+## Host checks and the PC helper
 
 ```sh
 python3 -m unittest discover -s tests -p 'test_*.py' -v
@@ -53,12 +72,25 @@ Its compiler inputs and downloads are pinned in
 `tools/game_prep_build_inputs.json`. Player downloads contain the resulting EXE;
 players do not install Python. [INSTALLING.md](INSTALLING.md) covers setup.
 
+## Understanding a profiling capture
+
+Start with [the benchmark methodology](PERFORMANCE.md#method-and-evidence).
+Match the capture's session and package, distinguish frame throughput from
+display refresh, and keep loading and failed routes separate from gameplay
+measurements.
+
 Detailed Vulkan call timing is off by default. For a profiling session,
 `/data/project-prime/release/benchmark-v2.cfg` can contain
 `dawn_call_profile=1`; use `0` or remove the file to disable it. The normal
 five-second frame summaries remain available without this extra sampling.
 
-The optional developer room tour uses `benchmark-tour.cfg` in
+### Optional scripted workloads
+
+These are opt-in developer workloads; leave their request files absent for
+ordinary play. Each uses isolated state and assisted inventory, and none is a
+complete playthrough or a replacement for physical-controller testing.
+
+The stationary room tour uses `benchmark-tour.cfg` in
 `/data/project-prime/release/`, containing exactly
 `PROJECT_PRIME_BENCHMARK_TOUR_V1` followed by a newline. It copies existing
 settings into `benchmarks/tour-v1/`, with separate user data, caches and logs.

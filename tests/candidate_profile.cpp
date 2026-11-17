@@ -60,6 +60,25 @@ int main(int argc,char** argv) {
         assert(badConfig && std::string(getenv("MP_PS4_PRESENT_PREWAIT"))=="1");
     }
     fs::remove(p.root/"benchmark-v3.cfg");
+    for(const char* valid:{"gx_small_copy=0\n","gx_small_copy=1\n"}) {
+        write(p.root/"benchmark-v4.cfg",valid);apply_candidate_environment(p);
+        assert(std::string(getenv("MP_GX_SMALL_COPY"))==std::string(valid).substr(14,1));
+        assert(std::string(getenv("MP_PS4_PRESENT_PREWAIT"))=="1");
+    }
+    for(const char* bad:{"gx_small_copy=2\n","gx_small_copy=1\ngx_small_copy=0\n",
+                        "dawn_call_profile=1\n","\n",""}) {
+        write(p.root/"benchmark-v4.cfg",bad);
+        bool badConfig=false;try{apply_candidate_environment(p);}catch(...){badConfig=true;}
+        assert(badConfig && std::string(getenv("MP_GX_SMALL_COPY"))=="1");
+    }
+    std::ofstream(p.root/"benchmark-v4.cfg")<<std::string(129,'x');
+    bool invalidCopyConfig=false;try{apply_candidate_environment(p);}catch(...){invalidCopyConfig=true;}
+    assert(invalidCopyConfig);
+    fs::remove(p.root/"benchmark-v4.cfg");
+    fs::create_symlink(p.root/"benchmark.cfg",p.root/"benchmark-v4.cfg");
+    invalidCopyConfig=false;try{apply_candidate_environment(p);}catch(...){invalidCopyConfig=true;}
+    assert(invalidCopyConfig);
+    fs::remove(p.root/"benchmark-v4.cfg");
     write(desc,"PROJECT_PRIME_PROFILE_V1\n../../user\n");
     bool rejected=false;try { read_candidate_profile(desc,root); } catch(...) { rejected=true; }assert(rejected);
     write(desc,"PROJECT_PRIME_PROFILE_V1\nremastered-lite-v0023\n");

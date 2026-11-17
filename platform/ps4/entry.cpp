@@ -168,10 +168,10 @@ static int run_game(int argc,char **argv) {
     // build each room's pipelines on demand and retire long-idle room state.
     setenv("MP_PIPELINE_LAZY","1",0);
     setenv("MP_PIPELINE_EVICT","3600",0);
-    // Sample 1/64 GX draws to expose the real decoder costs, including native
-    // device/pipeline/bind-group work. No clocks on unsampled draws; aggregates
-    // are emitted after the existing decoder drain. Set 0 for an overhead A/B.
-    setenv("MP_GX_DRAW_PREP_PROFILE","1",0);
+    // Detailed per-draw sampling belongs to automated profiling runs. Normal
+    // play retains frame/GPU diagnostics without these extra draw-stage clocks.
+    // An explicit environment override still wins in either mode.
+    setenv("MP_GX_DRAW_PREP_PROFILE",benchmarkTour?"1":"0",0);
     // The 991 MiB usable default is exhausted by measured real game resources.
     // Reserve 2 GiB from the console's reported 4.5 GiB direct-memory pool;
     // retain the driver's coherent arena and normal allocation/fence semantics.

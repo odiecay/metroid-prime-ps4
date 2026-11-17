@@ -3,6 +3,27 @@ import subprocess
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 class TraceTests(unittest.TestCase):
+    def test_actual_aram_preload_readiness_covers_initial_lock_and_retires_once(self):
+        source=(ROOT/'game/MetroidPrimePort/src/Kyoto/DolphinCDvdFile.cpp').read_text()
+        def body(signature):
+            start=source.index(signature);end=source.index('{',start)+1;depth=1
+            while depth:
+                depth+=(source[end]=='{')-(source[end]=='}');end+=1
+            return source[start:end]
+        out=ROOT/'build/frame-trace-tests/aram-preload';out.mkdir(parents=True,exist_ok=True)
+        (out/'actual_aram_mutex.inc').write_text(body('std::recursive_mutex& AramFileStateMutex()'))
+        (out/'actual_aram_ready.inc').write_text(body('bool CDvdFile::IsARAMFileLoaded()').replace(
+            'CDvdFile::IsARAMFileLoaded()', 'CDvdFile::ActualIsARAMFileLoaded()',1))
+        (out/'actual_aram_stall.inc').write_text(body('void CDvdFile::StallForARAMFile()'))
+        binary=out/'run'
+        subprocess.run(['g++-14','-std=c++20','-O1','-g','-pthread','-D__ORBIS__',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'game/MetroidPrimePort/extern/aurora/include'),'-I'+str(out),
+            str(ROOT/'tests/aram_preload_trace.cpp'),'-o',str(binary)],check=True)
+        for _ in range(5):
+            result=subprocess.run([binary],capture_output=True,text=True,timeout=30)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_zero_tls_registration_and_concurrent_retired_reuse(self):
         out=ROOT/'build/frame-trace-tests';out.mkdir(exist_ok=True)
         binary=out/'tls-registration'

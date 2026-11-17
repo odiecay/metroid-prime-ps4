@@ -160,6 +160,19 @@ void apply_candidate_environment(const CandidateProfile& p) {
         if(setenv("MP_PS4_PRESENT_PREWAIT",row.back()=='1'?"1":"0",1))
             throw std::runtime_error("Could not apply native presentation diagnostic option");
     }
+    // Independent restart-only geometry-copy A/B switch. Older builds ignore
+    // this file; the existing versioned configuration parsers stay strict.
+    const auto copies=p.root/"benchmark-v4.cfg";
+    if(fs::exists(copies)) {
+        if(fs::is_symlink(copies) || !fs::is_regular_file(copies) || fs::file_size(copies)>128)
+            throw std::runtime_error("Invalid geometry-copy diagnostic configuration");
+        std::ifstream config(copies);std::string row,extra;
+        if(!std::getline(config,row) || std::getline(config,extra) || config.bad() ||
+           (row!="gx_small_copy=0" && row!="gx_small_copy=1"))
+            throw std::runtime_error("Geometry-copy diagnostic accepts gx_small_copy=0 or 1 only");
+        if(setenv("MP_GX_SMALL_COPY",row.back()=='1'?"1":"0",1))
+            throw std::runtime_error("Could not apply geometry-copy diagnostic option");
+    }
     setenv("MP_PS4_CANDIDATE",p.key.c_str(),1);
     setenv("MP_PS4_LOG_ROOT",(p.root/"logs").c_str(),1);
     const auto log=p.root/"logs/frame-profile.jsonl";

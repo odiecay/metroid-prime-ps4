@@ -6,15 +6,26 @@ external/
 game/MetroidPrimePort/
 __pycache__/
 
-# Game data and generated console payloads
 *.iso
+
 *.gcm
+
 *.rvz
+
 *.nsp
+
 *.xci
+
 *.pkg
+
 *.prx
+
 *.sprx
+
 prod.keys
+
 title.keys
+
 *.key
+
+*.thp

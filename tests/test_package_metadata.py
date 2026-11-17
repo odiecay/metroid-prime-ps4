@@ -3,7 +3,12 @@ import importlib.util
 from pathlib import Path
 import struct
 import sys
+import contextlib
+import io
+import json
+import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -19,6 +24,28 @@ def fixture():
                      struct.pack('<HHIII', 9, 0x204, 6, 6, 10) + keys + value)
 
 class PackageMetadataTests(unittest.TestCase):
+    def test_game_artwork_must_be_selected_before_build_inputs_are_touched(self):
+        args = ['package.py', '--kind', 'game', '--elf', 'unused.elf', '--oelf', 'unused.oelf',
+                '--eboot', 'unused.bin', '--version', '00.56', '--out', 'unused-output']
+        class ReachedInputValidation(Exception):
+            pass
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root/'upstream.lock.json').write_text(json.dumps({}))
+            with patch.object(package, 'ROOT', root), patch.object(package, 'startup_modules',
+                    side_effect=ReachedInputValidation) as inputs:
+                with patch.object(sys, 'argv', args), contextlib.redirect_stderr(io.StringIO()) as error:
+                    with self.assertRaises(SystemExit) as stopped:
+                        package.main()
+                self.assertEqual(stopped.exception.code, 2)
+                self.assertIn('artwork must not be silently omitted', error.getvalue())
+                inputs.assert_not_called()
+                for selection in (['--private-artwork', 'chosen-art'], ['--no-artwork'], ['--verify-existing']):
+                    with self.subTest(selection=selection), patch.object(sys, 'argv', args + selection):
+                        with self.assertRaises(ReachedInputValidation):
+                            package.main()
+                self.assertFalse((root/'unused-output').exists())
+
     def test_valid_utf8_fields(self):
         self.assertEqual(package.sfo_values(fixture()), {'TITLE_ID': 'PRME00001', 'APP_VER': '00.03'})
 

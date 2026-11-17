@@ -1,8 +1,40 @@
-# Source
+# Finding your way around the source
 
-This repository contains the PS4 backend, build tools, tests and integration
-patches. The engine and dependencies are fetched by `tools/bootstrap.py` at the
-commits in `upstream.lock.json`; their complete source trees are not duplicated.
+Project Prime brings an existing native Metroid Prime port to PS4. This
+repository holds the platform backend, build tools, tests and integration
+patches that make that adaptation reproducible. The original game and Aurora
+engine remain part of the build.
+
+For an explanation of the running game, start with [How it works](TECHNICAL.md).
+For commands, see [Building](BUILDING.md). The engine and dependencies are
+fetched by `tools/bootstrap.py` at the revisions in
+[`upstream.lock.json`](../upstream.lock.json); their complete trees are not
+duplicated here.
+
+## Upstream foundation
+
+**PrimeDecomp** supplied the original game decompilation. **Odrannnn and the
+MetroidPrimePort contributors** built the native-port foundation used here.
+The upstream README separately credits Aurora, MusyX, nod and the many other
+projects behind that work. Those acknowledgements and licence boundaries are
+preserved in [the upstream notices](../LICENSES/port-notice.txt).
+
+The canonical project identities are
+[PrimeDecomp/prime](https://github.com/PrimeDecomp/prime) and
+[Odrannnn/MetroidPrimePort](https://github.com/Odrannnn/MetroidPrimePort).
+Those repository URLs were unavailable when checked for this documentation.
+The pinned native-port revision
+`c872da704adde9a7838492aaa56dac73a32053e4` is available through the
+[preserved public fork](https://github.com/timehikari/metroidprimeport).
+Using that source location does not change the original authorship.
+
+Aurora provides the source-level GX and platform layer. Dawn implements WebGPU,
+including shader translation and the Vulkan backend. Mesa RADV and the
+orbis-ports adaptation supply the native Vulkan driver. Project Prime's patches
+connect and adapt these components to the PS4 game; they are not claims of
+authorship over the upstream projects.
+
+## Repository map
 
 | Path | Contents |
 |---|---|
@@ -12,19 +44,32 @@ commits in `upstream.lock.json`; their complete source trees are not duplicated.
 | `patches/` | Changes to the pinned game, Aurora, Dawn and Mesa sources |
 | `tools/` | Build, data preparation, packaging and profiling tools |
 | `tests/` | Renderer, runtime, storage and ownership regressions |
+| `docs/` | Player setup, controls, architecture, measurements and build guidance |
+| `LICENSES/` | Preserved upstream licences and acknowledgements |
 
-Aurora translates the game's GX rendering into Dawn/WebGPU. Dawn uses native
-Orbis RADV and PS4 video output. SDL connects native input/audio services to the
-upstream engine, with MusyX providing the original audio mixer.
+Platform changes belong in `platform/ps4/` and `renderer/orbis/` where possible.
+Changes that must reach the game, Aurora or another upstream component are
+recorded as patches against the pinned revision. Bootstrap verification checks
+that the reconstructed source still matches those inputs.
 
-Current source matches the frozen package `00.54` (RC11) inputs, with portable
+## Which build this source describes
+
+Current source matches the frozen package `00.55` (RC1) inputs, with portable
 build-path adaptations recorded separately. The `v0.1.0-rc1` tag preserves the
 previous `00.44` source. The game source is pinned to `c872da704adde9a7838492aaa56dac73a32053e4`.
 [SOURCE-RECEIPT.json](../SOURCE-RECEIPT.json) identifies the frozen game-package
-inputs and separately records PC helper, documentation and portable build-path
-adaptations. Those tooling changes do not alter the packaged executable.
+inputs and separately records PC helper and portable build-path adaptations.
+The documentation may explain earlier hardware captures or be revised after
+the package was frozen. The receipt identifies the executable's frozen inputs;
+later prose revisions do not change that runtime identity.
 
-See [BUILDING.md](BUILDING.md) for build requirements and commands. Game images,
-keys, saves, SDK binaries and generated console packages are excluded from Git.
+The latest complete six-room hardware comparison documented here is v54 RC11.
+v55 has a different package identity. See [Performance Benchmarks](PERFORMANCE.md)
+for the exact relationship between source, package and measured results.
+
+## Licences and private inputs
+
+Game images, keys, saves, SDK binaries and generated console packages are
+excluded from Git.
 Per-file licences and notices are retained in [NOTICE.md](../NOTICE.md) and
 `LICENSES/`; there is no blanket licence over all upstream components.

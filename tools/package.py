@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from verify_elf import verify
 from package_assets import add_asset_tree, archive_sources
 from verify_graphics_profile import verify as verify_private_assets
+from package_menu_movies import verify_menu_movies
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,12 +92,19 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--verify-existing',action='store_true',help='Verify a previously assembled output; do not rebuild it')
     parser.add_argument('--extractor',type=Path,help='Pinned project-owned extractor for large unsigned PFS catalogs')
-    parser.add_argument('--private-artwork', type=Path)
+    artwork_input = parser.add_mutually_exclusive_group()
+    artwork_input.add_argument('--private-artwork', type=Path)
+    artwork_input.add_argument('--no-artwork', action='store_true',
+                               help='Explicitly assemble without application icon/background artwork')
+    parser.add_argument('--private-menu-movies', type=Path,
+                        help='Include validated, locally converted front-end movies directly in the PKG')
     asset_inputs = parser.add_mutually_exclusive_group()
     asset_inputs.add_argument('--private-assets', type=Path)
     asset_inputs.add_argument('--private-assets-dir', type=Path)
     parser.add_argument('--candidate-profile', choices=['performance-v0021','original-hd-v0022','remastered-lite-v0023','remastered-enhanced-v0024','consolidated','consolidated-original-hd'])
     args = parser.parse_args()
+    if args.kind == 'game' and not args.verify_existing and not (args.private_artwork or args.no_artwork):
+        parser.error('Select --private-artwork PATH or explicitly use --no-artwork; game artwork must not be silently omitted')
     modules=startup_modules(json.loads((ROOT/'upstream.lock.json').read_text()))
     if not re.fullmatch(r'\d{2}\.\d{2}', args.version):
         parser.error('--version must use NN.NN')
@@ -137,6 +145,13 @@ def main():
         if args.kind!='game' or (not consolidated and args.version!=version) or (consolidated and tuple(map(int,args.version.split('.')))<(0,25)):
             parser.error('Candidate profile requires its matching game package version '+version)
     private_assets=None
+    menu_files, menu_receipt = {}, None
+    if args.private_menu_movies:
+        folder = args.private_menu_movies.resolve()
+        if args.kind != 'game' or args.candidate_profile != 'consolidated-original-hd' or \
+           not folder.is_relative_to(ROOT/'private'):
+            parser.error('Bundled menu movies require the Original HD game profile and private input folder')
+        menu_files, menu_receipt = verify_menu_movies(folder)
     if args.private_assets:
         private_assets=args.private_assets.resolve()
         if args.candidate_profile!='consolidated' or not private_assets.is_relative_to(ROOT/'private'):
@@ -219,6 +234,8 @@ def main():
         command += ['--extra', str(artwork['pic1.png']) + ':sce_sys/pic1.png']
     for name,path in sorted(modules.items()):
         command += ['--extra', str(path)+':sce_module/'+name]
+    for name,path in sorted(menu_files.items()):
+        command += ['--extra', str(path)+':'+name]
     if descriptor:
         command += ['--extra',str(descriptor)+':prime-profile.txt']
     if private_assets:
@@ -296,6 +313,10 @@ def main():
         allowed.add(name)
         if sha(extracted/name) != sha(original):
             raise RuntimeError('Extracted installed asset differs from verified input: '+name)
+    for name, original in menu_files.items():
+        allowed.add(name)
+        if sha(extracted/name) != sha(original):
+            raise RuntimeError('Extracted menu movie differs from validated input: '+name)
     files = {str(p.relative_to(extracted)): sha(p) for p in extracted.rglob('*') if p.is_file()}
     if files.keys() - allowed:
         raise RuntimeError('Unexpected files in package: ' + str(files.keys() - allowed))
@@ -329,9 +350,10 @@ def main():
         'packaging_inputs': {str(p): sha(p) for p in [helper, pkgtool, sdk / 'bin/linux/create-gp4', ROOT/'tools/package_assets.py']},
         'extraction_inputs':extractor_inputs,
         'private_artwork_included': bool(artwork), 'private_artwork_provenance': provenance,
-        'commercial_game_data_included': bool(private_assets or private_dir),
-        'private_testing_only': bool(private_assets or private_dir or provenance),
-        'asset_install_layout': 'direct_app0_files' if private_dir else 'first_launch_bundle' if private_assets else 'external',
+        'commercial_game_data_included': bool(private_assets or private_dir or menu_files),
+        'private_testing_only': bool(private_assets or private_dir or provenance or menu_files),
+        'bundled_menu_movies': menu_receipt,
+        'asset_install_layout': 'direct_app0_menu_movies' if menu_files else 'direct_app0_files' if private_dir else 'first_launch_bundle' if private_assets else 'external',
         'installed_asset_profile': private_manifest,
         'remastered_bundle_sha256': sha(private_assets) if private_assets else None,
     }

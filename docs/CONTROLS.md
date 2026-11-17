@@ -1,10 +1,12 @@
 # PS4 controls
 
+Pick the layout that feels right: original-style face buttons with twin-stick
+aim, or the Modern preset with trigger-based shooting. Both use PlayStation
+prompts and DualShock 4 vibration, and both can be remapped in the port settings.
+
 **Options** pauses the game. **Hold the touchpad button for about 0.8 seconds**
 to open or close the port's settings. Share and the PS button keep their PS4
 system functions.
-
-![DualShock 4 quick guide](images/ps4-controls.svg)
 
 ## Original-style buttons with twin-stick aim
 
@@ -72,3 +74,6 @@ setting.
 The game has DualShock 4 vibration. Disconnecting and reconnecting the controller
 doesn't require a keyboard. Save your progress at a save station before ending
 a session.
+
+For installation and updates, see [Getting started](INSTALLING.md). For the
+native input path behind these controls, see [How it works](TECHNICAL.md#making-it-feel-like-a-ps4-game).

@@ -9,6 +9,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from build_release_bundle import build_bundle
+from package_menu_movies import TARGETS
 
 
 def digest(data):
@@ -70,6 +71,7 @@ class ReleaseBundleTests(unittest.TestCase):
             prefix = "Project-Prime-PS4-00.39/"
             self.assertEqual(archive.read(prefix + "PS4/Metroid-Prime-PS4-00.39.pkg"), self.bits)
             self.assertEqual(archive.read(prefix + "GamePrep/GamePrep.exe"), b"MZfixture")
+            self.assertFalse(any(name.endswith("ps4-controls.svg") for name in archive.namelist()))
             self.assertFalse(any(name.endswith(".zip") or "JOURNAL" in name or "receipt" in name
                                  for name in archive.namelist()))
             self.assertNotIn(b"private_artwork", archive.read(prefix + "manifest.json"))
@@ -84,6 +86,38 @@ class ReleaseBundleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.build()
         self.assertFalse(self.output.exists())
+
+    def test_public_one_point_zero_names_keep_native_version(self):
+        self.receipt["metadata"]["APP_VER"] = "01.00"
+        self.write_receipt()
+        result = self.build("01.00")
+        self.assertEqual(result["version"], "01.00")
+        with zipfile.ZipFile(self.output) as archive:
+            prefix = "Metroid-Prime-PS4-1.0/"
+            name = prefix + "PS4/Metroid-Prime-PS4-1.0.pkg"
+            self.assertEqual(archive.read(name), self.bits)
+            self.assertIn(b"Metroid Prime PS4 1.0", archive.read(prefix + "README.txt"))
+
+    def test_only_verified_installed_menu_movies_are_accepted(self):
+        self.receipt.update(commercial_game_data_included=True,
+                            asset_install_layout="direct_app0_menu_movies",
+                            bundled_menu_movies={"scale": 1.5, "width": 960, "height": 720,
+                                                 "files": {name: "a"*64 for name in TARGETS}},
+                            extracted_files={name: "a"*64 for name in TARGETS})
+        self.write_receipt()
+        result = self.build()
+        self.assertTrue(result["game_data_included"])
+
+    def test_incomplete_or_other_game_payload_is_rejected(self):
+        self.receipt["commercial_game_data_included"] = True
+        self.write_receipt()
+        with self.assertRaises(ValueError): self.build()
+        self.receipt.update(asset_install_layout="direct_app0_menu_movies",
+                            bundled_menu_movies={"scale": 1.5, "width": 960, "height": 720,
+                                                 "files": {name: "a"*64 for name in TARGETS}},
+                            extracted_files={name: "b"*64 for name in TARGETS})
+        self.write_receipt()
+        with self.assertRaises(ValueError): self.build()
 
     def test_helper_traversal_or_unlisted_file_is_rejected(self):
         for path in ("ProjectPrime-GamePrep/../../escape", "ProjectPrime-GamePrep/extra.iso"):

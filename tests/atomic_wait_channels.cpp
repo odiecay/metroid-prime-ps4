@@ -8,6 +8,7 @@
 #include <thread>
 
 struct alignas(512) Cell { std::atomic<int> value{}; };
+struct alignas(512) Cell64 { std::atomic<int64_t> value{}; };
 
 int main() {
     Cell cells[2];
@@ -58,5 +59,32 @@ int main() {
     };
     std::thread first(loop,0),second(loop,1);first.join();second.join();
     assert(visits==8000);
+    Cell64 wide[2];
+    assert(&prime::runtime::atomic_wait_bucket(&wide[0].value)==
+           &prime::runtime::atomic_wait_bucket(&wide[1].value));
+    // Hold the real channel lock inside its equality predicate while the
+    // producer changes only upper/sign bits, then let wait atomically register.
+    // Notify must use this same address/channel and cannot slip into a gap.
+    for (int64_t next:{int64_t(1)<<32,INT64_MIN,INT64_MAX}) {
+        wide[0].value=0;
+        std::atomic<bool> inside{},release{},first{true},done{},notifyStarted{};
+        std::thread waiter([&] {
+            prime::runtime::atomic_wait(&wide[0].value,[&] {
+                const bool equal=wide[0].value.load(std::memory_order_acquire)==0;
+                if (first.exchange(false)) {
+                    inside.store(true,std::memory_order_release);
+                    while (!release.load(std::memory_order_acquire)) std::this_thread::yield();
+                }
+                return equal;
+            });
+            done=true;
+        });
+        while (!inside.load(std::memory_order_acquire)) std::this_thread::yield();
+        wide[0].value.store(next,std::memory_order_release);
+        std::thread notifier([&] {notifyStarted=true;prime::runtime::atomic_notify(&wide[0].value);});
+        while (!notifyStarted.load()) std::this_thread::yield();
+        assert(!done.load());release=true;notifier.join();waiter.join();assert(done.load());
+    }
+    puts("Signed64 native channels: upper32/sign bits and3 locked-registration races passed");
     puts("Wait channels: early notify, colliding addresses and 8000 handoffs passed");
 }

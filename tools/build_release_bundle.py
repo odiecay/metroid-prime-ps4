@@ -13,6 +13,7 @@ import shutil
 import stat
 import tempfile
 import zipfile
+from package_menu_movies import TARGETS
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_URL = "https://github.com/odiecay/metroid-prime-ps4"
@@ -21,6 +22,11 @@ SOURCE_URL = "https://github.com/odiecay/metroid-prime-ps4"
 def sha(path):
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def player_version(version):
+    major, minor = map(int, version.split("."))
+    return f"{major}.{minor}" if major else version
 
 
 def safe_name(name):
@@ -37,11 +43,19 @@ def verified_package(folder, version):
     if not receipt_path.is_file():
         receipt_path = folder / "build-receipt.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    menu = receipt.get("bundled_menu_movies")
+    menu_only = bool(menu and receipt.get("asset_install_layout") == "direct_app0_menu_movies" and
+                     not receipt.get("installed_asset_profile") and not receipt.get("remastered_bundle_sha256") and
+                     menu.get("scale") == 1.5 and (menu.get("width"), menu.get("height")) == (960, 720) and
+                     set(menu.get("files", {})) == TARGETS and all(
+                         receipt.get("extracted_files", {}).get(name) == digest
+                         for name, digest in menu["files"].items()))
     if receipt.get("stage") != "packaged_and_host_verified" or \
        receipt.get("metadata", {}).get("APP_VER") != version or \
        receipt["metadata"].get("TITLE_ID") != "PRME00013" or \
-       receipt.get("commercial_game_data_included") is not False:
-        raise ValueError("Expected a verified, matching game package without game data")
+       not (receipt.get("commercial_game_data_included") is False or
+            receipt.get("commercial_game_data_included") is True and menu_only):
+        raise ValueError("Expected a verified matching game package with only its validated menu payload")
     original = safe_name(receipt["package"])
     candidates = [folder / str(original)]
     candidates += sorted(folder.glob("*.pkg"))
@@ -105,14 +119,16 @@ def build_bundle(version, package_dir, helper_zip, output, docs_root=ROOT):
         raise ValueError("Existing output retained; choose a fresh destination")
     package, receipt = verified_package(Path(package_dir), version)
     output.parent.mkdir(parents=True, exist_ok=True)
+    display_version = player_version(version)
     with tempfile.TemporaryDirectory(prefix=".prime-download-", dir=output.parent) as temporary:
-        staging = Path(temporary) / ("Project-Prime-PS4-" + version)
+        prefix = "Metroid-Prime-PS4-" if int(version.split(".")[0]) else "Project-Prime-PS4-"
+        staging = Path(temporary) / (prefix + display_version)
         (staging / "PS4").mkdir(parents=True)
-        package_name = "Metroid-Prime-PS4-" + version + ".pkg"
+        package_name = "Metroid-Prime-PS4-" + display_version + ".pkg"
         shutil.copyfile(package, staging / "PS4" / package_name)
         helper, helper_receipt = unpack_helper(Path(helper_zip), staging / "GamePrep")
         # Deliberately exclude source archives, build logs, receipts and local artwork.
-        for name in ("docs/CONTROLS.md", "docs/images/ps4-controls.svg"):
+        for name in ("docs/CONTROLS.md",):
             target = staging / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(Path(docs_root) / name, target)
@@ -129,7 +145,11 @@ def build_bundle(version, package_dir, helper_zip, output, docs_root=ROOT):
                 target = staging / "licenses" / path.relative_to(licenses)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(data)
-        setup = (f"Project Prime for PS4 - build {version}\n\n"
+        movie_note = ("The upscaled menu movies are installed with the PKG; no conversion\n"
+                      "or extra movie files are needed. If you previously disabled mods,\n"
+                      "enable Load mods in the port settings and restart.\n\n"
+                      if receipt.get("bundled_menu_movies") else "")
+        setup = (f"Metroid Prime PS4 {display_version}\n\n"
                  f"1. Install PS4/{package_name} using your homebrew package installer.\n"
                  "2. On Windows, open GamePrep/GamePrep.exe and choose your own original\n"
                  "   GameCube Metroid Prime RVZ, ISO, GCM or ZIP. You can also drag the\n"
@@ -137,8 +157,9 @@ def build_bundle(version, package_dir, helper_zip, output, docs_root=ROOT):
                  "3. After verification, copy MetroidPrime.iso from the new ProjectPrimeData\n"
                  "   folder next to your input to this exact path on the PS4 using FTP:\n"
                  "   /data/project-prime/data/MetroidPrime.iso\n"
-                 "   A raw ISO/GCM can also be named MetroidPrime.iso and copied directly.\n"
                  "4. Launch the game from the PS4 home screen. FTP can be disconnected.\n\n"
+                 "A raw ISO/GCM can also be named MetroidPrime.iso and copied directly.\n"
+                 + movie_note +
                  "Use a homebrew-enabled PS4. USA GameCube revisions 0/1/2 and PAL\n"
                  "revision 0 are accepted; USA revision 0 has PS4 Slim gameplay testing.\n"
                  "Wii Trilogy and Switch images are unsupported. Renaming RVZ to ISO\n"
@@ -146,10 +167,10 @@ def build_bundle(version, package_dir, helper_zip, output, docs_root=ROOT):
                  "Options pauses. Hold the touchpad click for about 0.8 seconds for port\n"
                  "settings. See docs/CONTROLS.md for layouts. Save at save stations.\n"
                  "Keep /data/project-prime/release/user/ when updating; it contains saves\n"
-                 "and settings. No game image, keys or save files are in this download.\n\n"
+                 "and settings. No game image, keys or saves are bundled.\n\n"
                  f"Source and updates: {SOURCE_URL}\n")
         (staging / "README.txt").write_text(
-            f"Project Prime for PS4 - build {version}\n\n"
+            f"Metroid Prime PS4 {display_version}\n\n"
             "This download contains the PS4 application and Windows GamePrep helper.\n"
             "Start with INSTALLING.txt. Supply your own original GameCube game image.\n"
             f"Source and updates: {SOURCE_URL}\n", encoding="utf-8")
@@ -157,15 +178,14 @@ def build_bundle(version, package_dir, helper_zip, output, docs_root=ROOT):
         (staging / "NOTICE.txt").write_text(
             "Project Prime is an unofficial native PS4 port. Original game and component\n"
             "notices remain applicable. Game data must be supplied separately.\n"
-            "Component notices: licenses/ and GamePrep/licenses/. The original\n"
-            "controller diagram in docs/images/ps4-controls.svg is CC0-1.0.\n"
+            "Component notices: licenses/ and GamePrep/licenses/.\n"
             f"Integration source: {SOURCE_URL}\n", encoding="utf-8")
         files = {str(p.relative_to(staging)): {"bytes": p.stat().st_size, "sha256": sha(p)}
                  for p in sorted(staging.rglob("*")) if p.is_file()}
         manifest = {"format_version": 1, "version": version, "package": "PS4/" + package_name,
                     "package_sha256": receipt["package_sha256"], "game_prep_version": helper["version"],
                     "game_prep_input_sha256": helper_receipt["sha256"], "source": SOURCE_URL,
-                    "game_data_included": False, "files": files}
+                    "game_data_included": receipt.get("commercial_game_data_included", False), "files": files}
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         checksums = {**{name: row["sha256"] for name, row in files.items()},
                      "manifest.json": sha(staging / "manifest.json")}
@@ -187,7 +207,8 @@ def build_bundle(version, package_dir, helper_zip, output, docs_root=ROOT):
     result = {"format_version": 1, "file": output.name, "bytes": output.stat().st_size,
               "sha256": sha(output), "version": version, "package_sha256": receipt["package_sha256"],
               "game_prep_input_sha256": helper_receipt["sha256"], "zip_readback_verified": True,
-              "installed": False, "launched": False, "game_data_included": False}
+              "installed": False, "launched": False,
+              "game_data_included": receipt.get("commercial_game_data_included", False)}
     with output.with_suffix(".json").open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(result, indent=2) + "\n")
     return result

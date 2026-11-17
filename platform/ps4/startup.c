@@ -13,12 +13,13 @@ extern initializer __init_array_start[], __init_array_end[];
 extern unsigned char __text_start[];
 extern void _init(void);
 
-static void raw_line(const char *text, int truncate) {
+static void raw_line(const char *text, int truncate, int existing_fd) {
     size_t length=0;
     while(text[length]) ++length;
     sceKernelDebugOutText(0,text);
-    int fd=sceKernelOpen("/data/project-prime/logs/startup.log",
-                         O_WRONLY|O_CREAT|(truncate?O_TRUNC:O_APPEND),0666);
+    int fd=existing_fd;
+    if(fd<0) fd=sceKernelOpen("/data/project-prime/logs/startup.log",
+                              O_WRONLY|O_CREAT|(truncate?O_TRUNC:O_APPEND),0666);
     if(fd<0) return;
     size_t done=0;
     while(done<length) {
@@ -26,17 +27,23 @@ static void raw_line(const char *text, int truncate) {
         if(n==0 || n>length-done) break;
         done+=n;
     }
-    sceKernelClose(fd);
+    if(existing_fd<0) sceKernelClose(fd);
 }
 
-void prime_ps4_startup_stage(const char *stage) { raw_line(stage,0); }
+void prime_ps4_startup_stage(const char *stage) { raw_line(stage,0,-1); }
 
 void __libc_start_init(void) {
     sceKernelMkdir("/data/project-prime",0777);
     sceKernelMkdir("/data/project-prime/logs",0777);
     sceKernelRename("/data/project-prime/logs/startup.log",
                     "/data/project-prime/logs/startup.previous.log");
-    raw_line("Project Prime: C runtime reached; beginning constructors\n",1);
+    // Keep one descriptor owned by this invocation, never shared with stage
+    // logging from another thread. Every breadcrumb still reaches the kernel
+    // before its constructor runs; a failed open retains the original retry
+    // path instead of suppressing later diagnostics.
+    int trace_fd=sceKernelOpen("/data/project-prime/logs/startup.log",
+                               O_WRONLY|O_CREAT|O_TRUNC|O_APPEND,0666);
+    raw_line("Project Prime: C runtime reached; beginning constructors\n",1,trace_fd);
     _init();
     for(initializer *p=__init_array_start;p<__init_array_end;++p) {
         char line[]="constructor image-offset=0x0000000000000000\n";
@@ -45,10 +52,11 @@ void __libc_start_init(void) {
             line[sizeof("constructor image-offset=0x")-1+15-i]=
                 "0123456789abcdef"[offset&15];offset>>=4;
         }
-        raw_line(line,0);
+        raw_line(line,0,trace_fd);
         (*p)();
     }
-    raw_line("Project Prime: all constructors completed\n",0);
+    raw_line("Project Prime: all constructors completed\n",0,trace_fd);
+    if(trace_fd>=0) sceKernelClose(trace_fd);
 }
 
 // A separate diagnostic package selects this entry in the SAME linked game
