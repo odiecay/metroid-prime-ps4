@@ -10,9 +10,12 @@ under `LICENSES/`, together with the native dependency notices and startup
 module source pins. Full upstream engine and SDK trees are fetched separately
 from the versions recorded in `upstream.lock.json`.
 
-No game image, keys, saves, SDK binaries or promotional artwork are included.
+Game images, keys, saves, SDK binaries and extracted commercial assets are not
+included in this source repository. Gameplay screenshots are actual PS4 console
+captures of Nintendo and Retro Studios' Metroid Prime.
 
-The original controller diagram in `docs/images/ps4-controls.svg` is CC0-1.0.
+The player PKG contains converted menu movies and the Deface distance-field
+font; those asset files are excluded from this source checkout.
 
 The authored PS4 case geometry and generator retain their MIT terms; see
 their SPDX headers and `LICENSES/port-license.txt`. The embedded Sony, PS and

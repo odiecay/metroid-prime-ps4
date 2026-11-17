@@ -12,10 +12,10 @@ around 41–43 FPS, while the Morph Ball view is considerably lighter. Phendrana
 Shorelines and Main Quarry fall between those extremes.
 
 These are measured results from particular builds and routes, not a prediction
-for every room. **This is not a locked 60 FPS port.** The current prepared source
-is 00.55 RC1; the latest complete, validated six-room comparison below is
-**00.54 RC11**. Its numbers are kept under that identity rather than relabelled
-as results for a newer build.
+for every room. **This is not a locked 60 FPS port.** The current release is
+1.0; the latest complete, validated six-room comparison below is **00.54 RC11**.
+Its numbers are kept under that identity rather than relabelled as results for
+a newer build.
 
 ## What was tested
 

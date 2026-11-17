@@ -15,6 +15,8 @@ This was made possible by **[PrimeDecomp](https://github.com/PrimeDecomp)** and
 Their decompilation and native port are the foundation. My work adapts that
 foundation to PS4, from graphics and audio to controls, storage and packaging.
 
+![Metroid Prime running natively on PS4 Slim — Phendrana Shorelines](docs/images/screenshots/phendrana-shorelines.jpg)
+
 [Getting started](#getting-it-running) · [Controls](docs/CONTROLS.md) ·
 [Performance Benchmarks](docs/PERFORMANCE.md) · [How it works](docs/TECHNICAL.md)
 
@@ -34,6 +36,20 @@ foundation to PS4, from graphics and audio to controls, storage and packaging.
   and fewer repeated shader-constant uploads.
 - A controller-accessible settings panel for aim sensitivity, deadzones, inversion
   and other port options. No keyboard required.
+
+## Screenshots
+
+Captured directly on PS4 Slim at 1920×1080 using the release executable.
+Gameplay views were taken during the screenshot tour; the menu captures use normal
+startup. The download starts normally.
+
+| Chozo Ruins — Main Plaza | Magmoor Caverns — Fiery Shores |
+|---|---|
+| [![Chozo Ruins with the original visor HUD](docs/images/screenshots/chozo-main-plaza.jpg)](docs/images/screenshots/chozo-main-plaza.jpg) | [![Lava and flame effects in Fiery Shores](docs/images/screenshots/magmoor-fiery-shores.jpg)](docs/images/screenshots/magmoor-fiery-shores.jpg) |
+
+| Main menu — sharp text and PlayStation prompts | Title screen |
+|---|---|
+| [![Main menu with sharp lettering and PlayStation prompts](docs/images/screenshots/main-menu.jpg)](docs/images/screenshots/main-menu.jpg) | [![Metroid Prime title screen on PS4](docs/images/screenshots/title-screen.jpg)](docs/images/screenshots/title-screen.jpg) |
 
 ## About the port
 
@@ -64,10 +80,11 @@ percentiles and the difference between CPU preparation and GPU execution.
 
 ## Download
 
-**One MediaFire ZIP**, `Metroid-Prime-PS4-1.0.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
-controls, setup instructions and licences. The download link is pending;
-version 1.0 has not been published. The PKG is roughly **204 MiB**, with your
-game image stored separately.
+[Download Metroid Prime PS4 1.0](https://github.com/odiecay/metroid-prime-ps4/releases/download/v1.0/Metroid-Prime-PS4-1.0.zip) · [Release notes](https://github.com/odiecay/metroid-prime-ps4/releases/tag/v1.0)
+
+One download includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+controls, setup instructions and licences. The PKG is roughly **204 MiB**, with
+your game image stored separately.
 
 ## Getting it running
 
@@ -91,7 +108,8 @@ Unpack the download once: the application is in `PS4/`, and the PC helper is
 
 3. **Launch from the PS4 home screen.** FTP doesn't need to stay connected.
 
-The PKG includes the nine 1.5× menu movies; no extra PC movie-preparation step is needed.
+The PKG includes the nine 1.5× menu movies and sharper font. Your ISO supplies
+the gameplay data; no separate movie or font import is needed.
 
 GamePrep doesn't download the game. Renaming an RVZ to ISO doesn't convert it.
 Wii Trilogy and Switch images aren't supported. See the [installation guide](docs/INSTALLING.md)

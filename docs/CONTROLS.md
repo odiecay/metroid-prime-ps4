@@ -63,6 +63,16 @@ Changing a preset replaces the gameplay bindings. You can make individual
 changes under **Controls → Remap**. The settings shortcut remains a touchpad
 hold.
 
+## Map screen
+
+| Control | Action |
+|---|---|
+| Left stick | Pan / move around the map |
+| Right stick | Rotate the map |
+
+These map controls apply to both layouts. Custom map bindings take precedence;
+the on-screen prompts follow them.
+
 ## Adjusting the feel
 
 The port settings include aim sensitivity, camera inversion and stick/trigger

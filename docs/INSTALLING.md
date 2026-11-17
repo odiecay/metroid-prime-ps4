@@ -54,7 +54,9 @@ does not automatically import a file left on USB.
 
 The tested USA image is about 1.36 GiB. Leave additional room for the application,
 saves and caches. The first launch can take longer while shaders are prepared.
-The game reads the ISO directly; there is no texture-pack extraction step.
+The game reads the ISO directly; there is no texture-pack extraction step. The PKG
+already includes the 1.5× menu movies and sharper font, so only the GameCube
+ISO needs copying—no separate movie, font or Remastered import is required.
 
 ## Your first session
 

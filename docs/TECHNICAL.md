@@ -96,8 +96,8 @@ guided several kinds of changes:
   command storage, pipeline state and bindings can avoid repeated setup without
   changing what the game draws.
 - **Reducing copies and uploads.** Resident-array reuse and fewer repeated
-  shader-constant uploads cut preparation work. The frozen v55 source also
-  uses bounded small geometry copies, with the SDK copy path for larger data.
+  shader-constant uploads cut preparation work. The 1.0 source retains
+  bounded small geometry copies, with the SDK copy path for larger data.
 - **Cheaper synchronisation.** Native FIFO wake channels and explicit frame
   ownership let the workers coordinate without discarding the lifetime rules
   that keep asynchronous rendering correct.
@@ -108,7 +108,7 @@ guided several kinds of changes:
   source with the PS4's supported instruction set. It is checked against the
   original SDK object before applying the CPU-specific tuning.
 - **Keeping diagnostics proportional.** Detailed per-call timing is useful for
-  finding costs, but adds work of its own. The prepared v55 source disables
+  finding costs, but adds work of its own. The 1.0 source disables
   that extra sampling for normal play while retaining frame summaries.
 
 These are implementation changes, not a list of promised FPS gains. Some

@@ -5,7 +5,7 @@
   "package_file": "Metroid-Prime-PS4-1.0.pkg",
   "package_bytes": 213843968,
   "package_sha256": "d298b38fc913e3b9e341325f78187cf1dbba15ebd97ba9128665da9bbce38012",
-  "source_tag": null,
+  "source_tag": "v1.0",
   "upstream_commit": "c872da704adde9a7838492aaa56dac73a32053e4",
   "runtime_source_files_verified": 184,
   "runtime_source_sha256": {
@@ -288,7 +288,7 @@
   "game_source_provenance": "Exact frozen inputs of native Orbis 1.0 final package, Native99. Native build/link and package extraction/hash verification passed. Original HD with 1.5x menus and distance-field font. Latest complete six-room hardware comparison remains v54. No final-version FPS, locked60, no-stutter or complete-playthrough claim.",
   "hardware_tested": false,
   "release_accepted": false,
-  "source_ref": "main",
+  "source_ref": "v1.0",
   "baseline_source_tag": "v0.1.0-rc1",
   "source_snapshot_commit": null,
   "source_snapshot_base_commit": "fbabd517a5b75bcb0933a02f98ac3d709423d2a4",
@@ -299,7 +299,7 @@
     "latest_complete_benchmark": "v54 RC11",
     "known_loading_pause": "~1.22s opening-area script construction; predominantly waiting/descheduled; not claimed fixed"
   },
-  "source_only_dependency_note": "Pinned upstream dependencies are reconstructed by bootstrap from upstream.lock.json plus the exact frozen patches. Commercial movies, game images, keys, artwork, SDK binaries and generated packages are excluded from this source export.",
+  "source_only_dependency_note": "Pinned upstream dependencies are reconstructed from upstream.lock.json and the exact frozen patches. Disc images, converted movie/font assets, keys, SDK binaries and generated packages are excluded from source. Five real PS4 screenshots accompany the player documentation.",
   "radv_command_overlay": {
     "generated_header_count": 21,
     "compiler": "Pinned Clang18.1.8; hash recorded in renderer/orbis/radv-command-generated/manifest.json",
@@ -342,5 +342,52 @@
     "optional_private_baked_marker": true,
     "same_executable": true,
     "automatic_png_or_readback": false
+  },
+  "release_screenshots": {
+    "docs/images/screenshots/phendrana-shorelines.jpg": {
+      "sha256": "61819da286ad5fd86dbd67568d4816f47d29ecbd0be3f0534de66101a15d312e",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/chozo-main-plaza.jpg": {
+      "sha256": "9646c691da74328836bdb7a9a69347b64e64aa6d56987f00c8e1dcf015656c26",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/magmoor-fiery-shores.jpg": {
+      "sha256": "1448274a80dba2f3f04edc0ff4250e3094bc02c172021ac7f13367f157882ae6",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/title-screen.jpg": {
+      "sha256": "4e881cbef3e650c28ff402f34268693f554423c559a157cc7a8daf8aa54dbd77",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/main-menu.jpg": {
+      "sha256": "5cc0fe84184b022e63119990761a78592060d59b9432ad44027054105ed568ea",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    }
   }
 }
