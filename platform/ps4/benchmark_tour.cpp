@@ -302,7 +302,25 @@ bool prepare_benchmark_tour(const fs::path& root) {
     const auto copy = base / "user" / "port_settings.ini";
     if (fs::is_symlink(copy) || (fs::exists(copy) && !fs::is_regular_file(copy)))
         throw std::runtime_error("Invalid benchmark settings destination");
-    fs::copy_file(settings, copy, fs::copy_options::overwrite_existing);
+    // libc++ copy_file(overwrite_existing) reapplies source permissions with
+    // fchmod before truncating an existing file. Orbis can reject that
+    // unnecessary metadata operation. Copy only the settings bytes
+    // and publish by rename, leaving the previous benchmark copy intact on a
+    // read/write failure. The normal user settings are opened read-only.
+    const auto pending = base / "user" / "port_settings.ini.pending";
+    if (fs::is_symlink(pending) || (fs::exists(pending) && !fs::is_regular_file(pending)))
+        throw std::runtime_error("Invalid pending benchmark settings destination");
+    const auto length = fs::file_size(settings);
+    if (length > 1024 * 1024) throw std::runtime_error("Benchmark settings exceed the size limit");
+    std::string bytes(static_cast<size_t>(length), '\0');
+    std::ifstream original(settings, std::ios::binary);
+    if (!original || !original.read(bytes.data(), static_cast<std::streamsize>(bytes.size())))
+        throw std::runtime_error("Could not read current benchmark settings");
+    std::ofstream staged(pending, std::ios::binary | std::ios::trunc);
+    staged.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    staged.close();
+    if (!staged) throw std::runtime_error("Could not write pending benchmark settings");
+    fs::rename(pending, copy);
     state.logRoot = base / "logs";
     const auto log = state.logRoot / "benchmark-tour.jsonl";
     if (fs::is_symlink(log) || (fs::exists(log) && !fs::is_regular_file(log)))

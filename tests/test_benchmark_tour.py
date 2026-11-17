@@ -42,6 +42,10 @@ class BenchmarkTourTests(unittest.TestCase):
     def test_missing_request_has_no_effect(self):self.assertEqual(self.run_mode('absent')[0],[])
     def test_bad_request_cannot_change_live_paths(self):self.assertEqual(self.run_mode('invalid')[0],[])
     def test_symlink_cannot_redirect_namespace_into_live_save(self):self.assertEqual(self.run_mode('symlink')[0],[])
+    def test_relaunch_replaces_settings_when_permission_changes_are_denied(self):
+        rows,_=self.run_mode('play_restart')
+        self.assertEqual(rows[-1]['event'],'complete')
+        self.assertEqual(sum(r['event']=='measure_end' for r in rows),24)
     def test_complete_tour_has_exact_pairing_and_untouched_saves(self):
         rows,_=self.run_mode('complete')
         begins=[r for r in rows if r['event']=='measure_begin']

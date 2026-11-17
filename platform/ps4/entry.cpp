@@ -119,17 +119,26 @@ static int run_game(int argc,char **argv) {
     }
     prime::CandidateProfile candidate;
     bool benchmarkTour=false;
+    const char* startupPhase="reading application profile";
     try {
         candidate=prime::read_candidate_profile("/app0/prime-profile.txt",root);
+        startupPhase="preparing application storage";
         prime::prepare_candidate_storage(candidate,"/data/project-prime/user");
         if(candidate.key=="consolidated" && !std::filesystem::exists(candidate.assetsRoot)) {
             prime_ps4_startup_stage("Project Prime: preparing preconverted Remastered graphics\n");
             const std::filesystem::path bundled="/app0/remastered.primebundle";
             prime::unpack_asset_bundle(std::filesystem::exists(bundled)?bundled:std::filesystem::path(candidate.assetsRoot.string()+".primebundle"),candidate.assetsRoot);
         }
+        startupPhase="applying application configuration";
         prime::apply_candidate_environment(candidate);
+        startupPhase="preparing benchmark storage";
         benchmarkTour=prime::prepare_benchmark_tour(candidate.key.empty()?std::filesystem::path(root):candidate.root);
     } catch(const std::exception& error) {
+        // These failures precede boot.log. Preserve their actual cause in the
+        // always-available native startup trace before displaying the dialog.
+        char detail[1536];
+        std::snprintf(detail,sizeof(detail),"Project Prime: startup failed while %s: %s\n",startupPhase,error.what());
+        prime_ps4_startup_stage(detail);
         message(error.what());return 4;
     }
     const std::string logRoot=benchmarkTour?prime::benchmark_tour_log_root().string():

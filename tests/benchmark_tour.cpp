@@ -2,6 +2,7 @@
 #include "benchmark_tour.hpp"
 #include <aurora/gfx.h>
 #include <cassert>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -9,9 +10,18 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 namespace fs = std::filesystem;
 static std::vector<std::string> commands;
 static bool rejectQueue;
+static bool rejectPermissionChanges;
+static unsigned permissionChanges;
+extern "C" int fchmod(int fd, mode_t mode) noexcept {
+    if (rejectPermissionChanges) { ++permissionChanges; errno=EPERM; return -1; }
+    return static_cast<int>(::syscall(SYS_fchmod,fd,mode));
+}
 static uint32_t world=0x39F2DE28, area=0x2043C96E;
 bool PortConsoleRun(std::string_view text) {
     if (rejectQueue) return false;
@@ -32,7 +42,7 @@ int main(int argc,char** argv) {
     assert(argc==3);const std::string mode=argv[1];const fs::path root=argv[2];
     const fs::path live=root/"live";fs::create_directories(live);
     const bool play=mode.starts_with("play_");
-    const std::string settings="render_scale=2.25\nmsaa=1\noriginal_experience=0\n";
+    std::string settings="render_scale=2.25\nmsaa=1\noriginal_experience=0\n";
     write(live/"port_settings.ini",settings);write(live/"memorycard.bin","PROTECTED-SAVE");
     setenv("MP_USER_PATH",live.c_str(),1);setenv("MP_CACHE_PATH",(live/"cache").c_str(),1);
     if(mode=="absent") {
@@ -52,7 +62,32 @@ int main(int argc,char** argv) {
         assert(std::string(getenv("MP_USER_PATH"))==live);assert(read(live/"port_settings.ini")==settings);
         assert(read(live/"memorycard.bin")=="PROTECTED-SAVE");return 0;
     }
+    if(mode=="play_restart") {
+        const auto user=root/"benchmarks/play-v2/user";
+        fs::create_directories(user);
+        write(user/"port_settings.ini","STALE-BENCHMARK-SETTINGS");
+        write(user/"port_settings.ini.pending","INTERRUPTED-COPY");
+        rejectPermissionChanges=true;
+        // Reproduce the old permission-changing overwrite before exercising
+        // the real startup path against the same existing destination.
+        std::error_code ec;
+        assert(!fs::copy_file(live/"port_settings.ini",user/"port_settings.ini",fs::copy_options::overwrite_existing,ec));
+        assert(ec.value()==EPERM && permissionChanges==1);
+        // libstdc++ may truncate before chmod, unlike the pinned libc++.
+        // Restore the sentinel before exercising production's atomic copy.
+        write(user/"port_settings.ini","STALE-BENCHMARK-SETTINGS");
+        assert(prime::prepare_benchmark_tour(root));
+        assert(read(user/"port_settings.ini")==settings);
+        assert(permissionChanges==1);
+        prime::benchmark_tour_reset_for_testing();
+        setenv("MP_USER_PATH",live.c_str(),1);
+        settings+="anisotropy=16\n";write(live/"port_settings.ini",settings);
+    }
     assert(prime::prepare_benchmark_tour(root));
+    if(mode=="play_restart") {
+        assert(permissionChanges==1);
+        assert(!fs::exists(root/"benchmarks/play-v2/user/port_settings.ini.pending"));
+    }
     assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/(play?"play-v2":"tour-v1");
     assert(prime::benchmark_play_enabled()==play);
     assert(std::string(getenv("MP_USER_PATH"))==bench/"user");
