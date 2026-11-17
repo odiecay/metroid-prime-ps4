@@ -317,11 +317,32 @@ index 0a88569d..7d8a4d46 100644
  void GXPortSetShadowFrame(const f32 worldToView[3][4], const f32 frustum[6], const f32 sunDir[3], f32 distance,
                            const f32 color[3]);
  GXBool GXPortShadowBoxCasts(const f32 min[3], const f32 max[3]);
+diff --git a/extern/aurora/include/dolphin/pad.h b/extern/aurora/include/dolphin/pad.h
+index f293118a..d334dba4 100644
+--- a/extern/aurora/include/dolphin/pad.h
++++ b/extern/aurora/include/dolphin/pad.h
+@@ -238,6 +238,11 @@ BOOL PADIsDefaultMapping(u32 port);
+ void PADBlockInput(bool block);
+ 
+ void PADSetVirtualStatus(u32 port, const PADStatus* status);
++/* Persistent scripted ownership for unattended input: replaces mapped physical,
++ * keyboard and extended buttons until cleared. UI blocking still takes priority;
++ * controller discovery, rumble and LEDs continue normally. The ordinary virtual
++ * setter restores additive behaviour. */
++void PADSetVirtualStatusExclusive(u32 port, const PADStatus* status);
+ void PADClearVirtualStatus(u32 port);
+ void PADClearAllVirtualStatus();
+ 
 diff --git a/extern/aurora/lib/aurora.cpp b/extern/aurora/lib/aurora.cpp
-index e88d777f..335c69d5 100644
+index e88d777f..ad9cefb7 100644
 --- a/extern/aurora/lib/aurora.cpp
 +++ b/extern/aurora/lib/aurora.cpp
-@@ -50,6 +50,10 @@
+@@ -1,3 +1,4 @@
++#include "gfx/dawn_call_profile.hpp"
+ #include <aurora/aurora.h>
+ #include <aurora/phase.hpp>
+ #include <aurora/time.hpp>
+@@ -50,6 +51,10 @@
  #include "tracy/Tracy.hpp"
  
  namespace aurora {
@@ -332,7 +353,7 @@ index e88d777f..335c69d5 100644
  AuroraConfig g_config;
  // aurora_set_graphics_quality request: msaa << 16 | anisotropy, 0 = none.
  std::atomic<uint32_t> g_pendingQuality{0};
-@@ -470,10 +474,19 @@ void end_frame() noexcept {
+@@ -470,10 +475,19 @@ void end_frame() noexcept {
    } resizeFrameTimer;
  #ifdef AURORA_ENABLE_GX
    phase::set(phase::Main, "end_frame (recording and queueing the frame)");
@@ -355,7 +376,42 @@ index e88d777f..335c69d5 100644
    auto imguiDrawData = imgui::freeze();
  
    const auto& presentSource = webgpu::present_source();
-@@ -598,11 +611,20 @@ void end_frame() noexcept {
+@@ -553,18 +567,19 @@ void end_frame() noexcept {
+             .colorAttachments = attachments.data(),
+             .timestampWrites = webgpu::gpu_prof::pass_writes("Present blit"),
+         };
++        AURORA_DAWN_API_PRESENT_BATCH(profilePresentFrontendCalls);
+         const auto pass = encoder.BeginRenderPass(&renderPassDescriptor);
+         // Copy EFB -> XFB (swapchain)
+-        pass.SetPipeline(webgpu::g_CopyPipeline);
+-        pass.SetBindGroup(0, presentBindGroup, 0, nullptr);
++        AURORA_DAWN_API(Pipeline, pass.SetPipeline(webgpu::g_CopyPipeline));
++        AURORA_DAWN_API(BindGroup, pass.SetBindGroup(0, presentBindGroup, 0, nullptr));
+         set_present_viewport(pass, viewport, webgpu::g_graphicsConfig.surfaceConfiguration.width,
+                              webgpu::g_graphicsConfig.surfaceConfiguration.height);
+ 
+-        pass.Draw(3);
++        AURORA_DAWN_API(Draw, pass.Draw(3));
+         if (rmlBindGroup && rmlOverlay) {
+-          pass.SetPipeline(webgpu::g_CopyPremultipliedAlphaPipeline);
+-          pass.SetBindGroup(0, rmlBindGroup, 0, nullptr);
+-          pass.Draw(3);
++          AURORA_DAWN_API(Pipeline, pass.SetPipeline(webgpu::g_CopyPremultipliedAlphaPipeline));
++          AURORA_DAWN_API(BindGroup, pass.SetBindGroup(0, rmlBindGroup, 0, nullptr));
++          AURORA_DAWN_API(Draw, pass.Draw(3));
+         }
+         // ImGui draws in the same pass: a second pass would write the whole swapchain image out
+         // and read it back in, which costs a tile-based (mobile) GPU a full-screen round trip.
+@@ -580,7 +595,7 @@ void end_frame() noexcept {
+     gfx::overdraw::frame_end(encoder);
+     gfx::vis_query::detail::frame_end(encoder);
+     const wgpu::CommandBufferDescriptor cmdBufDescriptor{.label = "Redraw command buffer"};
+-    const auto buffer = encoder.Finish(&cmdBufDescriptor);
++    const auto buffer = AURORA_DAWN_API_FINISH(encoder.Finish(&cmdBufDescriptor));
+     {
+       ZoneScopedN("Queue Submit");
+       phase::set(phase::Render, "queue submit");
+@@ -598,11 +613,20 @@ void end_frame() noexcept {
          window::SurfaceLock surfaceLock;
          if (window::is_presentable()) {
            phase::set(phase::Render, "surface Present");
@@ -794,6 +850,61 @@ index 47d1dfa4..d8c263fa 100644
  // The last shadow frame, for GXPortShadowBoxCasts and GXPortGetShadowInfo on the game thread.
  static struct {
    f32 worldToView[3][4];
+diff --git a/extern/aurora/lib/dolphin/pad/pad.cpp b/extern/aurora/lib/dolphin/pad/pad.cpp
+index 656f8971..fa77dd36 100644
+--- a/extern/aurora/lib/dolphin/pad/pad.cpp
++++ b/extern/aurora/lib/dolphin/pad/pad.cpp
+@@ -36,6 +36,7 @@ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsStandard{{
+ 
+ std::array<PADStatus, PAD_CHANMAX> g_virtualPadStatus{};
+ std::array<bool, PAD_CHANMAX> g_virtualPadActive{};
++std::array<bool, PAD_CHANMAX> g_virtualPadExclusive{};
+ 
+ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsXBox360{{
+     {SDL_GAMEPAD_BUTTON_SOUTH, PAD_BUTTON_A},
+@@ -1185,7 +1186,11 @@ u32 PADRead(PADStatus* status) {
+     } else {
+       apply_unblock_suppression(status[i], i, captureHeldInput);
+       if (g_virtualPadActive[i]) {
+-        merge_virtual_status(status[i], g_virtualPadStatus[i]);
++        if (g_virtualPadExclusive[i]) {
++          status[i] = g_virtualPadStatus[i];
++        } else {
++          merge_virtual_status(status[i], g_virtualPadStatus[i]);
++        }
+       }
+     }
+   }
+@@ -1200,6 +1205,15 @@ void PADSetVirtualStatus(const u32 port, const PADStatus* virtualStatus) {
+   g_virtualPadStatus[port] = *virtualStatus;
+   g_virtualPadStatus[port].err = PAD_ERR_NONE;
+   g_virtualPadActive[port] = true;
++  g_virtualPadExclusive[port] = false;
++}
++
++void PADSetVirtualStatusExclusive(const u32 port, const PADStatus* virtualStatus) {
++  if (port >= PAD_CHANMAX || virtualStatus == nullptr) {
++    return;
++  }
++  PADSetVirtualStatus(port, virtualStatus);
++  g_virtualPadExclusive[port] = true;
+ }
+ 
+ void PADSetPortOverride(const u32 port, const PADStatus* status) {
+@@ -1256,11 +1270,13 @@ void PADClearVirtualStatus(const u32 port) {
+ 
+   g_virtualPadStatus[port] = {};
+   g_virtualPadActive[port] = false;
++  g_virtualPadExclusive[port] = false;
+ }
+ 
+ void PADClearAllVirtualStatus() {
+   g_virtualPadStatus.fill({});
+   g_virtualPadActive.fill(false);
++  g_virtualPadExclusive.fill(false);
+ }
+ 
+ void PADControlMotor(const u32 chan, const u32 cmd) {
 diff --git a/extern/aurora/lib/gfx/actor_shadow.cpp b/extern/aurora/lib/gfx/actor_shadow.cpp
 index e1fc5252..b52defaa 100644
 --- a/extern/aurora/lib/gfx/actor_shadow.cpp
@@ -887,11 +998,41 @@ index 00000000..03871f26
 +  size_t m_first = 0, m_count = 0, m_bytes = 0, m_limit;
 +};
 +} // namespace aurora::gfx::detail
+diff --git a/extern/aurora/lib/gfx/dawn_call_profile.hpp b/extern/aurora/lib/gfx/dawn_call_profile.hpp
+new file mode 100644
+index 00000000..d4262658
+--- /dev/null
++++ b/extern/aurora/lib/gfx/dawn_call_profile.hpp
+@@ -0,0 +1,23 @@
++#pragma once
++
++// Optional native diagnostics; ordinary desktop builds keep the exact API
++// expression and do not acquire a dependency on the PS4 compatibility header.
++#if defined(__ORBIS__) || defined(PRIME_DAWN_FRONTEND_TEST)
++#include <prime_dawn_call_profile.h>
++#define AURORA_DAWN_API(category, expression) \
++  ::prime::dawn_call_profile::frontend::call( \
++      ::prime::dawn_call_profile::frontend::Category::category, [&] { return expression; })
++#define AURORA_DAWN_API_BATCH(name) ::prime::dawn_call_profile::frontend::Batch name
++#define AURORA_DAWN_API_PRESENT_BATCH(name) \
++  ::prime::dawn_call_profile::frontend::Batch name( \
++      ::prime::dawn_call_profile::configured(), prime_ps4_dawn_frontend_stats, \
++      ::prime::dawn_call_profile::wall_now, ::prime::dawn_call_profile::frontend::BatchKind::Present)
++#define AURORA_DAWN_API_FINISH(expression) \
++  ::prime::dawn_call_profile::frontend::scoped( \
++      ::prime::dawn_call_profile::frontend::Category::Finish, [&] { return expression; })
++#else
++#define AURORA_DAWN_API(category, expression) expression
++#define AURORA_DAWN_API_BATCH(name) ((void)0)
++#define AURORA_DAWN_API_PRESENT_BATCH(name) ((void)0)
++#define AURORA_DAWN_API_FINISH(expression) expression
++#endif
 diff --git a/extern/aurora/lib/gfx/encoding.cpp b/extern/aurora/lib/gfx/encoding.cpp
-index 3c844ae9..c97af9a9 100644
+index 3c844ae9..24101058 100644
 --- a/extern/aurora/lib/gfx/encoding.cpp
 +++ b/extern/aurora/lib/gfx/encoding.cpp
-@@ -1,4 +1,7 @@
+@@ -1,4 +1,8 @@
++#include "dawn_call_profile.hpp"
 +#include <aurora/frame_trace.hpp>
  #include "encoding.hpp"
 +#include "encoding_state.hpp"
@@ -899,7 +1040,7 @@ index 3c844ae9..c97af9a9 100644
  #include "overdraw.hpp"
  #include "vis_query.hpp"
  
-@@ -38,6 +41,44 @@ namespace {
+@@ -38,6 +42,44 @@ namespace {
  constexpr Module Log{"aurora::gfx"};
  PipelineRef g_currentPipeline;
  BindGroupRef g_currentTextureGroup;
@@ -944,7 +1085,7 @@ index 3c844ae9..c97af9a9 100644
  
  void apply_viewport(const wgpu::RenderPassEncoder& pass, const Viewport& vp) {
    const float minDepth = gx::UseReversedZ ? 1.f - vp.zfar : vp.znear;
-@@ -112,7 +153,11 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
+@@ -112,7 +154,11 @@ void execute_encoder_task(wgpu::CommandEncoder& cmd, FramePacket& frame, const E
  
  void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, RenderPass& passInfo) {
    ZoneScoped;
@@ -956,7 +1097,18 @@ index 3c844ae9..c97af9a9 100644
  #ifdef AURORA_GFX_DEBUG_GROUPS
    std::vector<std::string> lastDebugGroupStack;
  #endif
-@@ -165,8 +210,15 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
+@@ -122,8 +168,8 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
+   bool hasScissor = false;
+ 
+   // Bind bind group for the whole pass
+-  pass.SetBindGroup(0, resources().staticBindGroup);
+-  pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
++  AURORA_DAWN_API(BindGroup, pass.SetBindGroup(0, resources().staticBindGroup));
++  AURORA_DAWN_API(BindGroup, pass.SetBindGroup(2, gx::g_emptyTextureBindGroup));
+   g_currentTextureGroup = 0;
+ 
+   for (auto& cmd : passInfo.commands) {
+@@ -165,10 +211,17 @@ void render_pass(const wgpu::RenderPassEncoder& pass, FramePacket& frame, Render
        }
      } break;
      case CommandType::CustomDraw: {
@@ -969,16 +1121,21 @@ index 3c844ae9..c97af9a9 100644
 +      // recorded IDs again instead of retaining stale lookup state.
 +      g_passObjectLookups->clear();
        g_currentPipeline = UINTPTR_MAX;
+-      pass.SetBindGroup(0, resources().staticBindGroup);
+-      pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
 +      g_gxEncodingState.reset();
-       pass.SetBindGroup(0, resources().staticBindGroup);
-       pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
++      AURORA_DAWN_API(BindGroup, pass.SetBindGroup(0, resources().staticBindGroup));
++      AURORA_DAWN_API(BindGroup, pass.SetBindGroup(2, gx::g_emptyTextureBindGroup));
        g_currentTextureGroup = 0;
-@@ -536,7 +588,11 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
+       if (hasViewport) {
+         apply_viewport(pass, currentViewport);
+@@ -536,7 +589,12 @@ void copy_staging_to_high_water(wgpu::CommandEncoder& cmd, FramePacket& frame, c
  
  namespace detail {
  void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op) {
 -  copy_staging_to_high_water(cmd, frame, op);
 +  trace::Scope encodeTime("Dawn encoding (inclusive)", trace::Render);
++  AURORA_DAWN_API_BATCH(profileFrontendCalls);
 +  {
 +    trace::Scope uploads("buffer uploads (inclusive)", trace::Render);
 +    copy_staging_to_high_water(cmd, frame, op);
@@ -986,7 +1143,7 @@ index 3c844ae9..c97af9a9 100644
    switch (op.type) {
    case FrameOpType::RenderPass:
      if (op.renderPass != nullptr) {
-@@ -558,27 +614,91 @@ void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op)
+@@ -558,27 +616,92 @@ void encode_op(wgpu::CommandEncoder& cmd, FramePacket& frame, const FrameOp& op)
  }
  } // namespace detail
  
@@ -1012,7 +1169,7 @@ index 3c844ae9..c97af9a9 100644
      return false;
    }
 -  pass.SetPipeline(pipeline);
-+  pass.SetPipeline(*pipeline);
++  AURORA_DAWN_API(Pipeline, pass.SetPipeline(*pipeline));
    g_currentPipeline = ref;
    return true;
  }
@@ -1027,9 +1184,10 @@ index 3c844ae9..c97af9a9 100644
 +      value = find_bind_group(ref);
 +      return true;
 +    });
-+    pass.SetBindGroup(2, *group);
++    AURORA_DAWN_API(BindGroup, pass.SetBindGroup(2, *group));
 +  } else {
-+    pass.SetBindGroup(2, find_bind_group(ref));
++    const auto group = find_bind_group(ref);
++    AURORA_DAWN_API(BindGroup, pass.SetBindGroup(2, group));
    }
 -  pass.SetBindGroup(2, find_bind_group(ref));
    g_currentTextureGroup = ref;
@@ -1057,7 +1215,7 @@ index 3c844ae9..c97af9a9 100644
 +                           const wgpu::RenderPassEncoder& pass) {
 +  ++g_gxEncodingCounts[0];
 +  if (g_gxEncodingState.bind_uniform(reinterpret_cast<uintptr_t>(group.Get()), offset)) {
-+    pass.SetBindGroup(1, group, 1, &offset);
++    AURORA_DAWN_API(BindGroup, pass.SetBindGroup(1, group, 1, &offset));
 +    ++g_gxEncodingCounts[1];
 +  } else {
 +    ++g_gxEncodingCounts[2];
@@ -1151,15 +1309,16 @@ index 00000000..b01290a6
 +};
 +} // namespace aurora::gfx
 diff --git a/extern/aurora/lib/gfx/frame.cpp b/extern/aurora/lib/gfx/frame.cpp
-index 744d19c1..b00dfc30 100644
+index 744d19c1..ccc8eb69 100644
 --- a/extern/aurora/lib/gfx/frame.cpp
 +++ b/extern/aurora/lib/gfx/frame.cpp
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++#include "dawn_call_profile.hpp"
 +#include <aurora/frame_trace.hpp>
  #include "frame.hpp"
  #include "overdraw.hpp"
  
-@@ -42,6 +43,35 @@
+@@ -42,6 +44,35 @@
  #include <tracy/Tracy.hpp>
  #include <magic_enum.hpp>
  
@@ -1195,7 +1354,7 @@ index 744d19c1..b00dfc30 100644
  namespace aurora::gfx {
  using namespace detail;
  using webgpu::g_device;
-@@ -280,6 +310,9 @@ void process_events() {
+@@ -280,6 +311,9 @@ void process_events() {
    ZoneScopedN("ProcessEvents");
    if (g_instance) {
      g_instance.ProcessEvents();
@@ -1205,7 +1364,7 @@ index 744d19c1..b00dfc30 100644
    }
  }
  
-@@ -346,6 +379,8 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
+@@ -346,6 +380,8 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
      return;
    }
  
@@ -1214,7 +1373,7 @@ index 744d19c1..b00dfc30 100644
    g_stagingBuffers[slot].MapAsync(
        wgpu::MapMode::Write, 0, g_bufferSizes.staging(), wgpu::CallbackMode::AllowSpontaneous,
        [slot, releaseSlotOnCompletion](wgpu::MapAsyncStatus status, wgpu::StringView message) {
-@@ -354,6 +389,9 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
+@@ -354,6 +390,9 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
            g_mappingStates[slot].store(BufferMapState::Unmapped, std::memory_order_release);
            if (releaseSlotOnCompletion) {
              g_stagingSlots.release(slot);
@@ -1224,7 +1383,7 @@ index 744d19c1..b00dfc30 100644
            }
            return;
          }
-@@ -362,6 +400,7 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
+@@ -362,6 +401,7 @@ void map_staging_buffer(size_t slot, bool releaseSlotOnCompletion = false) {
          g_mappingStates[slot].store(BufferMapState::Mapped, std::memory_order_release);
          if (releaseSlotOnCompletion) {
            g_stagingSlots.release(slot);
@@ -1232,7 +1391,16 @@ index 744d19c1..b00dfc30 100644
          }
        });
  }
-@@ -950,14 +989,17 @@ void shutdown() {
+@@ -802,7 +842,7 @@ void initialize() {
+     auto encoder = g_device.CreateCommandEncoder(&encoderDescriptor);
+     upload_fetch_texture_rows(encoder, StagingKind::Vertex, 0, vertexBytes);
+     upload_fetch_texture_rows(encoder, StagingKind::Storage, 0, storageBytes);
+-    auto commands = encoder.Finish();
++    auto commands = AURORA_DAWN_API_FINISH(encoder.Finish());
+     g_queue.Submit(1, &commands);
+     Log.info("Texture vertex fetch: {} rows of vertices, {} rows of arrays", vertexBytes / FetchTextureRowBytes,
+              storageBytes / FetchTextureRowBytes);
+@@ -950,14 +990,17 @@ void shutdown() {
  bool wait_for_staging_buffer(size_t slot) {
    ZoneScopedN("Wait for buffer map");
    map_staging_buffer(slot);
@@ -1255,7 +1423,7 @@ index 744d19c1..b00dfc30 100644
      wait_for_gpu_progress(std::chrono::milliseconds{1});
    }
  }
-@@ -965,27 +1007,52 @@ bool wait_for_staging_buffer(size_t slot) {
+@@ -965,27 +1008,52 @@ bool wait_for_staging_buffer(size_t slot) {
  size_t acquire_frame_slot() {
    ZoneScopedN("Acquire frame slot");
    const auto waitStart = PresentClock::now();
@@ -1310,7 +1478,16 @@ index 744d19c1..b00dfc30 100644
      wait_for_gpu_progress(std::chrono::microseconds{100});
    }
  }
-@@ -1190,6 +1257,7 @@ bool begin_frame() {
+@@ -1145,7 +1213,7 @@ void reserve_held_frame_buffers() {
+       auto encoder = g_device.CreateCommandEncoder(&encoderDescriptor);
+       upload_fetch_texture_rows(encoder, StagingKind::Vertex, 0, vertexBytes);
+       upload_fetch_texture_rows(encoder, StagingKind::Storage, 0, storageBytes);
+-      auto commands = encoder.Finish();
++      auto commands = AURORA_DAWN_API_FINISH(encoder.Finish());
+       g_queue.Submit(1, &commands);
+     }
+     create_uniform_bind_group();
+@@ -1190,6 +1258,7 @@ bool begin_frame() {
    auto& frame = g_framePackets[frameSlot];
    frame = {};
    frame.frameId = g_nextFrameId++;
@@ -1318,7 +1495,7 @@ index 744d19c1..b00dfc30 100644
    frame.frameIndex = g_frameIndex;
    frame.stagingBuffer = *stagingSlot;
    size_t bufferOffset = 0;
-@@ -1212,6 +1280,7 @@ bool begin_frame() {
+@@ -1212,6 +1281,7 @@ bool begin_frame() {
    begin_recording(frame, frameSlot);
    begin_pipeline_frame();
    render_worker::enqueue_begin_frame(frame.frameId, [frameSlot] {
@@ -1326,7 +1503,7 @@ index 744d19c1..b00dfc30 100644
      constexpr wgpu::CommandEncoderDescriptor EncoderDescriptor{.label = "Redraw encoder"};
      g_framePackets[frameSlot].encoder = g_device.CreateCommandEncoder(&EncoderDescriptor);
      webgpu::gpu_prof::frame_begin(g_framePackets[frameSlot].encoder);
-@@ -1240,11 +1309,16 @@ void end_frame(EndFrameCallback callback) {
+@@ -1240,11 +1310,16 @@ void end_frame(EndFrameCallback callback) {
    render_worker::enqueue_end_frame(frameId, [frameSlot, stagingSlot, callback = std::move(callback)]() mutable {
      auto& packet = g_framePackets[frameSlot];
      const uint32_t finishedFrame = packet.frameIndex;
@@ -1343,7 +1520,7 @@ index 744d19c1..b00dfc30 100644
      packet = {};
      g_resources.stats.drawCallCount = stats.drawCallCount;
      g_resources.stats.mergedDrawCallCount = stats.mergedDrawCallCount;
-@@ -1258,9 +1332,11 @@ void end_frame(EndFrameCallback callback) {
+@@ -1258,9 +1333,11 @@ void end_frame(EndFrameCallback callback) {
        callback(encoder, std::move(afterSubmitCallbacks));
      }
      g_frameSlots.release(frameSlot);
@@ -3937,20 +4114,32 @@ index 2e121900..9e605908 100644
  
  struct DrawImmediateData {
 diff --git a/extern/aurora/lib/gx/pipeline.cpp b/extern/aurora/lib/gx/pipeline.cpp
-index ce9c2264..9f62406a 100644
+index ce9c2264..46a5c1be 100644
 --- a/extern/aurora/lib/gx/pipeline.cpp
 +++ b/extern/aurora/lib/gx/pipeline.cpp
-@@ -42,8 +42,7 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
+@@ -1,3 +1,4 @@
++#include "../gfx/dawn_call_profile.hpp"
+ #include "pipeline.hpp"
+ 
+ #include "../gfx/encoding.hpp"
+@@ -41,9 +42,8 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
+   }
  
    const auto& resources = gfx::detail::resources();
-   pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData));
+-  pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData));
 -  const std::array offsets{data.uniformRange.offset};
 -  pass.SetBindGroup(1, resources.uniformBindGroup, offsets.size(), offsets.data());
++  AURORA_DAWN_API(Immediates, pass.SetImmediates(0, &data.immediateData, sizeof(data.immediateData)));
 +  gfx::bind_gx_uniform_group(resources.uniformBindGroup, data.uniformRange.offset, pass);
    // A shadow receiver's group 2 has its own layout, so a draw without a group of its own can't
    // inherit it. A stale flag (a pass starts with the empty group bound) only costs a rebind.
    static bool sShadowGroupBound = false;
-@@ -55,7 +54,6 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
+@@ -51,20 +51,20 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
+     gfx::bind_texture_group(data.bindGroups.textureBindGroup, pass);
+     sShadowGroupBound = data.shadowGroup;
+   } else if (sShadowGroupBound) {
+-    pass.SetBindGroup(2, g_emptyTextureBindGroup);
++    AURORA_DAWN_API(BindGroup, pass.SetBindGroup(2, g_emptyTextureBindGroup));
      gfx::forget_texture_group();
      sShadowGroupBound = false;
    }
@@ -3958,13 +4147,15 @@ index ce9c2264..9f62406a 100644
    if (data.dstAlpha != UINT32_MAX) {
      const wgpu::Color color{0.f, 0.f, 0.f, data.dstAlpha / 255.f};
      pass.SetBlendConstant(&color);
-@@ -64,7 +62,8 @@ void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {
+   }
+   const uint32_t query = gfx::overdraw::draw_begin(data.pipeline, pass);
    if (data.indexCount == 0) {
-     pass.Draw(data.vtxCount, data.instanceCount);
+-    pass.Draw(data.vtxCount, data.instanceCount);
++    AURORA_DAWN_API(Draw, pass.Draw(data.vtxCount, data.instanceCount));
    } else {
 -    pass.DrawIndexed(data.indexCount, data.instanceCount);
 +    const auto firstIndex = gfx::bind_gx_index_buffer(resources.indexBuffer, data.idxRange, data.indexCount, pass);
-+    pass.DrawIndexed(data.indexCount, data.instanceCount, firstIndex);
++    AURORA_DAWN_API(DrawIndexed, pass.DrawIndexed(data.indexCount, data.instanceCount, firstIndex));
    }
    gfx::overdraw::draw_end(query, pass);
  }

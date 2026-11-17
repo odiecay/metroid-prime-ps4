@@ -16,7 +16,7 @@
 
 namespace {
 using namespace aurora::trace;
-constexpr unsigned MaxStages=192, Buckets=1024;
+constexpr unsigned MaxStages=256, Buckets=1024;
 constexpr unsigned MaxStageName = 256, StageLookupSlots = 512;
 struct Stage { std::array<char,MaxStageName> name{}; Kind kind{}; Lane lane{}; };
 struct StageLookup { uintptr_t address{}; unsigned index{}; };
@@ -144,9 +144,12 @@ static void poll_trace(uint64_t now,bool force=false) {
             "\"dropped_events\":%llu,\"bucket_collisions\":%llu,\"unknown_stages\":%llu,\"stage_capacity\":%u,\"stage_count\":%u,"
             "\"vulkan_call_sampling\":{\"enabled\":%s,\"period\":%u,\"maximum_samples_per_category_per_submission\":%u,"
             "\"timing\":\"observed sampled CPU-side wall only; includes scheduling; not GPU execution\"},"
+            "\"dawn_frontend_call_sampling\":{\"enabled\":%s,\"period\":%u,\"maximum_samples_per_family_per_batch\":%u,\"scope\":\"GX and present API calls; dynamic uniforms are bind-group calls; inclusive API wall includes unseparated lock wait; not CPU/GPU execution\"},"
             "\"timing\":\"monotonic wall; inclusive rows overlap; waits are not CPU execution\",\"stages\":[",
             sessionId,(unsigned long long)start,(unsigned long long)now,(unsigned long long)dropped,
             (unsigned long long)collisions,(unsigned long long)unknownStages,MaxStages,stageCount,
+            prime::dawn_call_profile::configured()?"true":"false",prime::dawn_call_profile::SamplePeriod,
+            prime::dawn_call_profile::MaximumSamplesPerCategory,
             prime::dawn_call_profile::configured()?"true":"false",prime::dawn_call_profile::SamplePeriod,
             prime::dawn_call_profile::MaximumSamplesPerCategory);
         bool first=true;
@@ -324,7 +327,10 @@ extern "C" void prime_ps4_dawn_call_stats(const PrimeDawnCallStats* stats,unsign
         {"Vulkan draw calls","Vulkan draw wall samples","Vulkan draw observed sampled wall ns","Vulkan draw cap skipped samples"},
         {"Vulkan descriptor binds","Vulkan descriptor wall samples","Vulkan descriptor observed sampled wall ns","Vulkan descriptor cap skipped samples"},
         {"Vulkan pipeline binds","Vulkan pipeline wall samples","Vulkan pipeline observed sampled wall ns","Vulkan pipeline cap skipped samples"},
-        {"Vulkan pipeline barriers","Vulkan barrier wall samples","Vulkan barrier observed sampled wall ns","Vulkan barrier cap skipped samples"}};
+        {"Vulkan pipeline barriers","Vulkan barrier wall samples","Vulkan barrier observed sampled wall ns","Vulkan barrier cap skipped samples"},
+        {"Vulkan push constant calls","Vulkan push constant wall samples","Vulkan push constant observed sampled wall ns","Vulkan push constant cap skipped samples"},
+        {"Vulkan dynamic state calls","Vulkan dynamic state wall samples","Vulkan dynamic state observed sampled wall ns","Vulkan dynamic state cap skipped samples"}};
+    static_assert(std::size(labels)==prime::dawn_call_profile::CategoryCount);
     aurora::trace::count("Vulkan call profiled submissions",1,Render);
     uint64_t invalid=0,checksum=1;
     for(unsigned i=0;i<count;++i) {
@@ -342,6 +348,35 @@ extern "C" void prime_ps4_dawn_call_stats(const PrimeDawnCallStats* stats,unsign
     // additive closing token lets analysis reject partial bundles rather than
     // dividing a sample duration by an unrelated sample count.
     aurora::trace::count("Vulkan call observation checksum",checksum+invalid,Render);
+}
+extern "C" void prime_ps4_dawn_frontend_stats(const PrimeDawnCallStats* stats,unsigned count) {
+    using namespace aurora::trace;
+    if(!stats || count!=prime::dawn_call_profile::frontend::CategoryCount) return;
+    // Six API families; cap/invalid counts remain explicit but aggregate to
+    // avoid four extra labels per family in the global stage registry.
+    static constexpr const char* labels[][3]={
+        {"Dawn frontend pipeline calls","Dawn frontend pipeline wall samples","Dawn frontend pipeline observed sampled wall ns"},
+        {"Dawn frontend bind-group calls","Dawn frontend bind-group wall samples","Dawn frontend bind-group observed sampled wall ns"},
+        {"Dawn frontend immediate calls","Dawn frontend immediate wall samples","Dawn frontend immediate observed sampled wall ns"},
+        {"Dawn frontend draw calls","Dawn frontend draw wall samples","Dawn frontend draw observed sampled wall ns"},
+        {"Dawn frontend indexed-draw calls","Dawn frontend indexed-draw wall samples","Dawn frontend indexed-draw observed sampled wall ns"},
+        {"Dawn frontend finish calls","Dawn frontend finish wall samples","Dawn frontend finish observed sampled wall ns"}};
+    static_assert(std::size(labels)==prime::dawn_call_profile::frontend::CategoryCount);
+    aurora::trace::count("Dawn frontend profiled batches",1,Render);
+    uint64_t invalid=0,capped=0,checksum=1;
+    for(unsigned i=0;i<count;++i) {
+        if(stats[i].calls) {
+            aurora::trace::count(labels[i][0],stats[i].calls,Render);
+            aurora::trace::count(labels[i][1],stats[i].samples,Render);
+            aurora::trace::count(labels[i][2],stats[i].sampledWallNs,Render);
+        }
+        invalid+=stats[i].invalidClocks;
+        capped+=stats[i].cappedSamples;
+        checksum+=stats[i].calls+stats[i].samples+stats[i].sampledWallNs;
+    }
+    if(invalid) aurora::trace::count("Dawn frontend invalid wall clocks",invalid,Render);
+    if(capped) aurora::trace::count("Dawn frontend cap skipped samples",capped,Render);
+    aurora::trace::count("Dawn frontend observation checksum",checksum+invalid+capped,Render);
 }
 extern "C" void prime_ps4_descriptor_bind_counts(uint64_t calls,uint64_t sets) {
     // Dawn aggregates inside each descriptor tracker. Two events per render or

@@ -1,6 +1,9 @@
 """Exercise actual Vulkan call sampling and existing SubmitImpl lifetime."""
 from pathlib import Path
 import hashlib
+import json
+import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -35,7 +38,49 @@ class DawnCallProfileTests(unittest.TestCase):
                 ['-DNO_OBSERVER'] if absent else [])
             result=subprocess.run([program],capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-            self.assertIn('zero_clock_reads=1' if absent else 'capped_samples=256',result.stdout)
+            self.assertIn('zero_clock_reads=1' if absent else 'capped_samples=384',result.stdout)
+            print(result.stdout.strip())
+
+    def test_frontend_sampling_value_returns_and_independent_tls(self):
+        program=self.build('frontend-profile',[ROOT/'tests/dawn_frontend_profile.cpp'])
+        result=subprocess.run([program],capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('driver_ids_preserved=1 independent_nested_tls=1',result.stdout)
+        print(result.stdout.strip())
+
+    @unittest.skipUnless((ROOT/'build/pc-asset-importer/compile_commands.json').exists(),
+                         'Existing real Dawn Null dependencies required')
+    def test_frontend_actual_dawn_commands_and_owned_references(self):
+        host=ROOT/'build/pc-asset-importer';out=ROOT/'build/dawn-call-profile-tests';out.mkdir(exist_ok=True)
+        recipes=json.loads((host/'compile_commands.json').read_text())
+        recipe=next(r for r in recipes if r['file'].endswith('/PassResourceUsageTracker.cpp'))
+        for sanitized in (False,True):
+            obj=out/('frontend-null-san.o' if sanitized else 'frontend-null.o')
+            args=shlex.split(recipe['command']);args[args.index('-o')+1]=str(obj)
+            args[args.index('-c')+1]=str(ROOT/'tests/dawn_frontend_commands.cpp')
+            args+=['-UNDEBUG','-DPRIME_DAWN_FRONTEND_TEST=1','-I'+str(ROOT/'platform/ps4/compat')]
+            if sanitized:
+                headers=out/'headers';headers.mkdir(exist_ok=True)
+                if not(headers/'sanitizer').exists():
+                    (headers/'sanitizer').symlink_to('/usr/lib/gcc/x86_64-linux-gnu/14/include/sanitizer',target_is_directory=True)
+                args+=['-O1','-g','-DNDEBUG_SANITIZER','-isystem',str(headers),'-fsanitize=address,undefined','-fno-sanitize-link-runtime','-fno-omit-frame-pointer']
+            result=subprocess.run(args,cwd=recipe['directory'],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            command=subprocess.check_output(['ninja','-C',str(host),'-t','commands','gfx_recording_tests'],text=True).splitlines()[-1]
+            tokens=shlex.split(command);link=tokens[2:tokens.index('&&',2)]
+            link=[a for a in link if not('gfx_recording_tests.dir/'in a and a.endswith('.o'))]
+            dependency=next((i for i,a in enumerate(link)if a.startswith('--dependency-file=')),None)
+            if dependency is not None:del link[dependency-1:dependency+1]
+            exe=out/('frontend-null-san'if sanitized else'frontend-null')
+            link[link.index('-o')+1]=str(exe);link.insert(link.index('-o'),str(obj));env=dict(os.environ)
+            if sanitized:
+                link+=['-Wl,--no-as-needed','-L/usr/lib/gcc/x86_64-linux-gnu/14','-lasan','-lubsan']
+                env.update(LD_PRELOAD='/usr/lib/gcc/x86_64-linux-gnu/14/libasan.so',ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
+            result=subprocess.run(link,cwd=host,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            result=subprocess.run([exe],env=env,capture_output=True,text=True,timeout=30)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn('complete_command_stream_equal=1',result.stdout)
             print(result.stdout.strip())
 
     def test_actual_submit_scope_covers_commands_and_early_errors(self):
@@ -51,10 +96,16 @@ class DawnCallProfileTests(unittest.TestCase):
         source=(ROOT/'external/dawn/src/dawn/native/vulkan/CommandBufferVk.cpp').read_text()
         for name in ['CmdDraw','CmdDrawIndexed','CmdDrawIndirect','CmdDrawIndexedIndirect',
                      'CmdDrawIndirectCountKHR','CmdDrawIndexedIndirectCountKHR',
-                     'CmdBindDescriptorSets','CmdBindPipeline','CmdPipelineBarrier']:
+                     'CmdBindDescriptorSets','CmdBindPipeline','CmdPipelineBarrier','CmdPushConstants']:
             self.assertIn(', vk.'+name+',' if name!='CmdPipelineBarrier' else ', device->fn.'+name+',',source)
         self.assertIn('PRIME_DAWN_VK_CALL(Barrier, device->fn.CmdPipelineBarrier,',
             (ROOT/'external/dawn/src/dawn/native/vulkan/CommandRecordingContextVk.cpp').read_text())
+        for name in ('CmdSetViewport','CmdSetScissor','CmdSetBlendConstants','CmdSetStencilReference',
+                     'CmdSetDepthBounds','CmdSetLineWidth'):
+            self.assertIn('PRIME_DAWN_VK_CALL(DynamicState, device->fn.'+name+',',source)
+        pipeline=(ROOT/'external/dawn/src/dawn/native/vulkan/RenderPipelineVk.cpp').read_text()
+        self.assertIn('PRIME_DAWN_VK_CALL(DynamicState, device->fn.function,',pipeline)
+        self.assertEqual(pipeline.count('PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetStencilOpEXT,'),2)
 
     def test_versioned_configuration_preserves_old_release_rollback(self):
         fixture=ROOT/'tests/dawn_call_profile_rollback.cpp'

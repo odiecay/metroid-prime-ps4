@@ -25,16 +25,15 @@ roughly **80 MB**; you add your own game image separately.
 
 ![DualShock 4 quick guide: original-style buttons with twin-stick aim](docs/images/ps4-controls.svg)
 
-## Download — Release Candidate 9
+## Download — Release Candidate 10
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.52-RC9.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.53-RC10.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
-RC9 reduces repeated CPU work when preparing compatible geometry and retains
-the earlier presentation, shader caching, control, startup and exit fixes.
-Console measurements for the latest changes are in progress. Heavy Hangar and
-Main Plaza views have been around 39–42 FPS; lighter views can reach 60.
-A locked 1080p60 and a complete playthrough have not been verified.
+RC10 retains the renderer improvements and tightens the automated controller
+tests. Console testing is incomplete. Heavy Hangar and Main Plaza views have
+been around 39–42 FPS; lighter views can reach 60. A locked 1080p60 and a
+complete playthrough have not been verified.
 Please include the room and what you were doing when reporting a problem.
 
 ## Getting it running

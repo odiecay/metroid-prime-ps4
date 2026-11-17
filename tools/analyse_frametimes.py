@@ -87,12 +87,14 @@ VULKAN_CALL_FAMILIES = (
     ('descriptor', 'Vulkan descriptor binds', 'Descriptor binds'),
     ('pipeline', 'Vulkan pipeline binds', 'Pipeline binds'),
     ('barrier', 'Vulkan pipeline barriers', 'Pipeline barriers'),
+    ('push constant', 'Vulkan push constant calls', 'Push constants'),
+    ('dynamic state', 'Vulkan dynamic state calls', 'Dynamic state'),
 )
 
 
 def vulkan_call_report(rows):
     """Summarise only coherent sampled-wall bundles, never complete CPU/GPU cost."""
-    totals=defaultdict(int); rejected=0; configured=False; observed=False
+    totals=defaultdict(int); rejected=0; configured=False; observed=False; families_observed=set()
     for window in rows:
         configured |= window.get('vulkan_call_sampling',{}).get('enabled',False)
         counters=defaultdict(int)
@@ -100,6 +102,7 @@ def vulkan_call_report(rows):
             if stage.get('kind')==2 and stage.get('lane')=='render' and stage.get('stage','').startswith('Vulkan '):
                 counters[stage['stage']]+=stage.get('counter',0)
         if not counters: continue
+        present={name for _,name,_ in VULKAN_CALL_FAMILIES if name in counters}
         observed=True
         submissions=counters['Vulkan call profiled submissions']
         invalid=counters['Vulkan call invalid wall clocks']
@@ -115,13 +118,17 @@ def vulkan_call_report(rows):
             checksum+=calls+samples+duration+capped
         valid &= (checksum & ((1<<64)-1))==counters['Vulkan call observation checksum']
         if not valid: rejected+=1;continue
+        families_observed.update(present)
         for name,value in counters.items(): totals[name]+=value
     if not observed and not configured: return []
     lines=['','Vulkan driver calls (observed sampled CPU-side wall):']
     if totals['Vulkan call profiled submissions']:
         lines+=['| Call family | Calls | Valid samples | Cap-skipped samples | Observed mean us |',
                 '|---|---:|---:|---:|---:|']
-        for prefix,call_name,label in VULKAN_CALL_FAMILIES:
+        for index,(prefix,call_name,label) in enumerate(VULKAN_CALL_FAMILIES):
+            # Older captures did not instrument the appended categories; do
+            # not turn their absence into a false measured zero-call claim.
+            if index>=4 and call_name not in families_observed:continue
             samples=totals[f'Vulkan {prefix} wall samples']
             mean=(f"{totals[f'Vulkan {prefix} observed sampled wall ns']/samples/1000:.3f}" if samples else 'unavailable')
             lines.append(f"| {label} | {totals[call_name]} | {samples} | {totals[f'Vulkan {prefix} cap skipped samples']} | {mean} |")
@@ -223,6 +230,60 @@ def draw_prep_report(rows):
     return lines
 
 
+
+DAWN_FRONTEND_FAMILIES = (
+    ('pipeline', 'Pipeline binds'),
+    ('bind-group', 'Bind groups (including dynamic uniforms)'),
+    ('immediate', 'Immediate updates'),
+    ('draw', 'Draw'),
+    ('indexed-draw', 'DrawIndexed'),
+    ('finish', 'CommandEncoder Finish'),
+)
+
+
+def dawn_frontend_call_report(rows):
+    """The frontend domain is independent of Vulkan Submit observations."""
+    totals=defaultdict(int);rejected=0;configured=False;observed=False
+    for window in rows:
+        configured |= window.get('dawn_frontend_call_sampling',{}).get('enabled',False)
+        counters=defaultdict(int)
+        for stage in window.get('stages',[]):
+            if stage.get('kind')==2 and stage.get('lane')=='render' and stage.get('stage','').startswith('Dawn frontend '):
+                counters[stage['stage']]+=stage.get('counter',0)
+        if not counters:continue
+        observed=True
+        batches=counters['Dawn frontend profiled batches']
+        invalid=counters['Dawn frontend invalid wall clocks'];capped=counters['Dawn frontend cap skipped samples']
+        checksum=batches+invalid+capped;calls=0;samples=0
+        valid=all(isinstance(v,int)and v>=0 for v in counters.values())and batches>0
+        valid &= not(window.get('dropped_events',0)or window.get('unknown_stages',0))
+        for prefix,_ in DAWN_FRONTEND_FAMILIES:
+            n=counters[f'Dawn frontend {prefix} calls'];sample=counters[f'Dawn frontend {prefix} wall samples'];ns=counters[f'Dawn frontend {prefix} observed sampled wall ns']
+            valid &= sample<=n and(sample>0 or ns==0)
+            calls+=n;samples+=sample;checksum+=n+sample+ns
+        valid &= samples+invalid+capped<=calls
+        valid &= (checksum&((1<<64)-1))==counters['Dawn frontend observation checksum']
+        if not valid:rejected+=1;continue
+        for name,value in counters.items():totals[name]+=value
+    if not observed and not configured:return []
+    lines=['','Dawn frontend APIs (GX/present; observed sampled inclusive wall):']
+    if totals['Dawn frontend profiled batches']:
+        lines+=['| API family | Calls | Valid samples | Observed mean us |','|---|---:|---:|---:|']
+        for prefix,label in DAWN_FRONTEND_FAMILIES:
+            samples=totals[f'Dawn frontend {prefix} wall samples']
+            mean=f"{totals[f'Dawn frontend {prefix} observed sampled wall ns']/samples/1000:.3f}"if samples else'unavailable'
+            lines.append(f"| {label} | {totals[f'Dawn frontend {prefix} calls']} | {samples} | {mean} |")
+        lines.append(f"Cap-skipped samples (all frontend families): {totals['Dawn frontend cap skipped samples']}; invalid wall clocks: {totals['Dawn frontend invalid wall clocks']}.")
+    else:lines.append('No complete valid frontend call observations; no API timing is available.')
+    if rejected:lines.append(f'Excluded {rejected} incomplete/damaged frontend counter windows; separate events can straddle polls.')
+    lines.append('The existing one-in64 rotating sampler is capped at64 attempts per family/batch. '
+                 'Bind-group calls include dynamic uniform bindings; Finish scopes end before Submit. '
+                 'These are API sample means including unseparated lock wait and scheduling, not CPU execution, GPU time, '
+                 'total frontend cost or frame percentiles. Unwrapped custom-effect/UI calls and non-API frontend work are not attributed; '
+                 'no complete family cost or missing timing is extrapolated.')
+    return lines
+
+
 def report(rows):
     stages=defaultdict(list)
     for window in rows:
@@ -260,6 +321,7 @@ def report(rows):
         if work: background.append(f"{lane}: {name} = {work/1e6:.3f} ms")
     if counters: lines+=['','Observed counters:']+['- '+x for x in counters]
     lines+=vulkan_call_report(rows)
+    lines+=dawn_frontend_call_report(rows)
     lines+=decoder_report(rows)
     lines+=draw_prep_report(rows)
     if background: lines+=['','Work without a main/render frame ID (not a per-frame cost):']+['- '+x for x in background]

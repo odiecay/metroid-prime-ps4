@@ -143,6 +143,7 @@ class BenchmarkTourTests(unittest.TestCase):
         self.assertTrue(all(r['coverage_scope']=='assisted_room_actions' for r in rows))
         self.assertTrue(all(r['planned_rooms']==24 and r['planned_phases']==96 for r in rows))
         self.assertTrue(all(r['steering']=='closed_loop_polyline_v4' for r in rows))
+        self.assertTrue(all(r['input_ownership']=='exclusive' for r in rows))
         self.assertEqual(rows[0]['world'],'158EFE17');self.assertEqual(rows[0]['mrea'],'D1241219')
         self.assertTrue(all(r['shader_stable_frames']>=8 for r in begins))
         self.assertEqual(sum(r['event']=='rehearse_end' for r in rows),96)

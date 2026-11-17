@@ -318,7 +318,7 @@ index 064b572f5c..57fbc7ccd6 100644
  #else
  #error "Unimplemented Vulkan backend platform"
 diff --git a/src/dawn/native/vulkan/CommandBufferVk.cpp b/src/dawn/native/vulkan/CommandBufferVk.cpp
-index d9ee304571..d90eac25f0 100644
+index d9ee304571..58b9d148c5 100644
 --- a/src/dawn/native/vulkan/CommandBufferVk.cpp
 +++ b/src/dawn/native/vulkan/CommandBufferVk.cpp
 @@ -27,7 +27,14 @@
@@ -526,6 +526,15 @@ index d9ee304571..d90eac25f0 100644
      }
  
      void Apply(const VulkanFunctions& vk,
+@@ -414,7 +525,7 @@ class ImmediateTracker : public T {
+             uint32_t pushConstantRangeStartOffset =
+                 GetImmediateIndexInPipeline(static_cast<uint32_t>(offset), pipelineMask) *
+                 kImmediateElementByteSize;
+-            vk.CmdPushConstants(commandBuffer, layout, kImmediateShaderStages,
++            PRIME_DAWN_VK_CALL(PushConstants, vk.CmdPushConstants, commandBuffer, layout, kImmediateShaderStages,
+                                 pushConstantRangeStartOffset,
+                                 checked_cast<uint32_t>(size * kImmediateElementByteSize),
+                                 this->mContent.template Get<uint32_t>(immediateContentStartOffset));
 @@ -423,6 +534,9 @@ class ImmediateTracker : public T {
          // Reset all dirty bits after uploading.
          this->mDirty.reset();
@@ -603,6 +612,46 @@ index d9ee304571..d90eac25f0 100644
  
      RenderPassState state(device->fn, recordingContext);
  
+@@ -1758,10 +1886,10 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+ 
+     // Set the default value for the dynamic state
+     {
+-        device->fn.CmdSetLineWidth(commands, 1.0f);
+-        device->fn.CmdSetDepthBounds(commands, 0.0f, 1.0f);
++        PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetLineWidth, commands, 1.0f);
++        PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetDepthBounds, commands, 0.0f, 1.0f);
+ 
+-        device->fn.CmdSetStencilReference(commands, VK_STENCIL_FRONT_AND_BACK, 0);
++        PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetStencilReference, commands, VK_STENCIL_FRONT_AND_BACK, 0);
+ 
+         float blendConstants[4] = {
+             0.0f,
+@@ -1769,7 +1897,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+             0.0f,
+             0.0f,
+         };
+-        device->fn.CmdSetBlendConstants(commands, blendConstants);
++        PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetBlendConstants, commands, blendConstants);
+ 
+         // The viewport and scissor default to cover all of the attachments
+         VkViewport viewport;
+@@ -1779,14 +1907,14 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+         viewport.height = -static_cast<float>(renderPassCmd->height);
+         viewport.minDepth = 0.0f;
+         viewport.maxDepth = 1.0f;
+-        device->fn.CmdSetViewport(commands, 0, 1, &viewport);
++        PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetViewport, commands, 0, 1, &viewport);
+ 
+         VkRect2D scissorRect;
+         scissorRect.offset.x = static_cast<int32_t>(renderPassCmd->renderArea.x);
+         scissorRect.offset.y = static_cast<int32_t>(renderPassCmd->renderArea.y);
+         scissorRect.extent.width = renderPassCmd->renderArea.width;
+         scissorRect.extent.height = renderPassCmd->renderArea.height;
+-        device->fn.CmdSetScissor(commands, 0, 1, &scissorRect);
++        PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetScissor, commands, 0, 1, &scissorRect);
+ 
+         // Apply default frag depth
+         state.immediates.SetClampFragDepth(0.0, 1.0);
 @@ -1804,7 +1932,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
                  if (draw->vertexCount > 0 && draw->instanceCount > 0) {
                      DAWN_TRY(
@@ -667,6 +716,40 @@ index d9ee304571..d90eac25f0 100644
                              commands, indirectBuffer->GetHandle(),
                              static_cast<VkDeviceSize>(cmd->indirectOffset),
                              countBuffer->GetHandle(),
+@@ -2059,13 +2187,13 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+             case Command::SetBlendConstant: {
+                 SetBlendConstantCmd* cmd = mCommands.NextCommand<SetBlendConstantCmd>();
+                 const std::array<float, 4> blendConstants = ConvertToFloatColor(cmd->color);
+-                device->fn.CmdSetBlendConstants(commands, blendConstants.data());
++                PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetBlendConstants, commands, blendConstants.data());
+                 break;
+             }
+ 
+             case Command::SetStencilReference: {
+                 SetStencilReferenceCmd* cmd = mCommands.NextCommand<SetStencilReferenceCmd>();
+-                device->fn.CmdSetStencilReference(commands, VK_STENCIL_FRONT_AND_BACK,
++                PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetStencilReference, commands, VK_STENCIL_FRONT_AND_BACK,
+                                                   cmd->reference);
+                 break;
+             }
+@@ -2090,7 +2218,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                     viewport.width = 1;
+                 }
+ 
+-                device->fn.CmdSetViewport(commands, 0, 1, &viewport);
++                PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetViewport, commands, 0, 1, &viewport);
+ 
+                 // Try applying the immediate data that contain min/maxDepth immediately. This can
+                 // be deferred if no pipeline is currently bound.
+@@ -2106,7 +2234,7 @@ MaybeError CommandBuffer::RecordRenderPass(CommandRecordingContext* recordingCon
+                 rect.extent.width = cmd->width;
+                 rect.extent.height = cmd->height;
+ 
+-                device->fn.CmdSetScissor(commands, 0, 1, &rect);
++                PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetScissor, commands, 0, 1, &rect);
+                 break;
+             }
+ 
 diff --git a/src/dawn/native/vulkan/CommandRecordingContextVk.cpp b/src/dawn/native/vulkan/CommandRecordingContextVk.cpp
 index 33b9ebeea8..be7bbd855f 100644
 --- a/src/dawn/native/vulkan/CommandRecordingContextVk.cpp
@@ -735,6 +818,49 @@ index 9c48d23a1f..8adbd70020 100644
  
      Device* device = ToBackend(GetDevice());
  
+diff --git a/src/dawn/native/vulkan/RenderPipelineVk.cpp b/src/dawn/native/vulkan/RenderPipelineVk.cpp
+index a25e986053..4bd7196a49 100644
+--- a/src/dawn/native/vulkan/RenderPipelineVk.cpp
++++ b/src/dawn/native/vulkan/RenderPipelineVk.cpp
+@@ -27,6 +27,12 @@
+ 
+ #include "src/dawn/native/vulkan/RenderPipelineVk.h"
+ 
++#ifdef __ORBIS__
++#include <prime_dawn_call_profile.h>
++#else
++#define PRIME_DAWN_VK_CALL(category, function, ...) function(__VA_ARGS__)
++#endif
++
+ #include <string>
+ #include <utility>
+ #include <vector>
+@@ -927,7 +933,7 @@ ResultOrError<RenderPipeline::SpecializationResult> RenderPipeline::InitializeSp
+ 
+ #define SetDynamicState(function, state)                       \
+     if (!prevState || prevState->state != mDynamicState.state) \
+-    device->fn.function(commands, mDynamicState.state)
++    PRIME_DAWN_VK_CALL(DynamicState, device->fn.function, commands, mDynamicState.state)
+ 
+ void RenderPipeline::ApplyDynamicState(VkCommandBuffer& commands,
+                                        const RenderPipeline* prevPipeline) const {
+@@ -951,14 +957,14 @@ void RenderPipeline::ApplyDynamicState(VkCommandBuffer& commands,
+         if (mDynamicState.stencilTestEnable) {
+             if (!prevState || prevState->packedFrontStencil != mDynamicState.packedFrontStencil) {
+                 VkStencilOpState stencilOp = UnpackStencilOpState(mDynamicState.packedFrontStencil);
+-                device->fn.CmdSetStencilOpEXT(commands, VK_STENCIL_FACE_FRONT_BIT, stencilOp.failOp,
++                PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetStencilOpEXT, commands, VK_STENCIL_FACE_FRONT_BIT, stencilOp.failOp,
+                                               stencilOp.passOp, stencilOp.depthFailOp,
+                                               stencilOp.compareOp);
+             }
+ 
+             if (!prevState || prevState->packedBackStencil != mDynamicState.packedBackStencil) {
+                 VkStencilOpState stencilOp = UnpackStencilOpState(mDynamicState.packedBackStencil);
+-                device->fn.CmdSetStencilOpEXT(commands, VK_STENCIL_FACE_BACK_BIT, stencilOp.failOp,
++                PRIME_DAWN_VK_CALL(DynamicState, device->fn.CmdSetStencilOpEXT, commands, VK_STENCIL_FACE_BACK_BIT, stencilOp.failOp,
+                                               stencilOp.passOp, stencilOp.depthFailOp,
+                                               stencilOp.compareOp);
+             }
 diff --git a/src/dawn/native/vulkan/SwapChainVk.cpp b/src/dawn/native/vulkan/SwapChainVk.cpp
 index 179453e57e..46084449f2 100644
 --- a/src/dawn/native/vulkan/SwapChainVk.cpp

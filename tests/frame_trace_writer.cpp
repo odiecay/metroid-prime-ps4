@@ -50,8 +50,13 @@ int main(int argc,char** argv) {
             prime_ps4_dawn_duration(4,1500000);
             prime_ps4_dawn_duration(5,100000);
             const PrimeDawnCallStats calls[]={
-                {128,2,1000,0},{64,1,200,0},{1,0,0,0},{32,1,50,id==2?1ull:0ull}};
-            prime_ps4_dawn_call_stats(calls,4);
+                {128,2,1000,0},{64,1,200,0},{1,0,0,0},{32,1,50,id==2?1ull:0ull},
+                {64,1,80,0,0},{128,2,100,0,3}};
+            prime_ps4_dawn_call_stats(calls,6);
+            const PrimeDawnCallStats frontend[]={
+                {128,2,1000,0,0},{64,1,200,0,0},{128,2,300,0,0},
+                {128,2,500,0,0},{128,2,600,0,0},{1,0,0,id==2?1ull:0ull,id==2?3ull:0ull}};
+            prime_ps4_dawn_frontend_stats(frontend,6);
             prime_ps4_descriptor_bind_counts(2,3);
             prime_ps4_bind_group_usage_counts(5,2);
             emit({id,id*100000000,3000000,"Dawn encoding (inclusive)",Render,Inclusive});

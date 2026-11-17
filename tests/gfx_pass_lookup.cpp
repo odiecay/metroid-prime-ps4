@@ -1,3 +1,4 @@
+#include "../game/MetroidPrimePort/extern/aurora/lib/gfx/dawn_call_profile.hpp"
 #include <webgpu/webgpu_cpp.h>
 #include "src/dawn/native/CommandBuffer.h"
 #include "src/dawn/native/Commands.h"

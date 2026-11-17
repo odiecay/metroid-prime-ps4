@@ -13,6 +13,7 @@ class GXEncodingTests(unittest.TestCase):
         draw=(AURORA/'gx/pipeline.cpp').read_text().split('void render(const DrawData& data, const wgpu::RenderPassEncoder& pass) {',1)[1].split('\n}\n',1)[0]
         prelude=r'''
 #include "gfx/encoding_state.hpp"
+#include "gfx/dawn_call_profile.hpp"
 #include <array>
 #include <cassert>
 #include <cstdint>

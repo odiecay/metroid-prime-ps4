@@ -20,8 +20,11 @@ class BenchmarkPlayLogicTests(unittest.TestCase):
         out=Path(os.environ.get('PRIME_PLAY_LOGIC_BUILD_DIR',str(ROOT/'build/benchmark-play-logic')))
         out.mkdir(parents=True,exist_ok=True)
         source=(ROOT/'platform/ps4/benchmark_game.cpp').read_text()
-        start=source.index('benchmark_play_placement(valid,')
-        tail=source[start:source.index('return;',start)+len('return;')]
+        start=source.index('void acknowledge_placement(')
+        begin=source.index('{',start);end=begin+1;depth=1
+        while depth:
+            depth+=(source[end]=='{')-(source[end]=='}');end+=1
+        tail=source[begin+1:end-1]
         fixture='''#include <cassert>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +36,7 @@ bool benchmark_play_enabled(){return enabled;}
 void PADClearVirtualStatus(int slot){assert(slot==0);owned=false;++clears;}
 void benchmark_play_placement(bool,float,float,float,float,float,bool,uint64_t,float){++calls;if(finishing)enabled=false;}
 void placement_tail(bool valid,uint64_t elapsed){
+Point where;
 '''+tail+'''
 }
 int main(){for(bool valid:{false,true})for(bool terminal:{false,true}){

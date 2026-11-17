@@ -163,6 +163,8 @@ class VulkanCallAnalysisTests(unittest.TestCase):
         text='\n'.join(m.vulkan_call_report([self.call_window()]))
         self.assertIn('| Draw / indexed / indirect | 128 | 2 | 3 | 0.500 |',text)
         self.assertIn('| Pipeline binds | 128 | 0 | 0 | unavailable |',text)
+        self.assertIn('| Push constants | 128 | 2 | 0 | 0.500 |',text)
+        self.assertIn('| Dynamic state | 128 | 2 | 0 | 0.500 |',text)
         self.assertIn('Invalid wall-clock intervals excluded:1'.replace(':1',': 1'),text)
         self.assertIn('not complete category cost',text)
         self.assertIn('possible early-region bias',text)
@@ -181,3 +183,48 @@ class VulkanCallAnalysisTests(unittest.TestCase):
         self.assertEqual(m.vulkan_call_report([dict(stages=[])]),[])
         text='\n'.join(m.vulkan_call_report([dict(stages=[],vulkan_call_sampling={'enabled':True})]))
         self.assertIn('no call timing is available',text)
+
+    def test_old_four_family_capture_remains_valid_without_fake_new_calls(self):
+        row=self.call_window()
+        row['stages']=[s for s in row['stages'] if not s['stage'].startswith(('Vulkan push constant','Vulkan dynamic state'))
+                       and s['stage']!='Vulkan call observation checksum']
+        row['stages'].append(dict(lane='render',kind=2,stage='Vulkan call observation checksum',
+                                  counter=sum(s['counter'] for s in row['stages']) & ((1<<64)-1)))
+        text='\n'.join(m.vulkan_call_report([row]))
+        self.assertIn('| Draw / indexed / indirect | 128 | 2 | 3 | 0.500 |',text)
+        self.assertNotIn('| Push constants |',text);self.assertNotIn('| Dynamic state |',text)
+        self.assertNotIn('Excluded',text)
+
+    def test_appended_category_split_observation_is_rejected(self):
+        row=self.call_window()
+        row['stages']=[s for s in row['stages'] if s['stage']!='Vulkan dynamic state wall samples']
+        self.assertIn('No complete valid','\n'.join(m.vulkan_call_report([row])))
+class DawnFrontendCallAnalysisTests(unittest.TestCase):
+    @staticmethod
+    def call_window():
+        values={'Dawn frontend profiled batches':2,'Dawn frontend invalid wall clocks':1,
+                'Dawn frontend cap skipped samples':3}
+        for prefix,_ in m.DAWN_FRONTEND_FAMILIES:
+            values[f'Dawn frontend {prefix} calls']=128
+            values[f'Dawn frontend {prefix} wall samples']=2
+            values[f'Dawn frontend {prefix} observed sampled wall ns']=1000
+        values['Dawn frontend finish wall samples']=0
+        values['Dawn frontend finish observed sampled wall ns']=0
+        values['Dawn frontend observation checksum']=sum(values.values())&((1<<64)-1)
+        return dict(stages=[dict(lane='render',kind=2,stage=k,counter=v)for k,v in values.items()])
+
+    def test_frontend_means_have_distinct_scope_and_no_cpu_gpu_claim(self):
+        text='\n'.join(m.dawn_frontend_call_report([self.call_window()]))
+        self.assertIn('| DrawIndexed | 128 | 2 | 0.500 |',text)
+        self.assertIn('| CommandEncoder Finish | 128 | 0 | unavailable |',text)
+        self.assertIn('unseparated lock wait',text)
+        self.assertIn('no complete family cost',text)
+        self.assertNotIn('Vulkan driver calls',text)
+
+    def test_frontend_split_checksum_invalid_and_dropped_windows_rejected(self):
+        row=self.call_window();split=dict(row,stages=row['stages'][:-1]);ending=dict(stages=row['stages'][-1:])
+        self.assertIn('Excluded 2','\n'.join(m.dawn_frontend_call_report([split,ending])))
+        row=self.call_window();row['dropped_events']=1
+        self.assertIn('Excluded 1','\n'.join(m.dawn_frontend_call_report([row])))
+        row=self.call_window();row['stages'][2]['counter']=-1
+        self.assertIn('Excluded 1','\n'.join(m.dawn_frontend_call_report([row])))

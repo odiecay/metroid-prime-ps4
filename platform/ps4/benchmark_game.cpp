@@ -19,6 +19,7 @@
 #include "Collision/CCollisionPrimitive.hpp"
 #include "Collision/CRayCastResult.hpp"
 #include "Collision/CMaterialFilter.hpp"
+#include "Kyoto/Input/CFinalInput.hpp"
 #include <aurora/frame_trace.hpp>
 #include <dolphin/pad.h>
 #include <algorithm>
@@ -31,7 +32,10 @@ namespace prime {
 namespace {
 using namespace benchmark_play;
 struct Adapter {
-    unsigned visit{},view{},unmorphTicks{};bool prepared{},measuring{},controls{},placing{},routeValid{},toEnd=true;
+    unsigned visit{},view{},unmorphTicks{},drainTicks{},settleTicks{},placementTicks{};
+    uint64_t lastDrainTick=~uint64_t{},lastSettleTick=~uint64_t{},placementSetupNs{};
+    bool prepared{},measuring{},controls{},placing{},routeValid{},toEnd=true,placementPending{};
+    Point previousPlacementPosition;
     Route route;RouteCursor cursor;uint32_t routeWorld{},routeArea{};std::bitset<65536> seen;
 } adapter;
 Point point(const CVector3f& p){return {p.GetX(),p.GetY(),p.GetZ()};}
@@ -151,7 +155,35 @@ BenchmarkPlayObservation observe(CStateManager& mgr,bool seed) {
     }
     return sample;
 }
-void neutral(){PADStatus pad{};pad.err=PAD_ERR_NONE;PADSetVirtualStatus(0,&pad);}
+void submit(const PADStatus& pad) {
+    if(benchmark_coverage_enabled())PADSetVirtualStatusExclusive(0,&pad);
+    else PADSetVirtualStatus(0,&pad);
+}
+void neutral(){PADStatus pad{};pad.err=PAD_ERR_NONE;submit(pad);}
+bool neutral_input(const CFinalInput& input) {
+    return std::isfinite(input.Time())&&input.Time()>0&&
+        input.ALeftX()==0&&input.ALeftY()==0&&input.ARALeft()==0&&input.ARARight()==0&&
+        input.ARAUp()==0&&input.ARADown()==0&&input.ALTrigger()==0&&input.ARTrigger()==0&&
+        !input.DA()&&!input.DB()&&!input.DX()&&!input.DY()&&!input.DZ()&&!input.DL()&&!input.DR()&&
+        !input.DStart()&&!input.DDPUp()&&!input.DDPDown()&&!input.DDPLeft()&&!input.DDPRight()&&
+        !input.PA()&&!input.PB()&&!input.PX()&&!input.PY()&&!input.PZ()&&!input.PL()&&!input.PR()&&
+        !input.PStart()&&!input.PDPUp()&&!input.PDPDown()&&!input.PDPLeft()&&!input.PDPRight()&&
+        !input.PLTrigger()&&!input.PRTrigger();
+}
+void acknowledge_placement(bool valid,uint64_t elapsed,Point where) {
+    benchmark_play_placement(valid,where.x,where.y,where.z,
+        adapter.route.length,adapter.route.openness,adapter.route.jumpSafe,elapsed,
+        std::atan2(-adapter.route.dx,adapter.route.dy));
+    if(!benchmark_play_enabled())PADClearVirtualStatus(0);
+}
+void placement_failure(CStateManager& mgr,const char* reason) {
+    const auto p=point(mgr.GetPlayer()->GetTranslation()),v=point(mgr.GetPlayer()->GetVelocityWR());
+    const auto force=point(mgr.GetPlayer()->GetTotalForceWR());
+    std::fprintf(stderr,"[benchmark-play] %s tick=%u pos=(%.5f %.5f %.5f) velocity=(%.5f %.5f %.5f) force=(%.5f %.5f %.5f) neutral=%d\n",
+        reason,mgr.GetUpdateFrameIndex(),p.x,p.y,p.z,v.x,v.y,v.z,force.x,force.y,force.z,neutral_input(mgr.GetFinalInput()));
+    benchmark_play_fail(reason);
+    if(!benchmark_play_enabled())PADClearVirtualStatus(0);
+}
 void drive_legacy(CStateManager& mgr,const BenchmarkPlayControl& control) {
     auto& player=*mgr.Player();const Point pos=point(player.GetTranslation());
     if(!inside_route(adapter.route,pos)){
@@ -232,7 +264,7 @@ void drive(CStateManager& mgr,const BenchmarkPlayControl& control) {
         const auto sticks=stick_for_world(goal,point(forward),morphed?.55f:1.f);
         pad.stickX=static_cast<s8>(sticks.x);pad.stickY=static_cast<s8>(sticks.y);
     }
-    PADSetVirtualStatus(0,&pad);
+    submit(pad);
 }
 }
 void benchmark_game_tick(CStateManager& mgr) {
@@ -246,17 +278,31 @@ void benchmark_game_tick(CStateManager& mgr) {
         // Both direct-aim presets strafe; preserve the original movement/jump
         // force laws for this benchmark instead of switching to Remastered.
         PortDebug::SetRemasteredMovement(false);adapter.controls=true;
+        if(benchmark_coverage_enabled()) {
+            // The scripted holds/presses own their duration, independently of
+            // accessibility toggles copied into this isolated benchmark profile.
+            PortDebug::SetLockOnToggle(false);PortDebug::SetStickyCharge(false);
+            PortDebug::SetGrappleToggle(false);PortDebug::SetSpiderToggle(false);
+        }
     }
     bool ready=area&&area->IsPostConstructed()&&!mgr.GetWantsToQuit()&&mgr.GetGameState()==CStateManager::kGS_Running&&
         player&&!mgr.GetCameraManager()->IsInCinematicCamera()&&player->GetCameraState()!=CPlayer::kCS_Spawned;
     if(!play)ready=ready&&!player->GetDisableInput()&&mgr.GetCameraManager()->IsInFPCamera();
     auto before=benchmark_play_control();
+    // Refuse a timed begin if an untimed settled pose later leaves its validated
+    // path (for example a moving actor). The core sees not-ready before it can
+    // emit measure_begin; no timed teleport or permissive guard is involved.
+    const bool placementDrift=benchmark_coverage_enabled()&&ready&&adapter.prepared&&
+        adapter.visit==before.visit&&!before.placing&&!before.measuring&&!before.rehearsing&&
+        adapter.routeWorld==uint32_t(world->IGetWorldAssetId())&&adapter.routeArea==uint32_t(area->GetAreaAssetId())&&
+        !inside_route(adapter.route,point(player->GetTranslation()));
     if(play&&(before.measuring||before.rehearsing)) {
         aurora::trace::Scope observer("benchmark gameplay observation",aurora::trace::Main);
         benchmark_play_observe(observe(mgr,false));
     }
     prime_ps4_benchmark_tick(world?uint32_t(world->IGetWorldAssetId()):0,area?uint32_t(area->GetAreaAssetId()):0,
-        mgr.GetUpdateFrameIndex(),aurora::trace::frame_id(),ready);
+        mgr.GetUpdateFrameIndex(),aurora::trace::frame_id(),ready&&!placementDrift);
+    if(placementDrift&&benchmark_play_enabled())placement_failure(mgr,"placement_drift");
     if(!play)return;
     auto control=benchmark_play_control();
     if(!control.active){PADClearVirtualStatus(0);return;}
@@ -273,18 +319,55 @@ void benchmark_game_tick(CStateManager& mgr) {
             // A new visit alone invalidates the cache, even if its room repeats.
             if(adapter.visit!=control.visit)adapter.routeValid=false;
             adapter.visit=control.visit;adapter.view=control.view;adapter.prepared=false;adapter.unmorphTicks=0;
+            adapter.drainTicks=0;adapter.lastDrainTick=~uint64_t{};
+            adapter.placementPending=false;adapter.settleTicks=adapter.placementTicks=0;
+            adapter.lastSettleTick=~uint64_t{};
+        }
+        if(benchmark_coverage_enabled()&&adapter.placementPending) {
+            const uint64_t tick=mgr.GetUpdateFrameIndex();
+            if(tick==adapter.lastSettleTick)return;
+            adapter.lastSettleTick=tick;
+            const auto actual=point(player->GetTranslation()),velocity=point(player->GetVelocityWR());
+            if(!inside_route(adapter.route,actual)){placement_failure(mgr,"placement_drift");return;}
+            const bool stable=neutral_input(mgr.GetFinalInput())&&finite(velocity)&&
+                player->GetPlayerMovementState()==NPlayer::kMS_OnGround&&
+                std::hypot(velocity.x,velocity.y)<.03f&&std::fabs(velocity.z)<.03f&&
+                flat_distance(actual,adapter.previousPlacementPosition)<.002f&&
+                std::fabs(actual.z-adapter.previousPlacementPosition.z)<.002f;
+            adapter.previousPlacementPosition=actual;
+            adapter.settleTicks=stable?adapter.settleTicks+1:0;
+            if(++adapter.placementTicks>=120&&adapter.settleTicks<2){placement_failure(mgr,"placement_unstable");return;}
+            if(adapter.settleTicks<2)return;
+            adapter.placementPending=false;adapter.prepared=true;
+            acknowledge_placement(true,adapter.placementSetupNs,actual);
+            return;
         }
         if(player->GetMorphballTransitionState()!=CPlayer::kMS_Unmorphed) {
             PADStatus pad{};pad.err=PAD_ERR_NONE;
             if(adapter.unmorphTicks++%120<6)pad.button=PAD_BUTTON_X;
-            PADSetVirtualStatus(0,&pad);return;
+            submit(pad);adapter.drainTicks=0;return;
+        }
+        if(benchmark_coverage_enabled()) {
+            // CFinalInput was latched before this hook. Installing a raw neutral
+            // PAD here alone cannot erase this tick's old movement. Let the
+            // real input pipeline consume exclusive neutral on distinct ticks
+            // BEFORE Stop/Teleport, without duplicating ProcessInput/camera or
+            // hold-toggle processing and without changing the simulation step.
+            const uint64_t tick=mgr.GetUpdateFrameIndex();
+            if(tick==adapter.lastDrainTick)return;
+            adapter.lastDrainTick=tick;
+            if(!neutral_input(mgr.GetFinalInput())){adapter.drainTicks=0;return;}
+            if(++adapter.drainTicks<2)return;
         }
         const auto start=nanos();const bool valid=setup(mgr,adapter.route,adapter.routeValid);const auto elapsed=nanos()-start;
         adapter.prepared=valid;adapter.routeValid=valid;adapter.toEnd=true;adapter.cursor={};adapter.seen.reset();adapter.measuring=false;
-        benchmark_play_placement(valid,adapter.route.start.x,adapter.route.start.y,adapter.route.start.z,
-            adapter.route.length,adapter.route.openness,adapter.route.jumpSafe,elapsed,
-            std::atan2(-adapter.route.dx,adapter.route.dy));
-        if(!benchmark_play_enabled())PADClearVirtualStatus(0);
+        if(benchmark_coverage_enabled()&&valid) {
+            adapter.prepared=false;adapter.placementPending=true;adapter.placementSetupNs=elapsed;
+            adapter.previousPlacementPosition=point(player->GetTranslation());
+            adapter.settleTicks=adapter.placementTicks=0;adapter.lastSettleTick=~uint64_t{};
+            return;
+        }
+        acknowledge_placement(valid,elapsed,adapter.route.start);
         return;
     }
     if((control.measuring||control.rehearsing)&&ready&&adapter.prepared) {

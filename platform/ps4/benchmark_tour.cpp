@@ -133,12 +133,13 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         "\"shaders_queued\":%u,\"shaders_background\":%u,\"shaders_active\":%u,"
         "\"shaders_pending\":%u,\"shader_drop_pending\":%u,\"shader_prefetch_queued\":%u,\"shader_prefetch_active\":%u,\"shader_epoch\":%llu,"
         "\"shader_completed\":%llu,\"shader_failures\":%llu,\"shader_stable_frames\":%u,"
-        "\"steering\":\"%s\",\"movement_basis\":\"%s\","
+        "\"steering\":\"%s\",\"input_ownership\":\"%s\",\"movement_basis\":\"%s\","
         "\"twin_stick\":%s,\"remastered_movement\":%s",
         state.shaderRetries,state.shaders.queued,state.shaders.background,state.shaders.active,state.shaders.pending,
         state.shaders.dropPending,state.shaders.prefetchQueued,state.shaders.prefetchActive,static_cast<unsigned long long>(state.shaders.epoch),
         static_cast<unsigned long long>(state.shaders.completed),static_cast<unsigned long long>(state.shaders.failures),
         state.shaderStableFrames,state.coverage ? "closed_loop_polyline_v4" : state.play ? "closed_loop_route_v3" : "none",
+        state.coverage ? "exclusive" : state.play ? "additive" : "none",
         state.play ? "body_direct_aim_or_ball_control_flat" : "none",
         state.play ? "true" : "null",state.play ? "false" : "null");
     if (state.coverage) {

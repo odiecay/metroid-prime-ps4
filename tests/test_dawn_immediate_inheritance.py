@@ -32,7 +32,8 @@ class DawnImmediateInheritanceTests(unittest.TestCase):
         end = source.index("// Records the necessary barriers", start)
         output = ROOT / "build/dawn-immediate-inheritance-host"
         output.mkdir(exist_ok=True)
-        (output / "actual_immediate_tracker.inc").write_text(source[start:end])
+        (output / "actual_immediate_tracker.inc").write_text(
+            "#define PRIME_DAWN_VK_CALL(category, function, ...) function(__VA_ARGS__)\n"+source[start:end])
         commands = json.loads((BUILD / "compile_commands.json").read_text())
         recipe = next(c for c in commands if c["file"].endswith("/PassResourceUsageTracker.cpp"))
         compile_args = shlex.split(recipe["command"])

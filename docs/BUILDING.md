@@ -64,6 +64,8 @@ For assisted 24-room/96-phase coverage, use `benchmark-coverage.cfg` with
 `PROJECT_PRIME_BENCHMARK_COVERAGE_V3` followed by a newline. It writes to
 `benchmarks/coverage-v3/`. It uses validated multiwaypoint routes, replenishes
 assisted inventory per room and stops incomplete if a room or action fails.
+V3 owns its scripted controller input and acknowledges settled reset poses
+before timing begins.
 V2 retains its original six-room comparison workload. This is assisted room
 coverage, not a complete playthrough. Remove active request files and relaunch
 for normal play.

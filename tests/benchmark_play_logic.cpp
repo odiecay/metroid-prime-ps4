@@ -12,15 +12,19 @@ static void polyline_steering_checks() {
     for(unsigned heading=0;heading<8;++heading)
     for(float lag:{.08f,.16f,.3f})for(float drift:{-.2f,.2f})
     for(float speed:{5.5f,8.4f})for(float scale:{1.f,.55f})for(float initial:{0.f,.55f,-.55f})
-    for(float leg:{2.f,6.f})for(bool closed:{false,true}) {
+    for(float leg:{2.f,6.f})for(unsigned shapeKind=0;shapeKind<3;++shapeKind) {
         const float angle=heading*.7853981634f,dx=std::cos(angle),dy=std::sin(angle);
-        Route r;r.count=5;r.length=4*leg;r.openness=30;
-        const std::array<Point,5> shape=closed?
-            std::array<Point,5>{{{0,0,0},{leg,0,0},{leg,leg,0},{0,leg,0},{0,0,0}}}:
-            std::array<Point,5>{{{0,0,0},{leg,0,0},{leg,leg,0},{2*leg,leg,0},{2*leg,2*leg,0}}};
+        Route r;r.count=shapeKind==2?6:5;r.openness=30;
+        const std::array<Point,6> shape=shapeKind==2?
+            std::array<Point,6>{{{leg,leg,0},{0,0,0},{-leg,0,0},{-leg,-leg,0},{0,0,0},{leg,leg,0}}}:
+            shapeKind==1?std::array<Point,6>{{{0,0,0},{leg,0,0},{leg,leg,0},{0,leg,0},{0,0,0},{}}}:
+            std::array<Point,6>{{{0,0,0},{leg,0,0},{leg,leg,0},{2*leg,leg,0},{2*leg,2*leg,0},{}}};
         for(unsigned i=0;i<r.count;++i)r.waypoints[i]={95+shape[i].x*dx-shape[i].y*dy,-48+shape[i].x*dy+shape[i].y*dx,5};
-        r.start=r.waypoints[0];r.end=r.waypoints[r.count-1];r.dx=dx;r.dy=dy;
-        Point p{r.start.x-dy*initial,r.start.y+dx*initial,r.start.z},velocity{};
+        for(unsigned i=1;i<r.count;++i)r.length+=flat_distance(r.waypoints[i-1],r.waypoints[i]);
+        r.start=r.waypoints[0];r.end=r.waypoints[r.count-1];
+        const float first=flat_distance(r.start,r.waypoints[1]);
+        r.dx=(r.waypoints[1].x-r.start.x)/first;r.dy=(r.waypoints[1].y-r.start.y)/first;
+        Point p{r.start.x-r.dy*initial,r.start.y+r.dx*initial,r.start.z},velocity{};
         RouteCursor cursor;std::array<Point,4> delay{};unsigned turns=0;float distance=0;
         for(unsigned tick=0;tick<1800;++tick) {
             if(!inside_route(r,p)){std::fprintf(stderr,"polyline escape h%u lag%.2f drift%.2f speed%.1f scale%.2f initial%.2f tick%u pos%.3f/%.3f leg%u\n",heading,lag,drift,speed,scale,initial,tick,p.x,p.y,cursor.segment);std::abort();}
@@ -54,7 +58,7 @@ static void polyline_steering_checks() {
     auto bad=r;bad.count=9;assert(!inside_route(bad,{}));assert(path_patrol(bad,{}, {},cursor).x==0);
     bad=r;bad.waypoints[1].x=std::numeric_limits<float>::quiet_NaN();assert(!inside_route(bad,{}));
     bad=r;bad.waypoints[3].x=std::numeric_limits<float>::quiet_NaN();assert(!inside_route(bad,{1,0,0}));
-    std::printf("polyline %u actual-PAD delayed/drift cases; real2m/6m legs, left/right turns and reversals, max centreline distance %.4fm, unchanged .65m guard\n",cases,worst);
+    std::printf("polyline %u actual-PAD delayed/drift cases; real2m/6m legs, left/right turns, revisited junctions and reversals, max centreline distance %.4fm, unchanged .65m guard\n",cases,worst);
 }
 // Response simulation deliberately tests the controller and actual PADClamp,
 // not game collision or physics. Hardware acceptance remains required.
