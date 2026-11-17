@@ -142,7 +142,10 @@ class BenchmarkTourTests(unittest.TestCase):
         self.assertTrue(all(r['tour_version']==3 and r['pass']==1 for r in rows))
         self.assertTrue(all(r['coverage_scope']=='assisted_room_actions' for r in rows))
         self.assertTrue(all(r['planned_rooms']==24 and r['planned_phases']==96 for r in rows))
-        self.assertTrue(all(r['steering']=='closed_loop_polyline_v4' for r in rows))
+        self.assertTrue(all(r['steering']=='closed_loop_stop_turn_v5' for r in rows))
+        self.assertTrue(all(r['stick_aim_pixels_per_second']==600 and r['walk_speed_percent']==100
+                            and r['pointer_aim'] is False and r['mouse_aim'] is False
+                            and r['gyro_mode']==0 and r['turn_policy']=='grounded_stop_aim_go' for r in rows))
         self.assertTrue(all(r['input_ownership']=='exclusive' for r in rows))
         self.assertEqual(rows[0]['world'],'158EFE17');self.assertEqual(rows[0]['mrea'],'D1241219')
         self.assertTrue(all(r['shader_stable_frames']>=8 for r in begins))

@@ -1,0 +1,1404 @@
+{
+  "schema": 1,
+  "mesa_commit": "1a59cc147b54e3970814b37313e2f27357672e9d",
+  "sdk_archive": "mesa/build-orbis/src/amd/vulkan/libvulkan_radeon.a",
+  "sdk_archive_sha256": "d1ba74620b23c78cfb0e26739941036a820a6ff650edbece2efb88d3a9a141dd",
+  "sdk_member": "radv_cmd_buffer.c.o",
+  "sdk_member_sha256": "ece40880f6282469b2b4820c49b8e0534436b85d531347633c026eb5f48cc2e8",
+  "compiler_sha256": "639fe63e3b5aa9bd784bddcb2fd3ba912c108763e43b793f2edb7d0edfe9d0a0",
+  "compiler_version": "Ubuntu clang version 18.1.8 (17)",
+  "sources": [
+    {
+      "path": "include/c99_compat.h",
+      "git_blob": "83895422226f11ec3922e58bac44ea21292177ed",
+      "sha256": "92445314d5fb3eff3a12eaf4cc864f9b459862a99594403b36ea79dfe149d267"
+    },
+    {
+      "path": "include/no_extern_c.h",
+      "git_blob": "f2f14aafab5d3559fa5d7902f9666926447c2d4c",
+      "sha256": "60883a8d2b2978b861ef686c5a9afb41cf91ffec7c56baca89c626e7fea2d385"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_av1std.h",
+      "git_blob": "5347b3639505d7ae7104d014b62a8ec0e680db50",
+      "sha256": "c75c1d324b97d247aef0008024bc7f3adb98c741ab7f66c882ec38fdacc7ee33"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_av1std_decode.h",
+      "git_blob": "e262e961ac04d00f5452c29f4ddf285f654a447c",
+      "sha256": "7e3a1ce177c12546d410f3179ce1b81f2da7a8eba4f525b29cd563ab4099c0e5"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_av1std_encode.h",
+      "git_blob": "8afb2537f165a9c543b2f5b332cb09192f1c6b60",
+      "sha256": "8d166b4543260a38347860443b1a59c7a5e86cdb0d0facaf4c704f667de030e3"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_h264std.h",
+      "git_blob": "2ae8932433efcc39002fa7ad2d12afc2a35f61ca",
+      "sha256": "fded484cef9f90fbbd089e0647268f36e5f4292179fbc5428a2c9e8d7709bbe9"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_h264std_decode.h",
+      "git_blob": "fa1140586bbde4fc4add06605d18f0dffb26b23a",
+      "sha256": "37b970c3d80536ad1ac074cfe19b58ee03c3075378e02179e1dc5e4351266821"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_h264std_encode.h",
+      "git_blob": "aba6fbf3a1d0b8a64061263072dc70cd3d3cacb2",
+      "sha256": "227e092b53c4e7ca1a948ed021704511c1ed16040cd6188ff6703e5ae66db64d"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_h265std.h",
+      "git_blob": "cf0cbefc088c670b3e7283ec4bfb85bf96b54886",
+      "sha256": "0b81f8986ada015ef2e127449eff9d9634899bb59a0a9277a4054e9ec4416c12"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_h265std_decode.h",
+      "git_blob": "7cfe54f284340b0f5559a8171721bcb58832a478",
+      "sha256": "879a0dd370a1b1ad184638906c52bdfe7d80d639fbc5a5baa8b02d7c5b60b147"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_h265std_encode.h",
+      "git_blob": "fd8ee03b6980f391dcff226c4e5ea0ce9c1310c2",
+      "sha256": "abb3e72af22e4e0a3dbe5dff7be1b275949388809fb3987830341e8f495ea1c7"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_vp9std.h",
+      "git_blob": "312a78574ef80010507cb92c32db7e00623cf7d2",
+      "sha256": "0a47125865376a3fe7014b69ff6db9d04e30ebf8c4d15664f1d894649ad5c09d"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codec_vp9std_decode.h",
+      "git_blob": "2a7ecdc9776375b0fc088b30eaed35c998887b96",
+      "sha256": "1ceb1a8d0e3370e508cf688a6e57dc314cd82186b60f3cef420ea4b1b483865d"
+    },
+    {
+      "path": "include/vk_video/vulkan_video_codecs_common.h",
+      "git_blob": "faedbef4673c1071a104c2de6c6270bec9ce657b",
+      "sha256": "d2e7caa396c521d03d491a269572b1d31b925b5127d22fda14199951ebae89f8"
+    },
+    {
+      "path": "include/vulkan/vk_android_native_buffer.h",
+      "git_blob": "21f82ef57a28fe5c5b538519f7628134e08a6db9",
+      "sha256": "cf47964326ac4f0685cceadbbc97aff185138255b07facdf7e26bc0ce3147224"
+    },
+    {
+      "path": "include/vulkan/vk_icd.h",
+      "git_blob": "38b137ce23f64a5e723b10cdcbbe7aa506a6e1f4",
+      "sha256": "ba22828f76de7231e7dfbb5d8564e7a58dd9f5dbeac8c1f0ff6c056c92db744a"
+    },
+    {
+      "path": "include/vulkan/vk_platform.h",
+      "git_blob": "bbe60245d0f6f054782782b4de390193837e569c",
+      "sha256": "a2cd9085c66776845d2524c3b0e73ccf4827ba046aa6f676c4b8ddbed47d6552"
+    },
+    {
+      "path": "include/vulkan/vulkan.h",
+      "git_blob": "934d9b1ecbd3f34984365ed55e1d5fd2cf9c5804",
+      "sha256": "096f50152d0b298d8df84a561a37d8190c8a60af34dff0e2cc8328b24491a640"
+    },
+    {
+      "path": "include/vulkan/vulkan_android.h",
+      "git_blob": "1e318dc71faf6ea6d89e8b766db40f5d5e4a8b7f",
+      "sha256": "9dcce545a790b5b1ce00e103ade95c8efa4c8a0bf2ff39865d76a7d2f987aef2"
+    },
+    {
+      "path": "include/vulkan/vulkan_core.h",
+      "git_blob": "dca67ddb2f0f4dc179c831eb5e0436fb7ede1b70",
+      "sha256": "0cc95c90f1144d10d50d65cf686f7e9855e3fc3311faded3f0171ad0105d2741"
+    },
+    {
+      "path": "src/amd/common/ac_binary.h",
+      "git_blob": "fbe20c475480ebb057d18015ca8f0f72be18f21d",
+      "sha256": "6c6cdb69cefcde2798cb36e22a8b4e41daa34a39d6ca484a6a2bc9dc9bf589db"
+    },
+    {
+      "path": "src/amd/common/ac_cmdbuf.h",
+      "git_blob": "ccf15c9dccab9d0b9af780428060c5641a585ea3",
+      "sha256": "d26c1e2e47410bc4641104cd8908edc01356952b228c9b4eac15ea45e61e2a2c"
+    },
+    {
+      "path": "src/amd/common/ac_cmdbuf_base.h",
+      "git_blob": "59adbb4f239e76a219e87dbe0a15a548a90ddffa",
+      "sha256": "c54e41f5bb162818752dabcc1e087bcd33cfb3dffa9cea3158f261432e4fb3fb"
+    },
+    {
+      "path": "src/amd/common/ac_cmdbuf_cp.h",
+      "git_blob": "5e4ed02550b1b62897640dd3e918232dc82e77d4",
+      "sha256": "beacb5d3b6d16e8aee6d8c72656849b86e7e750f7e879eda4ba29ddccd1009b6"
+    },
+    {
+      "path": "src/amd/common/ac_cmdbuf_sdma.h",
+      "git_blob": "62ab059e89a15bd2b5770bdbd86817910a445217",
+      "sha256": "45f5ad8e6f75136a7ebdd20c435a690bfda45a5ad13084f975b6c944856bb554"
+    },
+    {
+      "path": "src/amd/common/ac_cmdbuf_video.h",
+      "git_blob": "3829d32e9d50476df624c128755ba9deb87be7c1",
+      "sha256": "431c98c37d5025c75e11a637f118b7f5755c19ab46590429f6cf187aac83852b"
+    },
+    {
+      "path": "src/amd/common/ac_debug.h",
+      "git_blob": "31ed979624546de4152191d205df6baa58f6e501",
+      "sha256": "6b599e1a23a063ab9dbd7b0a9717723aa8ca07d92a03cc4fa910e143c3f4bbd8"
+    },
+    {
+      "path": "src/amd/common/ac_descriptors.h",
+      "git_blob": "520bc86729c3774f623dd14253761703fa71bbf5",
+      "sha256": "a077392e9776146fe4b43d4714e8c1bb29d0e2cf494af43cdfbca9a7998a0cba"
+    },
+    {
+      "path": "src/amd/common/ac_formats.h",
+      "git_blob": "7f3a09563bc9f1165a88147df0321194dd96101b",
+      "sha256": "1740e6fee9a03e4220302ba81ba3576b6322a4f99086e75d5f8399c9d64949e0"
+    },
+    {
+      "path": "src/amd/common/ac_gpu_info.h",
+      "git_blob": "324a74ad4d8c2b2ae72c0ad825fef25e7f3a5152",
+      "sha256": "bb082f1b5fd7d2245648441fed02f3cce22fdd6f9ba03d4ce35b3a0d8e70f9da"
+    },
+    {
+      "path": "src/amd/common/ac_guardband.h",
+      "git_blob": "5819cef84f5d65f0b48ebadcb54e2372013121b3",
+      "sha256": "c7c1513455e79a296a1f7abaf6e1ae88fa191c8718a4bf5be4e2e6a453d1d7a7"
+    },
+    {
+      "path": "src/amd/common/ac_hw_stage.h",
+      "git_blob": "bcf8083c466079d7d73462cb70dacc6a05f1a857",
+      "sha256": "2f5bc3d8bbb77e4de5edf210e593098c9f360003571576103bc8fbbf0da38c3b"
+    },
+    {
+      "path": "src/amd/common/ac_perfcounter.h",
+      "git_blob": "5779fe6cdae91fabbd43c83ea3d86d815b8e942f",
+      "sha256": "7a1e0ce113cc3c4ef7bc6ff54d60e2a93f779bb2c2e267fbf2c6a49251658a57"
+    },
+    {
+      "path": "src/amd/common/ac_pm4.h",
+      "git_blob": "8ad4dcc03c99f6989a99091d9ce51010b66de2cf",
+      "sha256": "3d2e830b029be8f9d2f1d27dac4652b42bdfc98122a2bd2723b287180cec0b14"
+    },
+    {
+      "path": "src/amd/common/ac_rgp.h",
+      "git_blob": "bfa3f39c48824e8e07816c6de555584c4fd8e4bf",
+      "sha256": "9ca7971b2daeea99e7d0486d9fd8204422c4e48da75185c020c3566690453f19"
+    },
+    {
+      "path": "src/amd/common/ac_shader_args.h",
+      "git_blob": "9654f3550c43b0a60ebb02268d8e64c1ceafdbdd",
+      "sha256": "9e74817e89a8d4353fa446a55576414a9ae926f07aeab121a2fa49b7c3ce3ad8"
+    },
+    {
+      "path": "src/amd/common/ac_shader_debug_info.h",
+      "git_blob": "d1551da85d5bbf671eedd07943265d98e6956b0e",
+      "sha256": "445fc19362abc7046501e75d001493f7ff218e16b4b9f1b1b1827b640c93129c"
+    },
+    {
+      "path": "src/amd/common/ac_shader_util.h",
+      "git_blob": "8e9dd6cbb5e78d7c2b8361121e926189c02b886e",
+      "sha256": "6d792570224706f3b59ed7e9a3f64cab94d002bc67349d2ce3b007c4260ba7a5"
+    },
+    {
+      "path": "src/amd/common/ac_spm.h",
+      "git_blob": "4107507c1a8d2362c100946e293617027ee2eeaf",
+      "sha256": "502429e43a6d61e7d39382ee7f4db7743cdd905aa571cc5cc20ffca8b5014d9e"
+    },
+    {
+      "path": "src/amd/common/ac_sqtt.h",
+      "git_blob": "8de4a101e648e4311670c7384b263ecb985b244e",
+      "sha256": "7a766a6db57e0767ee303038d49fc21d8f62f8129d8d21a2b94ce39854315bf1"
+    },
+    {
+      "path": "src/amd/common/ac_surface.h",
+      "git_blob": "5e52c1df1bd7f4bb8bee3a02e313a48b7aaa8e52",
+      "sha256": "89fa017fe1271c5b4551437401af31126c69f78f477631bc333417451772909a"
+    },
+    {
+      "path": "src/amd/common/ac_vcn.h",
+      "git_blob": "036405bc5575084ab6930756b8994089b9175c77",
+      "sha256": "f28c0fa9ba7057d62222eb16deac97742178aa3c422b06ba42251780b7595fdf"
+    },
+    {
+      "path": "src/amd/common/ac_vcn_enc.h",
+      "git_blob": "11d11c2dd089a9dbc48ee8704bcae56f5a2692af",
+      "sha256": "87c1bb575758dac591ee6199e56bf33a741237871789370b668256ec1a4e6ef2"
+    },
+    {
+      "path": "src/amd/common/ac_video.h",
+      "git_blob": "f599833d464ed239106521a32b8f52809d2495a7",
+      "sha256": "7bd1bb7acd63eaf23ab547271921bf86186cde6ac88178bf14631c52775d68f9"
+    },
+    {
+      "path": "src/amd/common/ac_video_dec.h",
+      "git_blob": "eb8796441cb3bcf930905a4273cd2953b1a3999f",
+      "sha256": "741c251e91467f4061cdfda2dd40627b71d430a1bab50f622029714e33ba8a7f"
+    },
+    {
+      "path": "src/amd/common/amd_family.h",
+      "git_blob": "14adecb66d08967e009594c499dbb6a631fe5c98",
+      "sha256": "c5ba72554864a1bd18fc0d9b553ca4b009b0a9da430ab21718b18cbb2eee3572"
+    },
+    {
+      "path": "src/amd/common/nir/ac_nir.h",
+      "git_blob": "0421672b09a7f3be5b58ec9c09b28f2651d139d2",
+      "sha256": "36f324f80a4df448fbaf2f6d1c43857653e70d7d86dc936a2e6f8442a90205ab"
+    },
+    {
+      "path": "src/amd/common/sid.h",
+      "git_blob": "a2b203e72a8c118cfcb7d1c3fa411616277aa55c",
+      "sha256": "ab9a023178aa4ee5944e20cc5720fe82a5b4b07b026a89488f38eb713e011968"
+    },
+    {
+      "path": "src/amd/compiler/aco_interface.h",
+      "git_blob": "bca5ca0817dcfff00c2f5dff90442e36be23f2b2",
+      "sha256": "1d4d1fe509c3cbea498426e7ca98eabc4193ba480270d423f7213064ddca3376"
+    },
+    {
+      "path": "src/amd/compiler/aco_nir_call_attribs.h",
+      "git_blob": "7c6572d1616e6b28ec10c7457fead16740f46111",
+      "sha256": "4e547ccff1518ba9a8150ae6c47115b73018a3974afb7143b2544c219dbd4aa0"
+    },
+    {
+      "path": "src/amd/compiler/aco_shader_info.h",
+      "git_blob": "e2819a508d987ab61f927a02855a97ff0a29406c",
+      "sha256": "96c26dd20277c32bd3416da2c63373f6cc2b1aac957f6968ac29f638eb17e357"
+    },
+    {
+      "path": "src/amd/vulkan/meta/radv_meta.h",
+      "git_blob": "f581f396b2ccd17368db6bc1e95decb870f050f0",
+      "sha256": "63aafc3275741cec21996229d63aad382095f22227302195082e86092ea922dd"
+    },
+    {
+      "path": "src/amd/vulkan/radv_android.h",
+      "git_blob": "d1515cae2ee81067bdb1a232859f1937aed5f4f7",
+      "sha256": "d9ef9d5af531b674368f7db1bb1cef513f237921032f02e9ab618d9b19843d90"
+    },
+    {
+      "path": "src/amd/vulkan/radv_buffer.h",
+      "git_blob": "7e194eee23015cf0d8884bd262eec4e2a149683d",
+      "sha256": "e807d9ab9440d4f9ee29f99c6589a2bc574ce26f4a8e510abb8968080a9fea33"
+    },
+    {
+      "path": "src/amd/vulkan/radv_buffer_view.h",
+      "git_blob": "bcdd6dfa886c0052a19a1f9acd836dfaf6763c32",
+      "sha256": "455377db01e72f9c3201370bb040b7a5110b08bbf7f26f14636354b919cce8f8"
+    },
+    {
+      "path": "src/amd/vulkan/radv_cmd_buffer.c",
+      "git_blob": "924bd608d4be2999da1233211a33fa7e67eae014",
+      "sha256": "55c4c83edac67924a4c8e1454c940b798b796f03feb078038c03c3c1398bdf3e"
+    },
+    {
+      "path": "src/amd/vulkan/radv_cmd_buffer.h",
+      "git_blob": "1e88b53a55dc96794b67e086b8ea8761b6737e9b",
+      "sha256": "c7d9b9654e200bc3b59d0c6c75061db65c9619a898638ed49778b8ed608e2a35"
+    },
+    {
+      "path": "src/amd/vulkan/radv_constants.h",
+      "git_blob": "9f02e00bbcbe08fff01ff61b5df5da04b401b1c8",
+      "sha256": "eac5e86981d282399313f7a4d97b8808496b929209d9d99b762c8d736d721c31"
+    },
+    {
+      "path": "src/amd/vulkan/radv_cp_dma.h",
+      "git_blob": "eff7d0aa815853cd4c50db39a5f8ce09ce18ab9f",
+      "sha256": "2962487b94644c15964627936539379f5acb0730733bebe53660a88c6d53e5ac"
+    },
+    {
+      "path": "src/amd/vulkan/radv_cs.h",
+      "git_blob": "06b0ea574c01cc11a69b06782ed7becb14057aee",
+      "sha256": "a7365bd2f9ef9deb67e0f4be90c440900890e8b31303bb53bf09d1c5e6ad3e1b"
+    },
+    {
+      "path": "src/amd/vulkan/radv_descriptor_pool.h",
+      "git_blob": "cd32004ee7958f22d86aca53194c81d507d6b68d",
+      "sha256": "219dc9a4bce0c6ab3f74d9379548fa7ac067b2d8cc5c2252e0db9ec676d259ab"
+    },
+    {
+      "path": "src/amd/vulkan/radv_descriptor_set.h",
+      "git_blob": "7aa0b0b4f0d31aa29a06a36bca1cd995f4a3a23a",
+      "sha256": "fb180368361e410602b3864e38bde706fac1419e845177aaedc85b3d6a787d07"
+    },
+    {
+      "path": "src/amd/vulkan/radv_descriptor_update_template.h",
+      "git_blob": "d184caf27bba763783da50dca5e0b55f5ca6f06a",
+      "sha256": "1dbd5b73f5caeeb9b07f3b1df2fa1864333b3122690f7e99b25a1f04279f302e"
+    },
+    {
+      "path": "src/amd/vulkan/radv_device.h",
+      "git_blob": "bbd1e11464f1e5ebcb33779cbaeddcd49f1fa090",
+      "sha256": "9f3bb3ebaa1717059a6bacaae3fe48e6a703e0440aa07eeb9ae2624478d32d84"
+    },
+    {
+      "path": "src/amd/vulkan/radv_device_memory.h",
+      "git_blob": "018a264059cbff1401fa7084d932736f8986d7f6",
+      "sha256": "0bcd023004d3fc389999e8aa4d2709f7b4cb97c75837189fde0666adec0faaba"
+    },
+    {
+      "path": "src/amd/vulkan/radv_dgc.h",
+      "git_blob": "3b66454cecb314484bcb05e1f8d95051768179bf",
+      "sha256": "898039628bbed2a0d828f754a154833068eb447640d355c9ae68a8144de2aed1"
+    },
+    {
+      "path": "src/amd/vulkan/radv_event.h",
+      "git_blob": "91a9bd625d72a30bb86b71cfcc2859c2f684fcd6",
+      "sha256": "2232cd12df7e1d0467265b0c17f304ede6bf605a85e251324ceda379a50ea941"
+    },
+    {
+      "path": "src/amd/vulkan/radv_formats.h",
+      "git_blob": "1398dadfbba874d406e0cfbb3a045efc1d0dec43",
+      "sha256": "c31fd241a5eb5a8ac7eb9171d95766dfba467ef08af0aa29b179f2c84fa37bb9"
+    },
+    {
+      "path": "src/amd/vulkan/radv_image.h",
+      "git_blob": "49df8a7d1fb408595f64f1371dce8c84f826e6ec",
+      "sha256": "92f52472e58d3483b606545f8c1fc1f823363e17e4ae4bcf9bf238609a04cbc1"
+    },
+    {
+      "path": "src/amd/vulkan/radv_image_view.h",
+      "git_blob": "2ad6b7f69e68486df69674e4c02ff13ec1324de9",
+      "sha256": "4219366541839a0270e337e4189f4d35e190d2da41963941303843257a027235"
+    },
+    {
+      "path": "src/amd/vulkan/radv_instance.h",
+      "git_blob": "1c37647345a6535843f11f95e413986835f2976c",
+      "sha256": "a3c75ac1da5a2717578ec092d0f768f0a5813ac5b8384002d80d325e050b8630"
+    },
+    {
+      "path": "src/amd/vulkan/radv_physical_device.h",
+      "git_blob": "d00d5626c999351d621f6595a7e17acfa798f714",
+      "sha256": "ff08607f9b3dad3afe80bdd0b2f19cdc58b0667ac5ccb160f0ec9852a2b262d9"
+    },
+    {
+      "path": "src/amd/vulkan/radv_pipeline.h",
+      "git_blob": "50832e7ba87bbc7c87cb871b9d50fe6fc33fa690",
+      "sha256": "ab08b2917975d232676f510259e217d1efd9d50523e1a004297269902fc7a46e"
+    },
+    {
+      "path": "src/amd/vulkan/radv_pipeline_compute.h",
+      "git_blob": "4178761fa3f9a8aa8a05b4e6b4cd0e48941d0b92",
+      "sha256": "cbb1cf721dade028a241e57e0c0751310d4f934781ece9cb04f48dd70e1150b5"
+    },
+    {
+      "path": "src/amd/vulkan/radv_pipeline_graphics.h",
+      "git_blob": "4e63e6276e728c299835511439147ed6f7cacfba",
+      "sha256": "ffb18cf311e7d3ede7256a06b1c8feb0d55d4522ef5b82bfb21b423c7ddc048f"
+    },
+    {
+      "path": "src/amd/vulkan/radv_pipeline_layout.h",
+      "git_blob": "7d9dbbdc3d04cfa53bfd69e779b9ca0ff6fbb939",
+      "sha256": "3980fdc51501a5dbdeb75bc465c92d0b36a9b04de3dd6e4b9e06e9662139db0b"
+    },
+    {
+      "path": "src/amd/vulkan/radv_pipeline_rt.h",
+      "git_blob": "6f800629a1dc91c5a383ff34dfc0368a31e2bb6e",
+      "sha256": "6db85017e7be6552ee8d4cab4d985c02d49060c3f63362a03f84b24e2a650e4d"
+    },
+    {
+      "path": "src/amd/vulkan/radv_queue.h",
+      "git_blob": "c9865f4d7aefaaa086e625a53e4d2bbb954d16ab",
+      "sha256": "0479acf864f89d1489baf9d6a860af47c8287d255f8bde59fce4cf3d43bcec02"
+    },
+    {
+      "path": "src/amd/vulkan/radv_radeon_winsys.h",
+      "git_blob": "632f8c968934a5b5e05b504dc7232989c9404a11",
+      "sha256": "f0c05b71e1478d1f231129f0d10059e0724eaef0a645a62278bdedc016548713"
+    },
+    {
+      "path": "src/amd/vulkan/radv_sdma.h",
+      "git_blob": "96ba8a720450109f6fd2eb8742eeebc55e6a8f86",
+      "sha256": "08cace8e110183740f9c8b8a50d07a43cf5200198e42fbae7e8e2ba9526c344d"
+    },
+    {
+      "path": "src/amd/vulkan/radv_shader.h",
+      "git_blob": "de86131a96a397a8e90e2d6c290b8c53a512d4f9",
+      "sha256": "a044d6f9227d0a6268ba19a262b967a1c048a25b8be9eda0177c2f02f705f137"
+    },
+    {
+      "path": "src/amd/vulkan/radv_shader_args.h",
+      "git_blob": "0b1335106c4889a0da31d3a5ba0a7b2e6774d538",
+      "sha256": "54fcc69f637945d80a1ffd9e1fc45dfac120b33ae0ec20b8c350695d99509443"
+    },
+    {
+      "path": "src/amd/vulkan/radv_shader_info.h",
+      "git_blob": "413972651cd2f831532e17bbcbddbc8b3173843d",
+      "sha256": "e0a72bec943bb33705c018c04eba82dadf884303fd63d99f3df1e543e8ba3925"
+    },
+    {
+      "path": "src/amd/vulkan/radv_shader_object.h",
+      "git_blob": "a1713cf5bb32a5076ab62352b43a6a3b7c375171",
+      "sha256": "c7ed98617c3d2d5ec21394cb822d9db8cccca325df42860ee446e143e1db5b1c"
+    },
+    {
+      "path": "src/amd/vulkan/radv_video.h",
+      "git_blob": "b0ee8a515b1ae4c3bb42567a74a3317282d8d11a",
+      "sha256": "c0bc0067f7531ce4a220acef0124453f5c20d583c16b85d28ac97e4a6755aa49"
+    },
+    {
+      "path": "src/amd/vulkan/tools/radv_debug.h",
+      "git_blob": "e7d0b30318e3f0d18206676b341b695e02c6a296",
+      "sha256": "2bfad300d4ae309f447ddbdb8dbd0c3d2b96346cc31479eeaa6217b4d30a3b2a"
+    },
+    {
+      "path": "src/amd/vulkan/tools/radv_debug_hang.h",
+      "git_blob": "f990c0d5577751460ea81873d60f0008b72a01cf",
+      "sha256": "9da7689824dd60b8ad594cde17f914c026c099cb988272eb576c5bf3a7aa73a8"
+    },
+    {
+      "path": "src/amd/vulkan/tools/radv_debug_nir.h",
+      "git_blob": "645e4fd4928e9ec247c4b77ee31b42c17ea163dd",
+      "sha256": "c552a5005926ae22e0272e0a53d0e6dc8716a4d68fa8c1efa00ae419ceca07b1"
+    },
+    {
+      "path": "src/amd/vulkan/tools/radv_gamma.h",
+      "git_blob": "cef9a07f033b87fd5dc7ea46eecb05c894718f5e",
+      "sha256": "2e0a942de813fe88c40c5bff8afb3d2bd14536ec826714482dba4745ec26056b"
+    },
+    {
+      "path": "src/amd/vulkan/tools/radv_rmv.h",
+      "git_blob": "f24c73970e4320a3500a02c78dab61b38c32968f",
+      "sha256": "b1dfdfa285e4d89346462471e4d12ca2f3359aeee77404160c08e67db21f2a85"
+    },
+    {
+      "path": "src/amd/vulkan/tools/radv_rra.h",
+      "git_blob": "3ac909d1368bdb3e26abab8a0535fa1cd9c42c9d",
+      "sha256": "f58817bddfdbe991e9aa89ba09ca53e3fcb87c178d3fd44e70c6e5b57703a4da"
+    },
+    {
+      "path": "src/amd/vulkan/tools/radv_sqtt.h",
+      "git_blob": "b256cf43d9c1d7b6eb63d1a691206bd509c3467f",
+      "sha256": "27a090aafcf0e7629b9f5f4e731912aaf7799870097f6d9d3e792227d8ca03ef"
+    },
+    {
+      "path": "src/c11/threads.h",
+      "git_blob": "c849f385e3097d4badf5d1c82b44870c9bbcf26b",
+      "sha256": "c8ef5862985f8dd6bc11b0c7ff3ee7f54389b40c078dd7be5e70f6e51d4e6486"
+    },
+    {
+      "path": "src/c11/time.h",
+      "git_blob": "33762f893b91f066418e159c2adeb07078d551d3",
+      "sha256": "2206f6ba6f339b9574f20c26ad21473f0094cbef4df6ef20c3824c47422039bb"
+    },
+    {
+      "path": "src/compiler/glsl_types.h",
+      "git_blob": "cf0dd7dc87db746f6c58b2b8ec06d291bbefa14c",
+      "sha256": "6973693bb2160ca20b8a6781364b224e9e318615bcc6d983b7f4dd79389e5832"
+    },
+    {
+      "path": "src/compiler/list.h",
+      "git_blob": "460a4f7ce19688e31482bc841f15b7adfd43e71c",
+      "sha256": "9fd48602bc7237c32d2ecb2af1f9ea7138d3ec0fb2e6b6b280596536cc22a352"
+    },
+    {
+      "path": "src/compiler/nir/nir.h",
+      "git_blob": "c8c37aada73fe252f81f5a4a34e15c9bf560af77",
+      "sha256": "7912bf6740e4b14db275f6b031464f584ecd2099c467c4467b410edfff43e596"
+    },
+    {
+      "path": "src/compiler/nir/nir_defines.h",
+      "git_blob": "43b3ef3b492bbd006b09ef3711df372ad735f7fb",
+      "sha256": "d9787982a506c51386743b23b39735dc674d86a0fcf12b25bd1372181fbbac35"
+    },
+    {
+      "path": "src/compiler/nir/nir_inline_helpers.h",
+      "git_blob": "fb1535cb1167566084c4521c46613d4c70ab3992",
+      "sha256": "ff6173c3c080ab67d015e7f33569becae29046cbc7de00d5a95fe6fd2775f0f6"
+    },
+    {
+      "path": "src/compiler/nir/nir_shader_compiler_options.h",
+      "git_blob": "8f0e9a7c0e1db5b6e3ddbf54d74856ac33969c07",
+      "sha256": "b5570da381b4e6e672fa032428101f998bca8468ad748fda2f9df4dd0d7ed78b"
+    },
+    {
+      "path": "src/compiler/shader_enums.h",
+      "git_blob": "d9d9ddd89754d0fdb767e2dfdf7ca65ea199df86",
+      "sha256": "a206b036c26034242d09568ffd95f9e881d73bea22fb02d50ee1fab3aba64241"
+    },
+    {
+      "path": "src/compiler/shader_info.h",
+      "git_blob": "f93c695759fcb7d78aa94c0f625d09fb8df4156e",
+      "sha256": "b7c0ffcdc60db695854fa596171c8bffe7928598fe93d1cb17939114b7f4e74b"
+    },
+    {
+      "path": "src/compiler/spirv/spirv.h",
+      "git_blob": "a64573913335537441ffb0f99dde9eea06b18ede",
+      "sha256": "4891ca25447797340570f87239531e24c796af7ae3c7d7724f074a18bdc9b959"
+    },
+    {
+      "path": "src/util/bitscan.h",
+      "git_blob": "b96e7580cff63296868d46f2a919c93f7d9425cf",
+      "sha256": "f7ac55be1a19f7a7bad10b64d16861a37b0e239d147a083612875c929a0bc2b5"
+    },
+    {
+      "path": "src/util/bitset.h",
+      "git_blob": "c60ef37b89b3970b0873923f7297d8bd2ddf3ebf",
+      "sha256": "983c45e4d75cc9ec225b75f40081ee14dc91cf8e64d6d29866b7b3b7d9be1190"
+    },
+    {
+      "path": "src/util/blake3/blake3.h",
+      "git_blob": "1e2618f24e69eb29beba3aa108c62f03022fd93b",
+      "sha256": "875039b6a5dc3a7529e704a07c961c508db2c2f6559a59d0e00ea0dce237f0f7"
+    },
+    {
+      "path": "src/util/blob.h",
+      "git_blob": "fedc3bfa7dd5f96934d1c5e33d14a3d7f7cc46f4",
+      "sha256": "f102f88a8363f799d1a4553b1494ac19482ccb4763eea31f648291fe8ae9420d"
+    },
+    {
+      "path": "src/util/cnd_monotonic.h",
+      "git_blob": "049b5f0736468e4eaf870ae4832251061681062a",
+      "sha256": "d37e1c9b5cf63c5b07ff2159201871535ccab8219693f3c4bc7d0276e5b703dd"
+    },
+    {
+      "path": "src/util/compiler.h",
+      "git_blob": "ddd4cfb836b9c48c2099b971f96f41f9c7a51be2",
+      "sha256": "919661909955445d4a0858f56e0ebaabbcaf8b694f5be8906c987979eeaa4fd0"
+    },
+    {
+      "path": "src/util/detect.h",
+      "git_blob": "f31cbd26331a5c3308649a200f327bd76e194afb",
+      "sha256": "a8ea16b111b4e89830aa9084b7915760e13c8be1e96bc240ae31edab2395439a"
+    },
+    {
+      "path": "src/util/detect_arch.h",
+      "git_blob": "e32de8d50093fc44b2d582d02262220b51207e86",
+      "sha256": "0b4d0d2f98057061e755e7c9af449425a76f5ad7fd76054671b866a3c03e39e5"
+    },
+    {
+      "path": "src/util/detect_cc.h",
+      "git_blob": "0cb11d511f11eab11584fe1e686bb00df013386c",
+      "sha256": "bffcab52c836d510782f872e26055f0ca93562378fccbd5ecdb436a90fdca573"
+    },
+    {
+      "path": "src/util/detect_os.h",
+      "git_blob": "cf2c98acc1826ab9363d607ceb67c06225893e02",
+      "sha256": "9c99abbe4687a8d1ac6ec79212eb8fed726af6dbb3313f1a4db0c806de161bd3"
+    },
+    {
+      "path": "src/util/driconf.h",
+      "git_blob": "5ff608eaff7541d786082abf705c9e1ab8333df8",
+      "sha256": "cab850eb46cb810f66b9aefb2ed743c381bb4c2e39f021e30a3a06d6c780f3d5"
+    },
+    {
+      "path": "src/util/enum_operators.h",
+      "git_blob": "7f1ed0135d9ae02a291748629c090bd76e5e268c",
+      "sha256": "a67abf8ffd599b72b2f2936492a002f73b352bd4e4fac45b33e75232e6493b06"
+    },
+    {
+      "path": "src/util/fast_idiv_by_const.h",
+      "git_blob": "638b52a3ffbb8428adc7066429ae87a363bf8dbd",
+      "sha256": "b8a73cb162a12af091571c5659590e50b0225ea6a0b8b33024881763f0df15bb"
+    },
+    {
+      "path": "src/util/format/u_format.h",
+      "git_blob": "2614a16150db17178b1cd68effd510029abfd5c6",
+      "sha256": "531ae7074955f5b96de1cdeb53df8417bfd2b4dcdfc915b7d4a0c4555b53c67f"
+    },
+    {
+      "path": "src/util/format/u_formats.h",
+      "git_blob": "d359d13232845b8796ebe7ee9ab3da0ae8a171ff",
+      "sha256": "c1e04fd9d1c1e5d53786387339024436dbadab5ce172176366bf443c34278b81"
+    },
+    {
+      "path": "src/util/futex.h",
+      "git_blob": "88bd25b121590f7700bf041566518d6f18d774b4",
+      "sha256": "463263b90f4247f19952d602eeda50ef53ec44b37ef375b42174a52d7f52f4be"
+    },
+    {
+      "path": "src/util/hash_table.h",
+      "git_blob": "0502b9022cec848639a05eaa6ad14046f1d681ac",
+      "sha256": "a383405b5f075129f8d28be45606357b42ad272b4603252a10e48d55a558a817"
+    },
+    {
+      "path": "src/util/list.h",
+      "git_blob": "64a99353d5f15ffeda937d13ac8cd6afdf7e2eaa",
+      "sha256": "230917903d976629b78c3460f9af36aed1a1e5855b4c6609b8d3a3f9ef735e8e"
+    },
+    {
+      "path": "src/util/log.h",
+      "git_blob": "c1d9f806232ef5da5627733c96985ba88f00ec97",
+      "sha256": "73ddc3d866ddfba5ec7351a08aa97561b8b3e90703f87992fb8533a00173f32a"
+    },
+    {
+      "path": "src/util/macros.h",
+      "git_blob": "9db4746b7e9948b003ace5c1156ccad1cbf0b3de",
+      "sha256": "f965ee46d99dcd390d49c86aa9df63bc62ad706ab13d8e3e2ae1b4db57afb238"
+    },
+    {
+      "path": "src/util/mesa-blake3.h",
+      "git_blob": "8c2ae78911fb61960c29924a635af69b76f64508",
+      "sha256": "abe40b32adcee7e10c08ccb9158ba55fe7b0e7fae7e5161966555a53b3483b6a"
+    },
+    {
+      "path": "src/util/os_misc.h",
+      "git_blob": "325115c9a2cd2e66e5f30710b2710189e6041c85",
+      "sha256": "721cec97e4a28c372cbdaf272e3f1c3cde045778da0e174ebb46e01ec57eb719"
+    },
+    {
+      "path": "src/util/os_time.h",
+      "git_blob": "4217ff37b685a63f31b19c97b04e1c283fca3a95",
+      "sha256": "01f5abdcf2867c27e9348fc2706d97639c403bcac8c264e864c5d7ed88ffd8d1"
+    },
+    {
+      "path": "src/util/perf/u_trace.h",
+      "git_blob": "b8ad95ea0bf7217aa0f7e8fc08f167c7755d8712",
+      "sha256": "ec0b1e6aee85963fdb10c9284170b9fa456f71d2df83781da29781f1bd714ece"
+    },
+    {
+      "path": "src/util/ralloc.h",
+      "git_blob": "b332d2a32a104facf05ac35c605b5a1a08f2e303",
+      "sha256": "367cc4b53d8d2a97135e7a443cba670fc0af450ee9026cd21ec47bc517155cec"
+    },
+    {
+      "path": "src/util/range_minimum_query.h",
+      "git_blob": "fc9d9ee343a506a1e96d39951721e3497f251ca2",
+      "sha256": "a2ca6ff344045dc82237c2db6161f951ee8b8b300c762b2700693bac9fb752f7"
+    },
+    {
+      "path": "src/util/rb_tree.h",
+      "git_blob": "b5400306fa4fb75ec54e2b035de0c763b1562da2",
+      "sha256": "4894e87eb11f38cb3d0b73aef82a81121899b38e6cdc1f71e41fba47cc3e45d8"
+    },
+    {
+      "path": "src/util/set.h",
+      "git_blob": "76c4e8ea2cbb22dc1af5eae34cd39079249a85fd",
+      "sha256": "6c70555c9e3da96c4450b922f9de40f3ecc99630a49ed83d1fd6293ece7eb5ca"
+    },
+    {
+      "path": "src/util/simple_mtx.h",
+      "git_blob": "4152bb681e0c0570c7f8e46c3695697810179b01",
+      "sha256": "e0efe2ae0e27477ab412fe62b80dab64d22a8a9e96d9abb59a52dbba2b01241b"
+    },
+    {
+      "path": "src/util/sparse_array.h",
+      "git_blob": "3df45a54644373136b16e6a2e060032f4cefe4a6",
+      "sha256": "2116a04a1fe6336d7bf9e21cbc96245fdbef8d33382602c9becdd6705aefb432"
+    },
+    {
+      "path": "src/util/sparse_bitset.h",
+      "git_blob": "ecf46ddc6bef63a2406cae3cefc3bbc7a2d03391",
+      "sha256": "5c21a15f47236377ce6caafd3768ab21258b6d0c54b3e3b6a960216715b0c3d7"
+    },
+    {
+      "path": "src/util/stack_array.h",
+      "git_blob": "e2133bdc2f4d870a9fa3de5afb091b7bdc860b6b",
+      "sha256": "d89e8bcb1a5c64e2cadbafe45d19fa47d3fa811c01cf661282245db6336fb5d1"
+    },
+    {
+      "path": "src/util/u_atomic.h",
+      "git_blob": "9f79113280a4b8545529825d2be1d2d23cdd5b7b",
+      "sha256": "81bf636924f9c049606ed8d0be2e01cc7b9facc963955efc1faec2140b510960"
+    },
+    {
+      "path": "src/util/u_call_once.h",
+      "git_blob": "04c910f7dabd6908ee7a28ea00641bcf606a165b",
+      "sha256": "c9413af6e96b3ad1bb5e684c0b3c15be635f47774d4eb63ff7f273676fab7a58"
+    },
+    {
+      "path": "src/util/u_debug.h",
+      "git_blob": "2e4d5e3af4ef2571e03d9bcca12e52cdafa68ca7",
+      "sha256": "3fc8d2dc29445c3a5643f10d44dca126e0c0e71d5e6d5051ce73aa646257b7d6"
+    },
+    {
+      "path": "src/util/u_dynarray.h",
+      "git_blob": "948db2610feec4b35810e5a2f83c0916f9b1c19c",
+      "sha256": "1d926e673069c025b53504734e51f45fef387c9733325819ff9bdf862143bc24"
+    },
+    {
+      "path": "src/util/u_endian.h",
+      "git_blob": "fd786423d1f09c494c1f8c53e350885c72da5742",
+      "sha256": "bf02a7d0e9984cf41e046e559e6c343b972031abaa8ecc253e4c641caa2112ea"
+    },
+    {
+      "path": "src/util/u_math.h",
+      "git_blob": "fbcf263c05ff4c894021b647271abfde511d2930",
+      "sha256": "f9f80af6f6c28aa684d5987d1edfb3cd2e958f64dbfd95e41230026cbef98d99"
+    },
+    {
+      "path": "src/util/u_printf.h",
+      "git_blob": "e99eed415d5e755a26e7ed9bd69b404fe649da87",
+      "sha256": "0cbd05e4fe7277dce8d484b9b53c150b1651a1a85212c2d7a323bc1cea15841b"
+    },
+    {
+      "path": "src/util/u_queue.h",
+      "git_blob": "7cbb89cdec3a638559e7821ac72585555c52152a",
+      "sha256": "20fad1ada9a4b8bd6da5eca663fd1c3c52feb7f45338cc0037966bd158839478"
+    },
+    {
+      "path": "src/util/u_sync_provider.h",
+      "git_blob": "1b556be2154113d0b7a470092ce01dfd425974b0",
+      "sha256": "92776c872eb4fc28c16ad5218aa1d3bce1f9c61aaf879b32f497583f4b553ae8"
+    },
+    {
+      "path": "src/util/u_thread.h",
+      "git_blob": "259f0f175a4e84ce285ffd65b7b9f64561a2ac3c",
+      "sha256": "85d66d479f402454192f6a83cccbae97256ef368e527231dd614e041ac65afd7"
+    },
+    {
+      "path": "src/util/vma.h",
+      "git_blob": "cd3e4244af1249ac6fccf95e72207e301e42be0e",
+      "sha256": "1354a3dbf04e907e8cc518cae2263b0f169f73e86d2ea5046e584d8132d4aa02"
+    },
+    {
+      "path": "src/util/xmlconfig.h",
+      "git_blob": "d8957226ac989f235b5357869bbb6bc05c99d323",
+      "sha256": "84574ff67f3849f7e44e974e8af4dd1e41724e6b86db0f29067f977c650bb5ce"
+    },
+    {
+      "path": "src/vulkan/runtime/bvh/vk_bvh_defines.h",
+      "git_blob": "f306510a6533bf05336d6cdbf601cb0650f896f0",
+      "sha256": "5e1d8d81099f23772f0f2f7dae04e0efe98e2471b898149b26e81588b4d44c02"
+    },
+    {
+      "path": "src/vulkan/runtime/radix_sort/common/vk/barrier.h",
+      "git_blob": "cda1852dbd1624913b2ece7498b1ae686bafdf70",
+      "sha256": "878e94088dc5389553dc486cf228124cb3a57412f469a8166747fd26e186c199"
+    },
+    {
+      "path": "src/vulkan/runtime/radix_sort/radix_sort_vk.h",
+      "git_blob": "4b8813fb6395908d2904fada11bb3762a58e681a",
+      "sha256": "31a81c8ad34a5ae49c1f2e8be5ce8cb25023ba0e656f4cea596ad01b0888ac80"
+    },
+    {
+      "path": "src/vulkan/runtime/radix_sort/shaders/push.h",
+      "git_blob": "76c0806861d6ee4ac00ea13173afac486bb96dc4",
+      "sha256": "9978a41fa2fe35210daf7ccb4dbf865f9d97c4b6e4c8d9c6cf93075db656140f"
+    },
+    {
+      "path": "src/vulkan/runtime/radix_sort/target.h",
+      "git_blob": "1ddac0ccc8e29b4796a2dd37ac21ef63aad85bf9",
+      "sha256": "98291423920ae4ccd05752458102292912cf691b401039f242e683e0f1f9295b"
+    },
+    {
+      "path": "src/vulkan/runtime/rmv/vk_rmv_common.h",
+      "git_blob": "d4f0fb62f5444117ff4352dd1aeee75eabaf5b7b",
+      "sha256": "536511ce77227b0ccbd6525e37030b47b3609a944313bd2ab378139a08ec2a9c"
+    },
+    {
+      "path": "src/vulkan/runtime/rmv/vk_rmv_tokens.h",
+      "git_blob": "d2e59918bed26f60c3945b23285bd151e9588b87",
+      "sha256": "dba35bae8ab192a805dad53b7a8c6348030f25404d9dfe82a82b0152a1241f7f"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_acceleration_structure.h",
+      "git_blob": "6b11951d7dfa3410e2e0853c1f0e8c573bf7b2e7",
+      "sha256": "85f39e065b5601275b4ce6d30e68387c1477917f268ebcfac11b1d3b4f575941"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_buffer.h",
+      "git_blob": "07ba126255ee1ab9fe8f2e40119aec93ab66395b",
+      "sha256": "0976bf02f1a26c99ccbea57c584998ce4f7d93f51e87be1807f5b66854773cfa"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_buffer_view.h",
+      "git_blob": "aa9f427017554fae2fa2b22236c8bccf24e35954",
+      "sha256": "c9e66c47856ff05e97ffcfcd6ac2ccab1de83f468b0ee3588f7e0d0b91e2cae0"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_command_buffer.h",
+      "git_blob": "b6cc177fac8426cd7086ea18a06226a350e51167",
+      "sha256": "5235aafe0112dc51bfd1d04031c60edc7438a30dbecfec4c68833a1287b7058c"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_command_pool.h",
+      "git_blob": "ef7d8ea4be826a0df66d962d4746b6655474b537",
+      "sha256": "65b533c6e5e69996833e010900f27cab1eb185fd0099c5921448b432f857b914"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_debug_report.h",
+      "git_blob": "11b96b439dc986d49303b35cf725ad550a79e516",
+      "sha256": "e101978b0ddad3a7572998bd6671890c349b7042a9990b8231573d1f3c5f441a"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_descriptor_set_layout.h",
+      "git_blob": "e30c339d48a6e1f77e797c51694c51f6279546f5",
+      "sha256": "f09114cb5a980f47a6b7bb8f940a66dd51e03c754d2aa9a34356eb16aa378f85"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_device.h",
+      "git_blob": "fb6221ad9de34cc641c27da1bfe5bf7eca6183e4",
+      "sha256": "cb8da1166ddad15600fbafd78d6beffbc026c00ffd87492dd65f29a16ae85c24"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_device_generated_commands.h",
+      "git_blob": "58c16e359ab5bf56858ba40e3af16fca7b3286b2",
+      "sha256": "1d2eb2fa069db3a53b595231b8484ca738682c22b0fcec1f03db234bab6724d5"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_graphics_state.h",
+      "git_blob": "1db6dd539d585bdaf36bea901f9a6e7712a084dc",
+      "sha256": "5d5f39a9bf5014ff94f5b6a78b83b8d8798a0b0098e5499555bb40d6c0376209"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_image.h",
+      "git_blob": "f560519c16fb8c6a4492a86c18e77ed5f3c1bd2c",
+      "sha256": "8fd4c7a5942d8d057ec9c55805469557a2b615a847f178ef9add9930fcc4d3a5"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_instance.h",
+      "git_blob": "6c0f21b14fd2c4a180ab234e1b26ee8e6ceb89a5",
+      "sha256": "535cd9093467fb75614576497fb77745bc49ca23c5fd6f0db0cdd55d5eeb95b8"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_limits.h",
+      "git_blob": "6950766214a6e3fa8b082ba6d6051e3faf7d8fe0",
+      "sha256": "5af5d9d13f3a83c23e94ef6aba6e25fd8e7fc6afaaa2e405b6d7760365101400"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_log.h",
+      "git_blob": "c6d3b2ff61c4b455567f9fafa623d7017184f222",
+      "sha256": "98579f2d424a64623839bb32f435f55f7c69482bb36fdd6d5ffe224096cb1a5b"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_meta.h",
+      "git_blob": "b2e6ffe3c8160faee68142c71f0bc4f949b4f409",
+      "sha256": "2a3ba6f15f096b7978940901b4b9079725e1757290a7aa5d2ac58c73d7123449"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_meta_object_list.h",
+      "git_blob": "3cc86127511f00c19871cabeece9532f6bf4445c",
+      "sha256": "192e05d7533660d5c5eadb0cc6a16ae439e92a604ae75f5547818be221641fc1"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_nir_lower_descriptor_heaps.h",
+      "git_blob": "6b344dc2d653f31517e1007ade3922cc44fbb70c",
+      "sha256": "6692dc9413ea3638ea1fb55e47f0b653136507ac0a85ec389e43e6328afd23cc"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_object.h",
+      "git_blob": "6bbfaa412f8533d2ac313234b74357f528468b24",
+      "sha256": "bbf4edc8935651488f2a85e5e8c09ad2160da85787298bedf5b4b39dedad563e"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_physical_device.h",
+      "git_blob": "9d9de347adb57fb2f7ca816ff958a92d83e69764",
+      "sha256": "bf6da4c66bc7fc456c3c79006b90b0f43bd1f827bf8be19caead38613c1da855"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_pipeline.h",
+      "git_blob": "3c7cafd74de419e21c14e86f58a05b21db9a6b32",
+      "sha256": "06e814e8b1b4bf45baaf3c5bec23b76636081cab2bca1b621bae0700089519dc"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_pipeline_cache.h",
+      "git_blob": "05f778b1a43d4ae891f50efffca5261238e682b0",
+      "sha256": "781353376dc756470023ddcd701fe43562a35c0488b728da82053775af06c0a2"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_queue.h",
+      "git_blob": "82b8d1401f0e04cf1bc3214c815cd891b5cafa07",
+      "sha256": "3deeb929be6cd4d88a42163655a2fc2fa46b5b00509fc550a57da84978039c9e"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_render_pass.h",
+      "git_blob": "302a9606ebc27ddee6792418e06456010454657b",
+      "sha256": "1a992a0a307dbdb895955af48226720361f07910c39b59c6a5309cbd44082d76"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_sync.h",
+      "git_blob": "bc9f1ba1ea9133d50a9093c91a1d966eb01be103",
+      "sha256": "f4426eabdf8efcb586ed2f86225df2c47ae04439ababdfb552da02ecac733e17"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_sync_timeline.h",
+      "git_blob": "50642efc5cf05d58dc85e09636bee9c303afb469",
+      "sha256": "604f7e8a8fdafdbf03438db8d3b377668a38892e393196a91af58b458d10d151"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_synchronization.h",
+      "git_blob": "20804bf21d20a07034af439db53709cdecdcb389",
+      "sha256": "78b5a4667bf7ea029267263c08700b87199603132d846931fe32bbc4fc1cfae9"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_texcompress_astc.h",
+      "git_blob": "b597786ba66d41cad1226470f0994b65d542d8bc",
+      "sha256": "7b6e402835ab1ac1d23aebe055b11509eddffd824c1abefe680e9dc4a4c9d309"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_texcompress_etc2.h",
+      "git_blob": "d0c894245e19e16b3f170f088c9cdc68193bed54",
+      "sha256": "0622be2dc7b568de5f77daf21c279ecb7da6a969392d76d98377ceb68a06d974"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_video.h",
+      "git_blob": "96807e99f6e1dbc10f76ff6dd065db5bd0082e26",
+      "sha256": "6a39c991093ac379b1459be10c1de459e92cdf2299f8f3356596e98261d2ea4c"
+    },
+    {
+      "path": "src/vulkan/util/vk_alloc.h",
+      "git_blob": "cf0f387d09cce001b63118e154cb15abbe196309",
+      "sha256": "06fc45591bdab79ca107126a695100882d6ff925945620a906c4ef535518bda6"
+    },
+    {
+      "path": "src/vulkan/util/vk_format.h",
+      "git_blob": "ccb23f404600c26026ce5b59aa0b939b112498b8",
+      "sha256": "e0ea606334f9c26205f2c98e83abfe080bec3199cb8055d4c5d2869f6baa3fce"
+    },
+    {
+      "path": "src/vulkan/util/vk_internal_exts.h",
+      "git_blob": "fb16443237bb8c7e6f7916604dcb3cd8f3af4e36",
+      "sha256": "c087e976ad0ea399953b8d08e65f188e3d044b739b7aa1c58652605fe89c48ce"
+    },
+    {
+      "path": "src/vulkan/util/vk_util.h",
+      "git_blob": "7692ecbd48d533ade371cee1eb075b089225ddf0",
+      "sha256": "fc93606ca2951e137b2a785696dad5e0d89d1a13716375a84731c0e039cedc3a"
+    },
+    {
+      "path": "src/vulkan/wsi/wsi_common.h",
+      "git_blob": "cfb921da3b18722da8d5f4fb5e2847631f26af02",
+      "sha256": "0fc2fd09333b7bcbfa20b28659efb3dffef2c2b41a9fc22af9ba0a5498d4b79c"
+    }
+  ],
+  "generated_headers": [
+    {
+      "path": "src/amd/common/amd_cp_packets_gfx11.h",
+      "sha256": "87e31201a97df308e25d64f6d3676f21a952e864417da126342420adebc431d6"
+    },
+    {
+      "path": "src/amd/common/amd_cp_packets_gfx12.h",
+      "sha256": "56febe10a0ff570c7aefd443d8d544d7d1da3c7fe79b17f351a94f2681131dd0"
+    },
+    {
+      "path": "src/amd/common/amdgfxregs.h",
+      "sha256": "1f9903b4fb7c62ad4641186aa7cf197170cb0f3d3e36f0e6ac09d88389f7d976"
+    },
+    {
+      "path": "src/amd/vulkan/radv_drirc.h",
+      "sha256": "ba4f4cd8acd8e132dd056cd27672fb9508ec48b14bb47f449d45c3322c60e8bc"
+    },
+    {
+      "path": "src/amd/vulkan/radv_entrypoints.h",
+      "sha256": "4ac4c2fd5eb1634b133597fda4e06a6be9937bfcb84ca053d69a7be234eb60f0"
+    },
+    {
+      "path": "src/amd/vulkan/radv_tracepoints.h",
+      "sha256": "1073e1a732d7cf3265bdb9efa892eb7d3a9428ba9329d41588193687dae90689"
+    },
+    {
+      "path": "src/compiler/builtin_types.h",
+      "sha256": "bbd87e8770e7bad40740528b631d0e42a0d19275e304519a7444f17a716caded"
+    },
+    {
+      "path": "src/compiler/nir/nir_intrinsics.h",
+      "sha256": "b45f805d9436b38fc5236bdd27eb8e1062dc4d061613f4bac9d46e9572fe32bb"
+    },
+    {
+      "path": "src/compiler/nir/nir_intrinsics_indices.h",
+      "sha256": "ea8a96636910150675ad67089ab82656b8328de21f38f0bd759021451e73dd14"
+    },
+    {
+      "path": "src/compiler/nir/nir_opcodes.h",
+      "sha256": "48f22e65b5e5e8ac61ca0c82942bed935dc9c12ff518b51060398f2bbbe68079"
+    },
+    {
+      "path": "src/compiler/spirv/spirv_info.h",
+      "sha256": "efa9d6bef63e57b385c0fe5bf7b752cff9b349a4a727bb20c5f6f92946bbb0cf"
+    },
+    {
+      "path": "src/util/format/u_format_gen.h",
+      "sha256": "0fc863e173d2993bad49b341517cfcebb6527d32625172a71b31292074e37cf5"
+    },
+    {
+      "path": "src/util/shader_stats.h",
+      "sha256": "5358a934466907cc48e42f645d2cd2c27292a99e38fc3b5e47239c2e6f534fea"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_cmd_queue.h",
+      "sha256": "68e5347a6faaca5646404157507a7fecd7968728246a747446fde57a1c06bd41"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_physical_device_features.h",
+      "sha256": "c1ae699013399f8806ebf75c02b89c70310f70b3055247adf6eda2344fde5ff0"
+    },
+    {
+      "path": "src/vulkan/runtime/vk_physical_device_properties.h",
+      "sha256": "23248634a54523b10a412b1dee300dd2c402077a04478b82cc7d7cee5bc45075"
+    },
+    {
+      "path": "src/vulkan/util/vk_dispatch_table.h",
+      "sha256": "2e8b76012d6cffb455517c739b2e5f207ea382fffea82dda1d55d4b4d4277e43"
+    },
+    {
+      "path": "src/vulkan/util/vk_enum_defines.h",
+      "sha256": "5b232ad301811bf5ec9cff0bec5247756c2a6e3eb677fef3b0ee00878610b408"
+    },
+    {
+      "path": "src/vulkan/util/vk_enum_to_str.h",
+      "sha256": "7767ab30f8f947ff419f7e1541eb5c795e40ca524a95f1aef58751564c0fca4b"
+    },
+    {
+      "path": "src/vulkan/util/vk_extensions.h",
+      "sha256": "8ca32f9e103499187214b99a8da4b36af6d7876b0f7f1a925eaa3a8c2bbd31ca"
+    },
+    {
+      "path": "src/vulkan/util/vk_struct_type_cast.h",
+      "sha256": "1ba9a5c4ab5f11068a2d88b8f84b991c0b12c1ffe419fd51631fa8ff4925a836"
+    }
+  ],
+  "sdk_headers": [
+    {
+      "path": "orbis-compat/include/bits/alltypes.h",
+      "sha256": "656cbe55d36b0060933fe7cc3827abcee0c4f92c609727291759407f6c28a6e8"
+    },
+    {
+      "path": "orbis-compat/include/errno.h",
+      "sha256": "d7985b0dd1b53f27f1c23ae6e90a53983a722f9412544c1b5fc9977d70b0a7ad"
+    },
+    {
+      "path": "orbis-compat/include/signal.h",
+      "sha256": "9b0393f4ba1f70cbf91996e0539a3bb4d83f25e6dc239b49801de0efdf9cf789"
+    },
+    {
+      "path": "orbis-compat/include/stdlib.h",
+      "sha256": "512a9df3d42a0cbbf9f4a6771b356bdd74e25f0cd2d98ddd65049a8a16bccee0"
+    },
+    {
+      "path": "orbis-compat/include/unistd.h",
+      "sha256": "e9d88a577c9bf5cc88cec93c7e380dc67ed44701c68fb18fef7df6f0450fb52a"
+    },
+    {
+      "path": "sdk/include/alloca.h",
+      "sha256": "8768404d7cf4af5fb135b1a2ca91765bd2be311ac072e0ec8b68f5cb3e6e0f3e"
+    },
+    {
+      "path": "sdk/include/assert.h",
+      "sha256": "477f9fcf67e8eccb59dea935f0dc7abd40829f8d61a3e73e4151ff6a18ef25f9"
+    },
+    {
+      "path": "sdk/include/bits/alltypes.h",
+      "sha256": "9327f8d406830c8a446de93bd35719b5128f66d22e640de707308e089afca1fe"
+    },
+    {
+      "path": "sdk/include/bits/errno.h",
+      "sha256": "dbe138bbfe8906c794aff99ed3f961e5eb5340c0e7767f6e7d826df48ad053fd"
+    },
+    {
+      "path": "sdk/include/bits/float.h",
+      "sha256": "de4738aaf93195145476108f536039c28dc572aa34ccf3ce099142266f9007df"
+    },
+    {
+      "path": "sdk/include/bits/limits.h",
+      "sha256": "980524369ba37c013c00e7a233bb82362b85a7b5413bc9b292084933203eaf96"
+    },
+    {
+      "path": "sdk/include/bits/posix.h",
+      "sha256": "abf1648b5e7ec62a420d5a870198355efca45164baa9619464bfd3872916ab7d"
+    },
+    {
+      "path": "sdk/include/bits/signal.h",
+      "sha256": "2d19278fada3340d48888783f0567b7f82946fc6964b19b77c07190ba2717400"
+    },
+    {
+      "path": "sdk/include/bits/stdint.h",
+      "sha256": "a901e488e09ba0e5d796d2db619ef834e120e6e3c38de8fb8e763eb148780728"
+    },
+    {
+      "path": "sdk/include/endian.h",
+      "sha256": "cb16e20d89a3c4d93fdbe772029d653404025a41d6f498b785d26d8066aafc85"
+    },
+    {
+      "path": "sdk/include/errno.h",
+      "sha256": "a461912e4058202de8ec414cbd67e04a84965bbff9aff61523bd3baf090b217d"
+    },
+    {
+      "path": "sdk/include/features.h",
+      "sha256": "6d228e77b88b69f70f9157548b6ec673ffc6b998ce6035fbbee0caddb8442903"
+    },
+    {
+      "path": "sdk/include/float.h",
+      "sha256": "d513aa2c48b2d60672ab10dbab0ab80347db9f1b353db4ea3fae2018907964c1"
+    },
+    {
+      "path": "sdk/include/inttypes.h",
+      "sha256": "01a5b59471e351039310fc1cfb8bf8cf89e53ef957236118876ea20aea743bfb"
+    },
+    {
+      "path": "sdk/include/limits.h",
+      "sha256": "d6fb743478f7a8dd27f057db844a806165709641b0d0e78fbf0cabf5c88f1e12"
+    },
+    {
+      "path": "sdk/include/math.h",
+      "sha256": "58287f18ea3a475e376a1b43326a3fefb38677c9082c616c541e3c836dfa1879"
+    },
+    {
+      "path": "sdk/include/pthread.h",
+      "sha256": "697639ba04b6d7623f87a8b391cdb7333c07c2c66c6081bea055a9008f3aaff1"
+    },
+    {
+      "path": "sdk/include/sched.h",
+      "sha256": "2fa4740e8965111572a1050295159a23c542eec1f00a9bd3e431542e8d405b54"
+    },
+    {
+      "path": "sdk/include/signal.h",
+      "sha256": "61365842307ca23ddb6522414f87bf58f5ed79140a13c5d68b3758fedabbbd70"
+    },
+    {
+      "path": "sdk/include/stdalign.h",
+      "sha256": "54289e3284182b1a521dd7f8bdd8e9f4b2a85879b8da761b4ad8c421598a12f1"
+    },
+    {
+      "path": "sdk/include/stdarg.h",
+      "sha256": "20b903cf4ddd7e0244e0bee6e615e24e1921bab2f0986957fe4f7869c608890a"
+    },
+    {
+      "path": "sdk/include/stdbool.h",
+      "sha256": "5cd1f701b5e927e4e39bcc69f4b7e437a98c8821168e69171c626502a6fc13d9"
+    },
+    {
+      "path": "sdk/include/stddef.h",
+      "sha256": "a155a9dde1a8c8a19104df8c2394ae3ebc8937861e8347a417c9b08026af97e6"
+    },
+    {
+      "path": "sdk/include/stdint.h",
+      "sha256": "b6e77f1611e56cf499233172cab8bc09c0f7d937f3daa5ad552e1712fc6663e5"
+    },
+    {
+      "path": "sdk/include/stdio.h",
+      "sha256": "3c4ba0b070b949946913b625d5b0437faf8d1ce8ea2c854bf676e238058f8db5"
+    },
+    {
+      "path": "sdk/include/stdlib.h",
+      "sha256": "b975489d3757ef8f9e01b76e2fe6a92ad068e0eaaf5dcd8bd232d59701176c6a"
+    },
+    {
+      "path": "sdk/include/string.h",
+      "sha256": "e1476e6c640683e104fc08484a634fdd1e31a59859363e5a6761900904b0b4cb"
+    },
+    {
+      "path": "sdk/include/strings.h",
+      "sha256": "e3263b440f52fe7acd9ede39a526a2a10dd6ea88277853436d786db24f614c22"
+    },
+    {
+      "path": "sdk/include/sys/select.h",
+      "sha256": "cda463ae12b5b189bea17a69b403d6f53949f013d926d92fb325be11f95db3ae"
+    },
+    {
+      "path": "sdk/include/sys/types.h",
+      "sha256": "6118194c1a6214f9a05e264c5e5318b541534c9a86860ef9288e890674cce42c"
+    },
+    {
+      "path": "sdk/include/time.h",
+      "sha256": "f342d251a95b0bddbc51c96a5eebc68dbafb2bd808c34ceb47ae9e005842ea08"
+    },
+    {
+      "path": "sdk/include/unistd.h",
+      "sha256": "2a642628d16f73dfbd384ec42c66dc9043182f83131f35468cbd57aa65508751"
+    }
+  ],
+  "command_template": [
+    "{compiler}",
+    "-fmacro-prefix-map={source}=..",
+    "-I{generated}",
+    "-I{generated}/src/amd/vulkan/libvulkan_radeon.a.p",
+    "-I{generated}/src/amd/vulkan",
+    "-I{source}/src/amd/vulkan",
+    "-I{generated}/include",
+    "-I{source}/include",
+    "-I{generated}/src",
+    "-I{source}/src",
+    "-I{generated}/src/amd",
+    "-I{source}/src/amd",
+    "-I{generated}/src/amd/common",
+    "-I{source}/src/amd/common",
+    "-I{source}/src/amd/common/nir",
+    "-I{source}/src/virtio/virtio-gpu",
+    "-I{generated}/src/amd/compiler",
+    "-I{source}/src/amd/compiler",
+    "-I{generated}/subprojects/zlib-1.3.1",
+    "-I{source}/subprojects/zlib-1.3.1",
+    "-I{generated}/src/compiler/nir",
+    "-I{source}/src/compiler/nir",
+    "-I{generated}/src/compiler",
+    "-I{source}/src/compiler",
+    "-I{generated}/src/vulkan/util",
+    "-I{source}/src/vulkan/util",
+    "-I{generated}/src/vulkan/wsi",
+    "-I{source}/src/vulkan/wsi",
+    "-I{generated}/src/vulkan/runtime",
+    "-I{source}/src/vulkan/runtime",
+    "-I{generated}/src/vulkan/runtime/bvh",
+    "-I{source}/src/vulkan/runtime/bvh",
+    "-I{generated}/src/vulkan/runtime/radix_sort/shaders",
+    "-I{generated}/src/amd/vulkan/bvh",
+    "-I{generated}/src/amd/vulkan/layers",
+    "-I{generated}/src/util",
+    "-I{generated}/src/util/format",
+    "-I{generated}/src/compiler/spirv",
+    "-fvisibility=hidden",
+    "-DNDEBUG",
+    "-D_FILE_OFFSET_BITS=64",
+    "-Wall",
+    "-Winvalid-pch",
+    "-std=c11",
+    "-O3",
+    "-D__STDC_CONSTANT_MACROS",
+    "-D__STDC_FORMAT_MACROS",
+    "-D__STDC_LIMIT_MACROS",
+    "-DPACKAGE_VERSION=\"26.3.0-devel\"",
+    "-DHAVE_OPENGL=0",
+    "-DHAVE_OPENGL_ES_1=0",
+    "-DHAVE_OPENGL_ES_2=0",
+    "-DMESA_SYSTEM_HAS_KMS_DRM=0",
+    "-DVIDEO_CODEC_VC1DEC=0",
+    "-DVIDEO_CODEC_H264DEC=0",
+    "-DVIDEO_CODEC_H264ENC=0",
+    "-DVIDEO_CODEC_H265DEC=0",
+    "-DVIDEO_CODEC_H265ENC=0",
+    "-DVIDEO_CODEC_AV1DEC=0",
+    "-DVIDEO_CODEC_AV1ENC=0",
+    "-DVIDEO_CODEC_VP9DEC=0",
+    "-DVIDEO_CODEC_MPEG12DEC=0",
+    "-DVIDEO_CODEC_JPEGDEC=0",
+    "-DHAVE_ORBIS_PLATFORM",
+    "-DUSE_LIBGLVND=0",
+    "-DHAVE_GFX_COMPUTE",
+    "-DGLAPI_EXPORT_PROTO_ENTRY_POINTS=1",
+    "-DALLOW_KCMP",
+    "-DETIME=ETIMEDOUT",
+    "-DMESA_DEBUG=0",
+    "-DENABLE_SHADER_CACHE",
+    "-DHAVE___BUILTIN_BSWAP32",
+    "-DHAVE___BUILTIN_BSWAP64",
+    "-DHAVE___BUILTIN_CLZ",
+    "-DHAVE___BUILTIN_CLZLL",
+    "-DHAVE___BUILTIN_CTZ",
+    "-DHAVE___BUILTIN_EXPECT",
+    "-DHAVE___BUILTIN_FFS",
+    "-DHAVE___BUILTIN_FFSLL",
+    "-DHAVE___BUILTIN_POPCOUNT",
+    "-DHAVE___BUILTIN_POPCOUNTLL",
+    "-DHAVE___BUILTIN_UNREACHABLE",
+    "-DHAVE___BUILTIN_TYPES_COMPATIBLE_P",
+    "-DHAVE___BUILTIN_ADD_OVERFLOW",
+    "-DHAVE_FUNC_ATTRIBUTE_CONST",
+    "-DHAVE_FUNC_ATTRIBUTE_FLATTEN",
+    "-DHAVE_FUNC_ATTRIBUTE_MALLOC",
+    "-DHAVE_FUNC_ATTRIBUTE_PURE",
+    "-DHAVE_FUNC_ATTRIBUTE_UNUSED",
+    "-DHAVE_FUNC_ATTRIBUTE_WARN_UNUSED_RESULT",
+    "-DHAVE_FUNC_ATTRIBUTE_WEAK",
+    "-DHAVE_FUNC_ATTRIBUTE_FORMAT",
+    "-DHAVE_FUNC_ATTRIBUTE_PACKED",
+    "-DHAVE_FUNC_ATTRIBUTE_RETURNS_NONNULL",
+    "-DHAVE_FUNC_ATTRIBUTE_ALIAS",
+    "-DHAVE_FUNC_ATTRIBUTE_NORETURN",
+    "-DHAVE_FUNC_ATTRIBUTE_COLD",
+    "-DHAVE_FUNC_ATTRIBUTE_VISIBILITY",
+    "-DHAVE_UINT128",
+    "-DHAVE_FMEMOPEN",
+    "-D_GNU_SOURCE",
+    "-DUSE_SSE41",
+    "-DHAVE___BUILTIN_IA32_CLFLUSHOPT",
+    "-DUSE_GCC_ATOMIC_BUILTINS",
+    "-DMAJOR_IN_SYSMACROS",
+    "-DHAS_SCHED_H",
+    "-DHAS_SCHED_GETAFFINITY",
+    "-DHAVE_SYS_SYSCTL_H",
+    "-DHAVE_ENDIAN_H",
+    "-DHAVE_DLFCN_H",
+    "-DHAVE_SYS_SHM_H",
+    "-DHAVE_CET_H",
+    "-DHAVE_PTHREAD_NP_H",
+    "-DHAVE_POLL_H",
+    "-DHAVE_SYS_INOTIFY_H",
+    "-DHAVE_STRTOF",
+    "-DHAVE_MKOSTEMP",
+    "-DHAVE_MEMFD_CREATE",
+    "-DHAVE_FLOCK",
+    "-DHAVE_STRTOK_R",
+    "-DHAVE_GETRANDOM",
+    "-DHAVE_POSIX_FALLOCATE",
+    "-DHAVE_SECURE_GETENV",
+    "-DHAVE_SYSCONF",
+    "-DHAVE_STRUCT_TIMESPEC",
+    "-DHAVE_PROGRAM_INVOCATION_NAME",
+    "-DHAVE_POSIX_MEMALIGN",
+    "-DHAVE_DIRENT_D_TYPE",
+    "-DHAVE_STRTOD_L",
+    "-DHAVE_DLADDR",
+    "-DHAVE_DL_ITERATE_PHDR",
+    "-DHAVE_ZLIB",
+    "-DHAVE_COMPRESSION",
+    "-DHAVE_PTHREAD",
+    "-DHAVE_PTHREAD_SETAFFINITY",
+    "-DDRAW_LLVM_AVAILABLE=0",
+    "-DAMD_LLVM_AVAILABLE=0",
+    "-DGALLIVM_USE_ORCJIT=0",
+    "-DTHREAD_SANITIZER=0",
+    "-DHAVE_RENDERDOC_INTEGRATION=0",
+    "-Werror=implicit-function-declaration",
+    "-Werror=missing-prototypes",
+    "-Werror=return-type",
+    "-Werror=empty-body",
+    "-Werror=incompatible-pointer-types",
+    "-Werror=int-conversion",
+    "-Wimplicit-fallthrough",
+    "-Wmisleading-indentation",
+    "-Wno-missing-field-initializers",
+    "-Wno-format-truncation",
+    "-fno-math-errno",
+    "-fno-trapping-math",
+    "-Qunused-arguments",
+    "-fno-common",
+    "-Wno-unknown-pragmas",
+    "-Wno-microsoft-enum-value",
+    "-Wno-unused-function",
+    "-Werror=format",
+    "-Wformat-security",
+    "-ffunction-sections",
+    "-fdata-sections",
+    "-Wno-unused-variable",
+    "-Wno-unused-but-set-variable",
+    "--target=x86_64-pc-freebsd12-elf",
+    "--sysroot={sdk}/sdk",
+    "-fPIC",
+    "-funwind-tables",
+    "-D__PS4__",
+    "-DPS4",
+    "-D__ORBIS__",
+    "-D_BSD_SOURCE=1",
+    "-isysroot",
+    "{sdk}/sdk",
+    "-isystem",
+    "{sdk}/orbis-compat/include",
+    "-isystem",
+    "{sdk}/sdk/include",
+    "-fPIC",
+    "-DXXH_FORCE_ALIGN_CHECK=0",
+    "-DXXH_FORCE_MEMORY_ACCESS=0",
+    "-pthread",
+    "-Wno-override-init",
+    "-Wno-initializer-overrides",
+    "-Wimplicit-fallthrough",
+    "-Wshadow",
+    "-DRADV_BUILD_ID_OVERRIDE=\"8e2227ac8f62083e1d68577c44a9e291998c543e\"",
+    "-Werror=pointer-arith",
+    "-Werror=vla",
+    "-Werror=gnu-empty-initializer",
+    "-Wgnu-pointer-arith",
+    "-MD",
+    "-MF",
+    "{depfile}",
+    "-o",
+    "{object}",
+    "-c",
+    "{source}/src/amd/vulkan/radv_cmd_buffer.c"
+  ],
+  "ps4_flags": [
+    "-msse4.2",
+    "-mpopcnt",
+    "-mcx16",
+    "-mtune=btver2",
+    "-mno-avx"
+  ],
+  "baseline_reproduction_object_sha256": "23e4d62f00c63a9d9115c533aea48d0914eeb2bfd57d0b6f00a6cf425896ad15",
+  "tuned_object_sha256": "58a3c99fff1ea7f67ff1600ab416897bc14950fe150886b96f33fa23d02831cd",
+  "provenance": "Generated Mesa headers from pinned1a59cc native configuration. Exact clean-source baseline reproduces every SDK object section/symbol/relocation except the nonallocated compiler-version .comment. No working NAS source is used.",
+  "compiler_headers": [
+    {
+      "path": "include/popcntintrin.h",
+      "sha256": "365a73b4a5fea8527395067862c7837665569e72605d6d2b5f42b282c5813e93",
+      "reason": "-mpopcnt enables this existing LLVM resource header; source/generated/SDK closure is unchanged"
+    }
+  ]
+}

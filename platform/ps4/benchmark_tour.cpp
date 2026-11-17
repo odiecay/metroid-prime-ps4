@@ -138,11 +138,14 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         state.shaderRetries,state.shaders.queued,state.shaders.background,state.shaders.active,state.shaders.pending,
         state.shaders.dropPending,state.shaders.prefetchQueued,state.shaders.prefetchActive,static_cast<unsigned long long>(state.shaders.epoch),
         static_cast<unsigned long long>(state.shaders.completed),static_cast<unsigned long long>(state.shaders.failures),
-        state.shaderStableFrames,state.coverage ? "closed_loop_polyline_v4" : state.play ? "closed_loop_route_v3" : "none",
+        state.shaderStableFrames,state.coverage ? "closed_loop_stop_turn_v5" : state.play ? "closed_loop_route_v3" : "none",
         state.coverage ? "exclusive" : state.play ? "additive" : "none",
         state.play ? "body_direct_aim_or_ball_control_flat" : "none",
         state.play ? "true" : "null",state.play ? "false" : "null");
     if (state.coverage) {
+        std::fputs(",\"stick_aim_pixels_per_second\":600,\"walk_speed_percent\":100,"
+                   "\"pointer_aim\":false,\"mouse_aim\":false,\"gyro_mode\":0,"
+                   "\"turn_policy\":\"grounded_stop_aim_go\"",state.log);
         std::fprintf(state.log, ",\"coverage_scope\":\"assisted_room_actions\",\"region\":");
         json_text(state.log, scene.region);
         std::fputs(",\"visual_targets\":",state.log);json_text(state.log,scene.visualTargets);

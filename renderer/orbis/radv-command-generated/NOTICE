@@ -1,0 +1,35 @@
+These are generated Mesa build headers for the native Orbis RADV command-buffer
+translation unit. They contain no game data. Original file notices are retained.
+
+Mesa source commit: 1a59cc147b54e3970814b37313e2f27357672e9d
+Configuration and SHA-256 inputs: manifest.json
+Reproduction tool: tools/build_radv_command_overlay.py
+
+Only generated headers are stored here. The tool reads the corresponding clean
+source blobs from that pinned commit in external/mesa-ps4, independently of local
+worktree edits. SDK headers and the compiler remain separate pinned inputs.
+Before accepting a tuned object, it rebuilds the generic baseline and compares
+all ELF sections, relocations and symbol records with the original SDK member.
+The only permitted baseline difference is the compiler-version .comment section.
+
+The generated AMD and Mesa material is distributed under its original MIT
+notices; copyright holders are identified in the files and pinned generators.
+The MIT license text is reproduced here:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

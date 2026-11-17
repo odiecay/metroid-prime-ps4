@@ -6,7 +6,135 @@
 #include <cstdlib>
 #include <array>
 #include "actual_pad_clamp.hpp"
+#include "port_mouse.h"
 using namespace prime::benchmark_play;
+struct LatchedPad { int x{},y{},aim{}; };
+// Planar source-order model: real PADClamp and PortMouse::AxisForce, with the
+// retail 200kg actor, 35000 acceleration, 16.5 cap and 1/tick normal friction.
+// It does not simulate room collisions or stand in for console acceptance.
+struct PlanarSourceOrder {
+    Point position,velocity;float yaw{},right{},forward=1;
+    void step(LatchedPad pad,bool inverted) {
+        s8 aim=s8(pad.aim),zero=0;ClampStick(&aim,&zero,59,31,15);
+        // UpdateMouseAim changes the body BEFORE the staged local movement.
+        yaw-=float(aim)/59*(600*.0035f)/60*(inverted?-1:1);
+        const Point f{-std::sin(yaw),std::cos(yaw),0},r{f.y,-f.x,0};
+        s8 x=s8(pad.x),y=s8(pad.y);ClampStick(&x,&y,72,40,15);
+        float sx=std::clamp(float(x)/72/.8f,-1.f,1.f),sy=std::clamp(float(y)/72/.8f,-1.f,1.f);
+        const float rawX=std::fabs(sx*.8f),rawY=std::fabs(sy*.8f),raw=std::hypot(rawX,rawY);
+        if(raw>1e-5f){const float a=std::max(rawX,rawY)/raw,b=std::min(rawX,rawY)/raw;
+            const float gate=(40.f/72)/(40.f/72*a+32.f/72*b);sx/=gate;sy/=gate;}
+        const auto input=PortMouse::ClampPlanar({sx,sy},1.f);sx=input.right;sy=input.forward;
+        const float magnitude=std::hypot(sx,sy);
+        if(magnitude>1e-5f){right=sx/magnitude;forward=sy/magnitude;}
+        float vx=velocity.x*r.x+velocity.y*r.y,vy=velocity.x*f.x+velocity.y*f.y;
+        float across=vx*forward-vy*right,along=vx*right+vy*forward;
+        const auto damp=[](float v){return v>0?std::max(0.f,v-1):std::min(0.f,v+1);};
+        across=damp(across);along=damp(along);
+        vx=across*forward+along*right;vy=std::clamp(along*forward-across*right,-16.5f,16.5f);
+        velocity={vx*r.x+vy*f.x,vx*r.y+vy*f.y,0};
+        float force=0;
+        if(magnitude>1e-5f){const float speed=right*vx+forward*vy;
+            force=PortMouse::AxisForce(magnitude,speed,16.5f,1,200,1.f/60,35000);
+            if(speed>16.5f&&force<0)force=0;}
+        // PredictLinearMotion: position uses post-friction velocity; force
+        // updates momentum for the following simulation tick.
+        position.x+=velocity.x/60;position.y+=velocity.y/60;
+        velocity.x+=force*(right*r.x+forward*f.x)/12000;
+        velocity.y+=force*(right*r.y+forward*f.y)/12000;
+    }
+};
+static void coverage_stop_turn_checks() {
+    unsigned cases=0;float worst=0;
+    const std::array<Point,8> biotech{{{0,0,0},{-2,2,0},{-2,4,0},{-4,4,0},
+                                      {-4,2,0},{-4,0,0},{-2,-2,0},{0,-2,0}}};
+    for(unsigned heading=0;heading<8;++heading)for(unsigned delay:{1u,4u})
+    for(bool inverted:{false,true})for(unsigned phase:{0u,1u,2u}) {
+        const float angle=heading*.7853981634f,dx=std::cos(angle),dy=std::sin(angle);
+        Route route;route.count=8;route.length=15.6569f;
+        for(unsigned i=0;i<8;++i)route.waypoints[i]={39.95435f+biotech[i].x*dx-biotech[i].y*dy,
+            -203.056f+biotech[i].x*dy+biotech[i].y*dx,0};
+        route.start=route.waypoints[0];route.end=route.waypoints[7];
+        if(heading==0)assert(!inside_route(route,{38.84713f,-205.83061f,0}));
+        const float first=flat_distance(route.start,route.waypoints[1]);
+        route.dx=(route.waypoints[1].x-route.start.x)/first;route.dy=(route.waypoints[1].y-route.start.y)/first;
+        CoverageCursor cursor;CoverageActionState actionState;
+        PlanarSourceOrder actor{route.start,{},std::atan2(-route.dx,route.dy)};
+        std::array<LatchedPad,4> latched{};unsigned turns=0,translations=0,aims=0,fireEdges=0,missileEdges=0;
+        bool firing=false,missile=false;float distance=0,aimDegrees=0;
+        for(unsigned tick=0;tick<2400;++tick) {
+            assert(inside_route(route,actor.position));
+            // The first jump is stationary; its real grounded observations,
+            // not an assumed 120-tick landing time, open the movement gate.
+            const bool grounded=phase!=1||tick<7||tick>=71;
+            const bool orbiting=phase==2&&tick>=3&&tick<48;
+            const auto action=coverage_input(phase,tick,false,true,phase==2,grounded,
+                grounded?actor.velocity:Point{0,0,3},orbiting,actionState);
+            fireEdges+=action.fire&&!firing;missileEdges+=action.missile&&!missile;
+            firing=action.fire;missile=action.missile;
+            const auto before=cursor.route;
+            const Point forward{-std::sin(actor.yaw),std::cos(actor.yaw),0};
+            const auto command=coverage_command(route,actor.position,actor.velocity,forward,grounded,
+                action.move&&!orbiting,true,inverted,cursor);
+            assert(!command.aim||std::hypot(command.movement.x,command.movement.y)==0);
+            assert(!command.aim||std::hypot(actor.velocity.x,actor.velocity.y)<.15f);
+            assert(!command.aim||grounded);
+            turns+=before.segment!=cursor.route.segment||before.forward!=cursor.route.forward;
+            const auto stick=stick_for_world(command.movement,forward);
+            const LatchedPad next{stick.x,stick.y,command.aim};
+            translations+=next.x!=0||next.y!=0;aims+=next.aim!=0;
+            const auto pending=latched[tick%delay];latched[tick%delay]=next;
+            if(delay==1&&pending.aim)assert(std::hypot(actor.velocity.x,actor.velocity.y)<.15f);
+            const Point previous=actor.position;const float previousYaw=actor.yaw;actor.step(pending,inverted);
+            distance+=flat_distance(previous,actor.position);
+            aimDegrees+=std::fabs(std::remainder(actor.yaw-previousYaw,6.283185307f))*57.295779513f;
+            if(tick==359||tick==719) {
+                // Timing remains12 wall seconds. Even360 real simulation
+                // updates leave room for the observation criteria; projectile
+                // production itself is still verified by native actor counters.
+                assert(distance>=2&&aimDegrees>=5&&turns>=1);
+                if(phase==1)assert(fireEdges>=2);
+                if(phase==2)assert(missileEdges>=2);
+            }
+            float nearest=1e6f;
+            for(unsigned i=1;i<route.count;++i){const auto a=route.waypoints[i-1],b=route.waypoints[i];
+                const float length=flat_distance(a,b),t=std::clamp(((actor.position.x-a.x)*(b.x-a.x)+
+                    (actor.position.y-a.y)*(b.y-a.y))/(length*length),0.f,1.f);
+                nearest=std::min(nearest,flat_distance(actor.position,{a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),0}));}
+            worst=std::max(worst,nearest);
+        }
+        if(distance<=20||turns<6)std::fprintf(stderr,"coverage shortcase heading%u delay%u inverted%d phase%u travel%.3f turns%u segment%u pos%.3f/%.3f align%d brake%d yaw%.3f\n",heading,delay,inverted,phase,distance,turns,cursor.route.segment,actor.position.x,actor.position.y,cursor.aligning,cursor.braking,actor.yaw);
+        assert(inside_route(route,actor.position));assert(distance>20);assert(turns>=6);
+        assert(translations>100&&aims>100);++cases;
+    }
+    CoverageActionState state;
+    for(unsigned tick=0;tick<500;++tick){const auto a=coverage_input(1,tick,false,true,false,
+        false,{0,0,-2},false,state);assert(!a.move);assert(a.jump==(tick<6));}
+    assert(!coverage_input(1,500,false,true,false,true,{0,0,0},false,state).move);
+    assert(coverage_input(1,501,false,true,false,true,{0,0,0},false,state).move);
+    state={};assert(!coverage_input(1,200,false,true,false,true,{2,0,0},false,state).move);
+    for(unsigned tick=0;tick<120;++tick){auto a=coverage_input(2,tick,false,true,true,true,{},true,state);
+        assert(!a.move);assert(a.lock==(tick<45));}
+    assert(coverage_input(2,120,false,true,true,true,{},false,state).move);
+    // Frozen V3 reverses its heading before residual velocity is stopped.
+    // The correction first submits neutral braking without switching/turning.
+    Route end;end.count=2;end.waypoints={Point{0,0,0},Point{2,0,0}};
+    RouteCursor original;path_patrol(end,{1.8f,0,0},{3,0,0},original);
+    assert(!original.forward);
+    CoverageCursor stopped;stopped.aligning=false;
+    auto braking=coverage_command(end,{1.8f,0,0},{3,0,0},{1,0,0},true,true,true,false,stopped);
+    assert(stopped.braking&&stopped.route.forward&&braking.aim==0&&braking.movement.x==0);
+    auto turning=coverage_command(end,{1.9f,0,0},{0,0,0},{1,0,0},true,true,true,false,stopped);
+    assert(!stopped.route.forward&&turning.aim!=0&&turning.movement.x==0&&turning.movement.y==0);
+    // Ball momentum continues to use the unchanged active polyline steering.
+    Route ball;ball.count=3;ball.waypoints={Point{0,0,0},Point{4,0,0},Point{4,4,0}};
+    CoverageCursor ballCursor;RouteCursor old;
+    for(unsigned i=0;i<100;++i){Point p{float(i%4),0,0},v{1,0,0};
+        auto expected=path_patrol(ball,p,v,old);
+        auto actual=coverage_command(ball,p,v,{0,1,0},false,true,false,false,ballCursor);
+        assert(actual.aim==0&&actual.movement.x==expected.x&&actual.movement.y==expected.y);}
+    std::printf("coverage stop/turn/go %u latched LOCAL-pad/retail-force cases; inversion,1/4-poll latency,actual ground/orbit gates,real corners/reversals; max centreline %.4fm; no physics/collision acceptance claim\n",cases,worst);
+}
 static void polyline_steering_checks() {
     unsigned cases=0;float worst=0;
     for(unsigned heading=0;heading<8;++heading)
@@ -220,6 +348,7 @@ static void coverage_route_checks() {
     std::puts("coverage:connected>=12m turning paths, .65m full-body corridors,32 stable resets, footprint/ramp support, bounded clear descent and rejected hazards/cliffs/obstacles passed");
 }
 int main(){
+    coverage_stop_turn_checks();
     coverage_route_checks();
     polyline_steering_checks();
     route_lifecycle_checks();

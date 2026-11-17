@@ -5,6 +5,19 @@ import subprocess
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 class BenchmarkPlayLogicTests(unittest.TestCase):
+    def test_actual_engine_consumes_local_input_after_aim(self):
+        player=(ROOT/'game/MetroidPrimePort/src/MetroidPrime/Player/CPlayer.cpp').read_text()
+        process=player[player.index('void CPlayer::ProcessInput('):]
+        self.assertLess(process.index('UpdateMouseAim(mgr);'),process.index('ComputeMovement(scaledInput, mgr, dt);'))
+        physics=(ROOT/'game/MetroidPrimePort/src/MetroidPrime/CPhysicsActor.cpp').read_text()
+        apply=physics[physics.index('void CPhysicsActor::ApplyForceOR('):]
+        self.assertIn('GetTransform().Rotate(force)',apply[:apply.index('\n}')])
+        adapter=(ROOT/'platform/ps4/benchmark_game.cpp').read_text()
+        v3=adapter[adapter.index('void drive(CStateManager& mgr,'):adapter.index('\n}\n}\nvoid benchmark_game_tick')]
+        self.assertIn('coverage_input(',v3);self.assertIn('coverage_command(',v3)
+        self.assertIn('pad.substickX=static_cast<s8>(command.aim);',v3)
+        self.assertIn('stick_for_world(command.movement,',v3)
+        self.assertIn('if(!benchmark_coverage_enabled()){drive_legacy(mgr,control);return;}',v3)
     def test_v2_driver_preserves_frozen_v51_body(self):
         source=(ROOT/'platform/ps4/benchmark_game.cpp').read_text()
         start=source.index('void drive_legacy(CStateManager& mgr,')
@@ -64,7 +77,9 @@ int main(){for(bool valid:{false,true})for(bool terminal:{false,true}){
         clamp=source[source.index('void ClampStick(s8*'):source.index('void PADClamp(PADStatus*')]
         (out/'actual_pad_clamp.hpp').write_text('#include <cstdint>\n#include <cmath>\nusing s8=int8_t;\n'+clamp)
         command=['/usr/lib/llvm-19/bin/clang++','-std=c++20','-O2','-Wall','-Wextra','-Werror',
-                 '-I'+str(ROOT/'platform/ps4'),'-I'+str(out),str(ROOT/'tests/benchmark_play_logic.cpp'),'-o',str(exe)]
+                 '-I'+str(ROOT/'platform/ps4'),'-I'+str(out),
+                 '-I'+str(ROOT/'game/MetroidPrimePort/platform/include'),
+                 str(ROOT/'tests/benchmark_play_logic.cpp'),'-o',str(exe)]
         sanitized=os.environ.get('PRIME_BENCHMARK_SANITIZE')=='1'
         if sanitized:
             command+=['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-link-runtime',
@@ -75,4 +90,5 @@ int main(){for(bool valid:{false,true})for(bool terminal:{false,true}){
                                ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',UBSAN_OPTIONS='halt_on_error=1')
         result=subprocess.run([str(exe)],env=env,check=True,capture_output=True,text=True)
         self.assertIn('2880 normal-input phase cases passed',result.stdout)
+        self.assertIn('coverage stop/turn/go 96 latched LOCAL-pad/retail-force cases',result.stdout)
 if __name__=='__main__':unittest.main()

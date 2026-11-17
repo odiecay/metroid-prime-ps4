@@ -345,6 +345,77 @@ inline Stick stick_for_world(Point desired,Point forward,float scale=1.f) {
     return {pad_axis((desired.x*fy-desired.y*fx)*scale),
             pad_axis((desired.x*fx+desired.y*fy)*scale)};
 }
+struct CoverageCursor { RouteCursor route; bool aligning=true,braking{}; unsigned alignedTicks{}; };
+struct CoverageCommand { Point movement; int aim{}; bool aligning{}; };
+// A local stick is consumed after this hook: direct aim rotates the body before
+// movement. Do not translate and turn through a corner in the same input poll.
+// Every leg is retained, with a real grounded stop before changing its heading.
+inline CoverageCommand coverage_command(const Route& r,Point p,Point velocity,Point forward,
+                                       bool grounded,bool moveEnabled,bool canAim,bool invertX,
+                                       CoverageCursor& cursor) {
+    CoverageCommand out;
+    if(!finite(p)||!finite(velocity)||!finite(forward)||std::hypot(forward.x,forward.y)<1e-5f||
+       r.count<2||r.count>r.waypoints.size())return out;
+    // Morph Ball never injects a C-stick turn. Retain its active momentum
+    // correction: neutral input is not a brake for a rolling ball.
+    if(!canAim) {
+        if(moveEnabled)out.movement=path_patrol(r,p,velocity,cursor.route);
+        cursor.aligning=false;cursor.alignedTicks=0;return out;
+    }
+    if(!grounded||!moveEnabled){out.aligning=cursor.aligning;return out;}
+    if(cursor.route.segment>=r.count-1)cursor={};
+    const auto a=r.waypoints[cursor.route.segment],b=r.waypoints[cursor.route.segment+1];
+    const auto target=cursor.route.forward?b:a;
+    const float speed=std::hypot(velocity.x,velocity.y),distance=flat_distance(p,target);
+    const float approach=distance>.001f?
+        ((target.x-p.x)*velocity.x+(target.y-p.y)*velocity.y)/distance:0;
+    if(cursor.braking) {
+        if(speed>=.15f){out.aligning=true;return out;}
+        cursor.braking=false;
+        if(distance<.45f) {
+            if(cursor.route.forward) {
+                if(cursor.route.segment+2<r.count)++cursor.route.segment;
+                else if(flat_distance(r.waypoints[0],r.waypoints[r.count-1])<.01f)cursor.route.segment=0;
+                else cursor.route.forward=false;
+            } else {
+                if(cursor.route.segment)--cursor.route.segment;else cursor.route.forward=true;
+            }
+            cursor.aligning=true;cursor.alignedTicks=0;
+        }
+    } else if(!cursor.aligning&&(distance<.28f||(approach>0&&distance<.1f+.22f*approach))) {
+        // Begin neutral braking before the endpoint; do not demand a tiny
+        // velocity while still applying a nonzero retail force. The actual
+        // observed stop below, rather than this prediction, permits the turn.
+        cursor.braking=true;out.aligning=true;return out;
+    }
+    if(cursor.aligning) {
+        out.aligning=true;
+        if(std::hypot(velocity.x,velocity.y)>=.15f){cursor.alignedTicks=0;return out;}
+        const auto heading=path_heading(r,cursor.route);
+        const float desired=std::atan2(-heading.x,heading.y)+(cursor.route.segment%2?.14f:-.14f);
+        const float error=std::remainder(desired-std::atan2(-forward.x,forward.y),6.283185307f);
+        if(std::fabs(error)>.035f){
+            out.aim=std::clamp(pad_axis(-error*.9f),-127,127);
+            if(std::abs(out.aim)<32)out.aim=error>0?-32:32;
+            if(invertX)out.aim=-out.aim;
+            cursor.alignedTicks=0;return out;
+        }
+        if(++cursor.alignedTicks>=2)cursor.aligning=false;
+        return out;
+    }
+    const auto from=r.waypoints[cursor.route.segment],to=r.waypoints[cursor.route.segment+1];
+    const float length=flat_distance(from,to);
+    if(!(length>.001f))return out;
+    const float dx=(to.x-from.x)/length,dy=(to.y-from.y)/length;
+    const float along=(p.x-from.x)*dx+(p.y-from.y)*dy;
+    const float side=-(p.x-from.x)*dy+(p.y-from.y)*dx;
+    const float va=velocity.x*dx+velocity.y*dy,vs=-velocity.x*dy+velocity.y*dx;
+    const float longitudinal=std::clamp(((cursor.route.forward?length:0.f)-along)*1.4f-.4f*va,-1.f,1.f);
+    const float lateral=std::clamp(-3.5f*side-.5f*vs,-1.f,1.f);
+    const float scale=1.f/std::max(1.f,std::hypot(longitudinal,lateral));
+    out.movement={(longitudinal*dx-lateral*dy)*scale,(longitudinal*dy+lateral*dx)*scale,0};
+    return out;
+}
 struct Input { bool fire{},missile{},jump{},morph{},lock{},move{}; };
 inline Input input(unsigned phase,unsigned tick,bool morphed,bool jumpSafe,bool enemyTarget) {
     Input out;out.move=true;
@@ -356,6 +427,26 @@ inline Input input(unsigned phase,unsigned tick,bool morphed,bool jumpSafe,bool 
     else if(phase==3) {
         out.morph=!morphed&&tick<6;out.move=morphed;
         out.fire=morphed&&tick%60<3;
+    }
+    return out;
+}
+struct CoverageActionState { unsigned groundStable{}; bool jumpSettled{}; };
+inline Input coverage_input(unsigned phase,unsigned tick,bool morphed,bool jumpSafe,bool enemyTarget,
+                            bool grounded,Point velocity,bool orbiting,CoverageActionState& state) {
+    auto out=input(phase,tick,morphed,jumpSafe,enemyTarget);
+    if(phase==1&&jumpSafe) {
+        if(!state.jumpSettled) {
+            const bool stable=tick>=6&&grounded&&finite(velocity)&&
+                std::hypot(velocity.x,velocity.y)<.15f&&std::fabs(velocity.z)<.1f;
+            state.groundStable=stable?state.groundStable+1:0;
+            state.jumpSettled=state.groundStable>=2;
+        }
+        out.move=state.jumpSettled;
+    } else if(phase==2) {
+        // Orbit uses a different movement law. Exercise a real target lock at
+        // rest, then release it through the normal input path before walking.
+        out.lock=enemyTarget&&tick<45;
+        out.move=tick>=60&&!orbiting;
     }
     return out;
 }

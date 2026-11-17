@@ -36,7 +36,8 @@ struct Adapter {
     uint64_t lastDrainTick=~uint64_t{},lastSettleTick=~uint64_t{},placementSetupNs{};
     bool prepared{},measuring{},controls{},placing{},routeValid{},toEnd=true,placementPending{};
     Point previousPlacementPosition;
-    Route route;RouteCursor cursor;uint32_t routeWorld{},routeArea{};std::bitset<65536> seen;
+    Route route;CoverageCursor coverageCursor;CoverageActionState coverageAction;
+    uint32_t routeWorld{},routeArea{};std::bitset<65536> seen;
 } adapter;
 Point point(const CVector3f& p){return {p.GetX(),p.GetY(),p.GetZ()};}
 CVector3f vector(Point p){return CVector3f(p.x,p.y,p.z);}
@@ -225,11 +226,20 @@ void drive(CStateManager& mgr,const BenchmarkPlayControl& control) {
         BenchmarkPlayObservation failure;failure.valid=true;failure.x=pos.x;failure.y=pos.y;failure.z=pos.z;
         const auto forward=player.GetTransform().GetForward();failure.yaw=std::atan2(-forward.GetX(),forward.GetY());
         failure.guardStops=1;benchmark_play_observe(failure);
+        const auto velocity=point(player.GetVelocityWR());
+        std::fprintf(stderr,"[benchmark-play] route_guard tick=%u phase=%u input_tick=%u segment=%u forward=%d pos=(%.5f %.5f %.5f) velocity=(%.5f %.5f %.5f) grounded=%d orbit=%u\n",
+            mgr.GetUpdateFrameIndex(),control.view,control.inputTick,adapter.coverageCursor.route.segment,
+            adapter.coverageCursor.route.forward,pos.x,pos.y,pos.z,velocity.x,velocity.y,velocity.z,
+            player.GetPlayerMovementState()==NPlayer::kMS_OnGround,unsigned(player.GetOrbitState()));
         neutral();benchmark_play_fail("route_guard");return;
     }
     const bool morphed=player.GetMorphballTransitionState()==CPlayer::kMS_Morphed;
     const CPatterned* target=TCastToConstPtr<CPatterned>(mgr.GetObjectById(player.GetOrbitNextTargetId()));
-    const auto action=input(control.view,control.inputTick,morphed,adapter.route.jumpSafe,target!=nullptr);
+    const bool grounded=player.GetPlayerMovementState()==NPlayer::kMS_OnGround;
+    const bool orbiting=player.GetOrbitState()!=CPlayer::kOS_NoOrbit;
+    const auto velocity=point(player.GetVelocityWR());
+    const auto action=coverage_input(control.view,control.inputTick,morphed,adapter.route.jumpSafe,
+        target!=nullptr,grounded,velocity,orbiting,adapter.coverageAction);
     if(control.view==2&&control.rehearsing&&control.inputTick==0) {
         const auto& inventory=*mgr.GetPlayerState();const auto* gun=player.GetPlayerGun();
         std::fprintf(stderr,"[benchmark-play] missile preparation visit=%u amount=%d capacity=%d usable=%d secondary=%u charge=%u firing=%u\n",
@@ -240,17 +250,11 @@ void drive(CStateManager& mgr,const BenchmarkPlayControl& control) {
             neutral();benchmark_play_fail("missing_missile_inventory");return;
         }
     }
-    const Point goal=adapter.route.count?
-        path_patrol(adapter.route,pos,point(player.GetVelocityWR()),adapter.cursor):
-        patrol(adapter.route,pos,point(player.GetVelocityWR()),adapter.toEnd);
+    const auto forward=morphed?player.PortControlDirFlat():player.GetTransform().GetForward();
+    const auto command=coverage_command(adapter.route,pos,velocity,point(forward),grounded,
+        action.move&&!orbiting,control.view!=3,PortDebug::MouseInvertX(),adapter.coverageCursor);
     PADStatus pad{};pad.err=PAD_ERR_NONE;
-    if(control.view!=3) {
-        const auto forward=player.GetTransform().GetForward();
-        const auto heading=adapter.route.count?path_heading(adapter.route,adapter.cursor):Point{adapter.route.dx,adapter.route.dy,0};
-        const float desired=std::atan2(-heading.x,heading.y)+((control.inputTick/120)%2?.18f:-.18f);
-        const float error=std::remainder(desired-std::atan2(-forward.GetX(),forward.GetY()),6.283185307f);
-        pad.substickX=error>.04f?-64:error<-.04f?64:0;
-    }
+    pad.substickX=static_cast<s8>(command.aim);
     if(action.fire)pad.button|=PAD_BUTTON_A;
     if(action.missile)pad.button|=PAD_BUTTON_Y;
     if(action.jump)pad.button|=PAD_BUTTON_B;
@@ -260,8 +264,7 @@ void drive(CStateManager& mgr,const BenchmarkPlayControl& control) {
         // Direct aim strafes in the body frame even with retail movement physics.
         // Morph Ball instead uses its camera-derived, interpolated control frame
         // (CMorphBall::ComputeMarioMovement), never the rolling body's transform.
-        const auto forward=morphed?player.PortControlDirFlat():player.GetTransform().GetForward();
-        const auto sticks=stick_for_world(goal,point(forward),morphed?.55f:1.f);
+        const auto sticks=stick_for_world(command.movement,point(forward),morphed?.55f:1.f);
         pad.stickX=static_cast<s8>(sticks.x);pad.stickY=static_cast<s8>(sticks.y);
     }
     submit(pad);
@@ -273,7 +276,7 @@ void benchmark_game_tick(CStateManager& mgr) {
     const auto* area=hasArea?&world->GetAreaAlways(TAreaId(index)):nullptr;
     const auto* player=mgr.GetPlayer();const bool play=benchmark_play_enabled();
     if(play&&!adapter.controls){
-        // Fixed diagnostic input semantics, saved only in the isolated play-v2 user folder.
+        // Fixed diagnostic input semantics, saved only in the isolated benchmark user folder.
         PortDebug::SetTwinStick(true);PortDebug::SetFlickStick(false);
         // Both direct-aim presets strafe; preserve the original movement/jump
         // force laws for this benchmark instead of switching to Remastered.
@@ -283,6 +286,8 @@ void benchmark_game_tick(CStateManager& mgr) {
             // accessibility toggles copied into this isolated benchmark profile.
             PortDebug::SetLockOnToggle(false);PortDebug::SetStickyCharge(false);
             PortDebug::SetGrappleToggle(false);PortDebug::SetSpiderToggle(false);
+            PortDebug::SetPointerAim(false);PortDebug::SetMouseAim(false);PortDebug::SetGyroMode(0);
+            PortDebug::SetStickAimRate(600.f);PortDebug::SetWalkSpeed(100);
         }
     }
     bool ready=area&&area->IsPostConstructed()&&!mgr.GetWantsToQuit()&&mgr.GetGameState()==CStateManager::kGS_Running&&
@@ -360,7 +365,8 @@ void benchmark_game_tick(CStateManager& mgr) {
             if(++adapter.drainTicks<2)return;
         }
         const auto start=nanos();const bool valid=setup(mgr,adapter.route,adapter.routeValid);const auto elapsed=nanos()-start;
-        adapter.prepared=valid;adapter.routeValid=valid;adapter.toEnd=true;adapter.cursor={};adapter.seen.reset();adapter.measuring=false;
+        adapter.prepared=valid;adapter.routeValid=valid;adapter.toEnd=true;
+        adapter.coverageCursor={};adapter.coverageAction={};adapter.seen.reset();adapter.measuring=false;
         if(benchmark_coverage_enabled()&&valid) {
             adapter.prepared=false;adapter.placementPending=true;adapter.placementSetupNs=elapsed;
             adapter.previousPlacementPosition=point(player->GetTranslation());

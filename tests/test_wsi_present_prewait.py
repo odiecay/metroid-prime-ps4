@@ -3,7 +3,10 @@ from pathlib import Path
 import subprocess
 import unittest
 
-from test_present_prewait import block
+if __package__:
+    from .test_present_prewait import block
+else:
+    from test_present_prewait import block
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -22,7 +22,8 @@ class PipelineTouchLifecycleTests(unittest.TestCase):
     def test_drop_context_eviction_shutdown_and_ref_boundaries(self):
         source = Path(os.environ.get('PIPELINE_TOUCH_SOURCE', SOURCE)).read_text()
         bodies = '\n'.join(function(source, signature) for signature in (
-            'static void invalidate_last_pipeline_ref(', 'static void apply_pipeline_drop(',
+            'static void invalidate_last_pipeline_ref(', 'static bool take_pipeline_drop_request(',
+            'static void apply_pipeline_drop(',
             'bool touch_pipeline(', 'void shutdown_pipeline_cache(',
             'static uint32_t evict_idle_pipelines(', 'uint64_t aurora_pipeline_set_context(')
         )
@@ -107,6 +108,80 @@ int main(){using namespace aurora::gfx;
         result = subprocess.run([exe], text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('shutdown_cycles=128', result.stdout)
+        print(result.stdout.strip())
+
+    def test_quiet_lookups_and_racing_drop_publication(self):
+        source = Path(os.environ.get('PIPELINE_TOUCH_SOURCE', SOURCE)).read_text()
+        take = function(source, 'static bool take_pipeline_drop_request(')
+        unit = r'''
+#include <atomic>
+#include <barrier>
+#include <cassert>
+#include <cstdio>
+#include <thread>
+// Real atomic operations; observation hooks force the two critical ordering
+// windows without relying on sleep or scheduler luck.
+struct DropFlag {
+ std::atomic_bool value{false};
+ unsigned loads=0,exchanges=0;
+ void (*afterLoad)()=nullptr;
+ void (*afterExchange)()=nullptr;
+ bool load(std::memory_order order) {
+  ++loads; const bool result=value.load(order);
+  if(afterLoad) afterLoad(); return result;
+ }
+ bool exchange(bool v,std::memory_order order) {
+  ++exchanges; const bool result=value.exchange(v,order);
+  if(afterExchange) afterExchange(); return result;
+ }
+} g_dropPipelines;
+''' + take + r'''
+std::barrier gate(2);
+void pause_consumer() { gate.arrive_and_wait(); gate.arrive_and_wait(); }
+int main() {
+ for(unsigned i=0;i<1000000;++i) assert(!take_pipeline_drop_request());
+ assert(g_dropPipelines.loads==1000000 && g_dropPipelines.exchanges==0);
+ unsigned cases=0;
+ for(unsigned repeat=0;repeat<100;++repeat) {
+  // Publication between the quiet load and return must stay pending.
+  g_dropPipelines.afterLoad=pause_consumer;
+  std::thread producer([] {gate.arrive_and_wait(); g_dropPipelines.value.store(true,std::memory_order_release); gate.arrive_and_wait();});
+  assert(!take_pipeline_drop_request()); producer.join();
+  g_dropPipelines.afterLoad=nullptr;
+  assert(g_dropPipelines.value.load()); assert(take_pipeline_drop_request()); assert(!take_pipeline_drop_request()); ++cases;
+  // Another consumer wins between a true load and exchange: don't consume
+  // the same publication twice.
+  g_dropPipelines.value.store(true,std::memory_order_release);
+  g_dropPipelines.afterLoad=pause_consumer;
+  std::thread winner([] {gate.arrive_and_wait(); assert(g_dropPipelines.value.exchange(false,std::memory_order_acq_rel)); gate.arrive_and_wait();});
+  assert(!take_pipeline_drop_request()); winner.join();
+  g_dropPipelines.afterLoad=nullptr; assert(!take_pipeline_drop_request()); ++cases;
+  // A new publication after consumption must survive that consumption.
+  g_dropPipelines.value.store(true,std::memory_order_release);
+  g_dropPipelines.afterExchange=pause_consumer;
+  std::thread next([] {gate.arrive_and_wait(); g_dropPipelines.value.store(true,std::memory_order_release); gate.arrive_and_wait();});
+  assert(take_pipeline_drop_request()); next.join();
+  g_dropPipelines.afterExchange=nullptr;
+  assert(take_pipeline_drop_request()); assert(!take_pipeline_drop_request()); ++cases;
+ }
+ // Release/acquire publication still makes the request's preceding writes
+ // visible to the thread which consumes it.
+ int published=0;
+ std::thread publisher([&] {published=42; g_dropPipelines.value.store(true,std::memory_order_release);});
+ while(!take_pipeline_drop_request()) std::this_thread::yield();
+ assert(published==42); publisher.join();
+ std::printf("quiet_lookups=1000000 quiet_exchanges=0 deterministic_races=%u release_acquire=1\n",cases);
+}
+'''
+        out = Path(os.environ.get('PIPELINE_TOUCH_TEST_OUT', ROOT / 'build/pipeline-touch-lifecycle-host'))
+        out.mkdir(exist_ok=True)
+        cpp, exe = out / 'request.cpp', out / 'request'
+        cpp.write_text(unit)
+        subprocess.run(['g++-14', '-std=c++20', '-O2', '-pthread',
+                        '-fsanitize=address,undefined', str(cpp), '-o', str(exe)], check=True)
+        result = subprocess.run([exe], text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('deterministic_races=300', result.stdout)
         print(result.stdout.strip())
 
 

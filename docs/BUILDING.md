@@ -5,6 +5,13 @@ Cross-compilation currently uses a Linux x86-64 host, Python 3.12+, LLVM/Clang
 `evidence/sdk-inputs.json` records the required input hashes. SDK binaries are
 supplied separately; an arbitrary OpenOrbis bundle is not interchangeable.
 
+The RADV command-buffer overlay also requires the pinned Clang 18.1.8 build.
+`renderer/orbis/radv-command-generated/manifest.json` records that compiler,
+SDK headers, generated headers and clean Mesa Git blobs. Before applying the
+PS4 CPU instruction flags, `tools/build_radv_command_overlay.py` must reproduce
+the original SDK object's code, relocations and symbols. It writes a private
+object and leaves the SDK archive unchanged. `tools/build_game.py` invokes it.
+
 ```sh
 python3 -m venv .tools
 .tools/bin/pip install cmake==3.31.10
