@@ -4,6 +4,8 @@ Experience Tallon IV in 1080p on PlayStation 4.
 
 A native PS4 port based on **[PrimeDecomp](https://github.com/PrimeDecomp)** and **[Odrannnn’s MetroidPrimePort](https://github.com/timehikari/metroidprimeport)**.
 
+## Download
+
 **[Download 1.0](https://github.com/odiecay/metroid-prime-ps4/releases/download/v1.0/Metroid-Prime-PS4-1.0.zip)** · [Release notes](https://github.com/odiecay/metroid-prime-ps4/releases/tag/v1.0) · [Installation](docs/INSTALLING.md) · [Controls](docs/CONTROLS.md)
 
 The download includes the PS4 PKG and Windows GamePrep helper. Requires a homebrew-enabled PS4 and your own GameCube game dump.
@@ -23,7 +25,7 @@ Targets 60 FPS; demanding areas can drop below it. [PS4 Slim benchmarks](docs/PE
 ## Installation
 
 1. Install `PS4/Metroid-Prime-PS4-1.0.pkg`.
-2. Use `GamePrep/GamePrep.exe` to prepare your RVZ, ISO, GCM or ZIP. A raw ISO/GCM can also be used directly.
+2. Already have an ISO/GCM? Name it `MetroidPrime.iso`. For RVZ or ZIP, use the included `GamePrep/GamePrep.exe`.
 3. Copy the image to `/data/project-prime/data/MetroidPrime.iso` and launch the game.
 
 [Supported versions and full setup](docs/INSTALLING.md).
