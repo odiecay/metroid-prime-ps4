@@ -299,7 +299,7 @@
     "latest_complete_benchmark": "v54 RC11",
     "known_loading_pause": "~1.22s opening-area script construction; predominantly waiting/descheduled; not claimed fixed"
   },
-  "source_only_dependency_note": "Pinned upstream dependencies are reconstructed from upstream.lock.json and the exact frozen patches. Disc images, converted movie/font assets, keys, SDK binaries and generated packages are excluded from source. Five real PS4 screenshots accompany the player documentation.",
+  "source_only_dependency_note": "Pinned upstream dependencies are reconstructed from upstream.lock.json and the exact frozen patches. Disc images, converted movie/font assets, keys, SDK binaries and generated packages are excluded from source. Nine real PS4 screenshots accompany the player documentation.",
   "radv_command_overlay": {
     "generated_header_count": 21,
     "compiler": "Pinned Clang18.1.8; hash recorded in renderer/orbis/radv-command-generated/manifest.json",
@@ -382,6 +382,42 @@
     },
     "docs/images/screenshots/main-menu.jpg": {
       "sha256": "5cc0fe84184b022e63119990761a78592060d59b9432ad44027054105ed568ea",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/phendrana-shorelines-wide.jpg": {
+      "sha256": "35085fc0c936141336e9a41f5630b3012cacdfee873f608da8c7680e444a4cdb",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/chozo-courtyard.jpg": {
+      "sha256": "df0ca6432be64e4c77bff7a1cf54f42828d1e1fca20459df09cc7012c50a1d3c",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/magmoor-lava-channel.jpg": {
+      "sha256": "2cff4a842b3508ab845b3ca786c9f837975462b0b3e4fa4eb382252161a85379",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "source": "Actual user PS4 Slim capture",
+      "pixels_unchanged": true
+    },
+    "docs/images/screenshots/main-quarry-prompt.jpg": {
+      "sha256": "829ff5ccdf49f65a6f947224ae5e0443d91c44f7902548789867f81fb43b378b",
       "dimensions": [
         1920,
         1080

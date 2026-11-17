@@ -51,6 +51,14 @@ startup. The download starts normally.
 |---|---|
 | [![Main menu with sharp lettering and PlayStation prompts](docs/images/screenshots/main-menu.jpg)](docs/images/screenshots/main-menu.jpg) | [![Metroid Prime title screen on PS4](docs/images/screenshots/title-screen.jpg)](docs/images/screenshots/title-screen.jpg) |
 
+| Phendrana Shorelines — another view | Chozo Ruins — courtyard |
+|---|---|
+| [![Snow and architecture in Phendrana Shorelines](docs/images/screenshots/phendrana-shorelines-wide.jpg)](docs/images/screenshots/phendrana-shorelines-wide.jpg) | [![Shaded courtyard in Main Plaza](docs/images/screenshots/chozo-courtyard.jpg)](docs/images/screenshots/chozo-courtyard.jpg) |
+
+| Magmoor Caverns — lava channel | Phazon Mines — text and PlayStation prompt |
+|---|---|
+| [![Lava channel in Fiery Shores](docs/images/screenshots/magmoor-lava-channel.jpg)](docs/images/screenshots/magmoor-lava-channel.jpg) | [![Main Quarry with sharp text and an R1 prompt](docs/images/screenshots/main-quarry-prompt.jpg)](docs/images/screenshots/main-quarry-prompt.jpg) |
+
 ## About the port
 
 The game runs natively on the PS4. Its reconstructed game code is compiled for
