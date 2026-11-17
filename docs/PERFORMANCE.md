@@ -401,3 +401,16 @@ The analyser used for this documentation has SHA-256
 labels window summaries explicitly; the 35-row table above reads each selected
 window's own main-lane `complete frame wall` statistics.
 
+
+## Final 1.0 configuration
+
+The final package keeps Original HD gameplay, 1.5× menu movies (960×720) and
+sharper distance-field lettering. Linear R8 menu-video uploads use 75% fewer
+bytes than the previous four-byte plane format; no new native FPS gain is
+claimed from that change. The complete hardware benchmark above remains v54.
+
+A later normal New Game replay still recorded an approximately 1.22-second
+opening-area script-construction loading pause, mostly waiting/descheduling.
+That pause remains a known limitation. The public package starts normally;
+the optional one-time screenshot tour is confined to a separate private test
+package. A complete playthrough and locked 60 FPS remain unverified.

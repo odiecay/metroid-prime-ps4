@@ -132,7 +132,9 @@ static int run_game(int argc,char **argv) {
         startupPhase="applying application configuration";
         prime::apply_candidate_environment(candidate);
         startupPhase="preparing benchmark storage";
-        benchmarkTour=prime::prepare_benchmark_tour(candidate.key.empty()?std::filesystem::path(root):candidate.root);
+        benchmarkTour=prime::prepare_benchmark_tour(
+            candidate.key.empty()?std::filesystem::path(root):candidate.root,
+            "/app0/prime-screenshot-tour.cfg");
     } catch(const std::exception& error) {
         // These failures precede boot.log. Preserve their actual cause in the
         // always-available native startup trace before displaying the dialog.

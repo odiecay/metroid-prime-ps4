@@ -54,7 +54,7 @@ that the reconstructed source still matches those inputs.
 
 ## Which build this source describes
 
-Current source matches the frozen package `00.55` (RC1) inputs, with portable
+Current source matches the frozen native 1.0 package (`MPRM00001`, Native99) inputs, with portable
 build-path adaptations recorded separately. The `v0.1.0-rc1` tag preserves the
 previous `00.44` source. The game source is pinned to `c872da704adde9a7838492aaa56dac73a32053e4`.
 [SOURCE-RECEIPT.json](../SOURCE-RECEIPT.json) identifies the frozen game-package
@@ -64,7 +64,8 @@ the package was frozen. The receipt identifies the executable's frozen inputs;
 later prose revisions do not change that runtime identity.
 
 The latest complete six-room hardware comparison documented here is v54 RC11.
-v55 has a different package identity. See [Performance Benchmarks](PERFORMANCE.md)
+The final 1.0 package has a different identity and retains that historical
+comparison without claiming a new measured FPS gain. See [Performance Benchmarks](PERFORMANCE.md)
 for the exact relationship between source, package and measured results.
 
 ## Licences and private inputs

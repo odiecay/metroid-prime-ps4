@@ -51,24 +51,49 @@ int main(int argc,char** argv) {
     const fs::path live=root/"live";fs::create_directories(live);
     const bool coverage=mode.starts_with("coverage_");
     finiteAmmo = mode == "coverage_finite_ammo";
-    const bool play=coverage||mode.starts_with("play_");
+    const bool play=coverage||mode.starts_with("play_")||mode=="baked_manual_play";
+    const bool baked=mode.starts_with("baked_");
     std::string settings="render_scale=2.25\nmsaa=1\noriginal_experience=0\n";
     write(live/"port_settings.ini",settings);write(live/"memorycard.bin","PROTECTED-SAVE");
     setenv("MP_USER_PATH",live.c_str(),1);setenv("MP_CACHE_PATH",(live/"cache").c_str(),1);
-    if(mode=="absent") {
-        assert(!prime::prepare_benchmark_tour(root));assert(!prime::benchmark_tour_enabled());
+    const auto app0=root/"app0";
+    const auto bundled=app0/"prime-screenshot-tour.cfg";
+    if(baked) {
+        fs::create_directory(app0);
+        if(mode!="baked_absent") {
+            write(bundled,mode=="baked_invalid"?"PROJECT_PRIME_SCREENSHOT_TOUR_":"PROJECT_PRIME_SCREENSHOT_TOUR_V1\n");
+            if(mode=="baked_source_symlink") {fs::remove(bundled);fs::create_symlink(live/"memorycard.bin",bundled);}
+            else fs::permissions(bundled,fs::perms::owner_read|fs::perms::group_read|fs::perms::others_read);
+        }
+        fs::permissions(app0,fs::perms::owner_read|fs::perms::owner_exec|fs::perms::group_read|fs::perms::group_exec|fs::perms::others_read|fs::perms::others_exec);
+    }
+    const auto prepare=[&]{return prime::prepare_benchmark_tour(root,baked?bundled:fs::path{});};
+    const auto consumed=root/"benchmarks/screenshots-v1/consumed.cfg";
+    if(mode=="baked_consumed"||mode=="baked_consumed_invalid"||mode=="baked_consumed_symlink") {
+        fs::create_directories(consumed.parent_path()/"user");
+        write(consumed.parent_path()/"user/port_settings.ini","PRESERVED-BENCHMARK");
+        if(mode=="baked_consumed_symlink")fs::create_symlink(live/"memorycard.bin",consumed);
+        else write(consumed,mode=="baked_consumed_invalid"?"PARTIAL":"PROJECT_PRIME_SCREENSHOT_TOUR_V1_CONSUMED\n");
+    }
+    if(mode=="baked_consumed") {
+        assert(!prepare());assert(!prime::benchmark_tour_enabled());assert(std::string(getenv("MP_USER_PATH"))==live);
+        assert(read(consumed.parent_path()/"user/port_settings.ini")=="PRESERVED-BENCHMARK");
+        assert(!fs::exists(consumed.parent_path()/"logs"));assert(read(live/"memorycard.bin")=="PROTECTED-SAVE");return 0;
+    }
+    if(mode=="absent"||mode=="baked_absent") {
+        assert(!prepare());assert(!prime::benchmark_tour_enabled());
         assert(!fs::exists(root/"benchmarks"));assert(std::string(getenv("MP_USER_PATH"))==live);
         return 0;
     }
-    write(root/"benchmark-tour.cfg",mode=="invalid"?"not-a-tour\n":"PROJECT_PRIME_BENCHMARK_TOUR_V1\n");
+    if(!baked||mode=="baked_manual_play")write(root/"benchmark-tour.cfg",mode=="invalid"?"not-a-tour\n":"PROJECT_PRIME_BENCHMARK_TOUR_V1\n");
     if(play)write(root/"benchmark-play.cfg",mode=="play_invalid"?"WRONG_VERSION\n":"PROJECT_PRIME_BENCHMARK_PLAY_V2\n");
     if(coverage)write(root/"benchmark-coverage.cfg",mode=="coverage_invalid"?"WRONG_VERSION\n":"PROJECT_PRIME_BENCHMARK_COVERAGE_V3\n");
     if(mode=="symlink") {
         fs::create_directories(root/"benchmarks");
         fs::create_directory_symlink(live,root/"benchmarks"/"tour-v1");
     }
-    if(mode=="invalid"||mode=="symlink"||mode=="play_invalid"||mode=="coverage_invalid") {
-        bool failed=false;try { prime::prepare_benchmark_tour(root); }catch(...) {failed=true;}
+    if(mode=="invalid"||mode=="symlink"||mode=="play_invalid"||mode=="coverage_invalid"||mode=="baked_invalid"||mode=="baked_source_symlink"||mode=="baked_consumed_invalid"||mode=="baked_consumed_symlink") {
+        bool failed=false;try { prepare(); }catch(...) {failed=true;}
         assert(failed);assert(!prime::benchmark_tour_enabled());
         assert(std::string(getenv("MP_USER_PATH"))==live);assert(read(live/"port_settings.ini")==settings);
         assert(read(live/"memorycard.bin")=="PROTECTED-SAVE");return 0;
@@ -87,19 +112,19 @@ int main(int argc,char** argv) {
         // libstdc++ may truncate before chmod, unlike the pinned libc++.
         // Restore the sentinel before exercising production's atomic copy.
         write(user/"port_settings.ini","STALE-BENCHMARK-SETTINGS");
-        assert(prime::prepare_benchmark_tour(root));
+        assert(prepare());
         assert(read(user/"port_settings.ini")==settings);
         assert(permissionChanges==1);
         prime::benchmark_tour_reset_for_testing();
         setenv("MP_USER_PATH",live.c_str(),1);
         settings+="anisotropy=16\n";write(live/"port_settings.ini",settings);
     }
-    assert(prime::prepare_benchmark_tour(root));
+    assert(prepare());
     if(mode=="play_restart") {
         assert(permissionChanges==1);
         assert(!fs::exists(root/"benchmarks/play-v2/user/port_settings.ini.pending"));
     }
-    assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/(coverage?"coverage-v3":play?"play-v2":"tour-v1");
+    assert(prime::benchmark_tour_enabled());const fs::path bench=root/"benchmarks"/(coverage?"coverage-v3":play?"play-v2":baked?"screenshots-v1":"tour-v1");
     assert(std::sscanf(getenv("MP_BOOT_WORLD"),"%x:%x",&world,&area)==2);
     assert(prime::benchmark_play_enabled()==play);
     assert(prime::benchmark_coverage_enabled()==coverage);
@@ -114,7 +139,7 @@ int main(int argc,char** argv) {
     const unsigned tickLimit=coverage?250000:100000;
     while(prime::benchmark_tour_enabled()&&tick<tickLimit) {
         auto control=prime::benchmark_play_control();
-        if(mode=="shader_busy") {
+        if(mode=="shader_busy"||mode=="baked_shader_busy") {
             shaders.queued=tick<450?3:0;shaders.background=tick<600?2:0;
             shaders.prefetchQueued=tick<630?1:0;
             shaders.prefetchActive=tick>=630&&tick<650?1:0;
@@ -163,6 +188,20 @@ int main(int argc,char** argv) {
     if(mode=="complete") {
         assert(commands.size()==81); //22 inventory,48 fixed-yaw,11 cross-room loads
         for(const auto& c:commands)assert(!c.starts_with("state ")&&!c.starts_with("resume ")&&!c.starts_with("stick "));
+    }
+    if(baked) {
+        assert(read(bundled)=="PROJECT_PRIME_SCREENSHOT_TOUR_V1\n");
+        assert(read(live/"memorycard.bin")=="PROTECTED-SAVE");
+        if(play)assert(!fs::exists(consumed));
+        else {
+            assert(read(consumed)=="PROJECT_PRIME_SCREENSHOT_TOUR_V1_CONSUMED\n");
+            assert(commands.size()==51); //22inventory+24yaws+5warps, one pass.
+            const auto logBefore=read(bench/"logs/benchmark-tour.jsonl");
+            prime::benchmark_tour_reset_for_testing();
+            setenv("MP_USER_PATH",live.c_str(),1);setenv("MP_CACHE_PATH",(live/"cache").c_str(),1);
+            assert(!prepare());assert(!prime::benchmark_tour_enabled());
+            assert(std::string(getenv("MP_USER_PATH"))==live);assert(read(bench/"logs/benchmark-tour.jsonl")==logBefore);
+        }
     }
     std::printf("%s\n",(bench/"logs"/"benchmark-tour.jsonl").c_str());
     prime::benchmark_tour_reset_for_testing();

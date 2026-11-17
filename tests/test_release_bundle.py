@@ -112,12 +112,19 @@ class ReleaseBundleTests(unittest.TestCase):
         self.receipt["commercial_game_data_included"] = True
         self.write_receipt()
         with self.assertRaises(ValueError): self.build()
+
         self.receipt.update(asset_install_layout="direct_app0_menu_movies",
                             bundled_menu_movies={"scale": 1.5, "width": 960, "height": 720,
                                                  "files": {name: "a"*64 for name in TARGETS}},
                             extracted_files={name: "b"*64 for name in TARGETS})
         self.write_receipt()
         with self.assertRaises(ValueError): self.build()
+
+    def test_screenshot_tour_cannot_enter_public_download(self):
+        self.receipt['screenshot_tour_embedded'] = True
+        self.write_receipt()
+        with self.assertRaises(ValueError): self.build()
+        self.assertFalse(self.output.exists())
 
     def test_helper_traversal_or_unlisted_file_is_rejected(self):
         for path in ("ProjectPrime-GamePrep/../../escape", "ProjectPrime-GamePrep/extra.iso"):

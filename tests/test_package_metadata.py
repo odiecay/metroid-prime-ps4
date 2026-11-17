@@ -24,6 +24,11 @@ def fixture():
                      struct.pack('<HHIII', 9, 0x204, 6, 6, 10) + keys + value)
 
 class PackageMetadataTests(unittest.TestCase):
+    def test_game_release_uses_metroid_identity(self):
+        self.assertEqual(package.game_release_identity('01.00'),
+                         ('MPRM00001', 'Metroid Prime', 'METROIDPRIMEPS4'))
+        self.assertEqual(package.game_release_identity('00.55'),
+                         ('PRME00013', 'Metroid Prime', 'PROJECTPRIME0025'))
     def test_game_artwork_must_be_selected_before_build_inputs_are_touched(self):
         args = ['package.py', '--kind', 'game', '--elf', 'unused.elf', '--oelf', 'unused.oelf',
                 '--eboot', 'unused.bin', '--version', '00.56', '--out', 'unused-output']

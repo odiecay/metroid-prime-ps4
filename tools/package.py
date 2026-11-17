@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from verify_elf import verify
 from package_assets import add_asset_tree, archive_sources
 from verify_graphics_profile import verify as verify_private_assets
-from package_menu_movies import verify_menu_movies
+from package_menu_movies import verify_menu_movies, verify_hd_font, FONT_TARGET
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -82,6 +82,12 @@ def entry_indices(text):
             result[match[2]] = int(match[1])
     return result
 
+
+def game_release_identity(version):
+    if tuple(map(int, version.split('.'))) >= (1, 0):
+        return 'MPRM00001', 'Metroid Prime', 'METROIDPRIMEPS4'
+    return 'PRME00013', 'Metroid Prime', 'PROJECTPRIME0025'
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--kind', required=True, choices=['vulkan-probe', 'runtime-probe', 'dawn-probe', 'signal-probe', 'storage-probe', 'loader-probe', 'boot-probe', 'game'])
@@ -98,6 +104,10 @@ def main():
                                help='Explicitly assemble without application icon/background artwork')
     parser.add_argument('--private-menu-movies', type=Path,
                         help='Include validated, locally converted front-end movies directly in the PKG')
+    parser.add_argument('--private-hd-font', type=Path,
+                        help='Include a validated matching distance-field font using original text layout')
+    parser.add_argument('--screenshot-tour', action='store_true',
+                        help='Private one-time screenshot tour; excluded from public player downloads')
     asset_inputs = parser.add_mutually_exclusive_group()
     asset_inputs.add_argument('--private-assets', type=Path)
     asset_inputs.add_argument('--private-assets-dir', type=Path)
@@ -105,6 +115,8 @@ def main():
     args = parser.parse_args()
     if args.kind == 'game' and not args.verify_existing and not (args.private_artwork or args.no_artwork):
         parser.error('Select --private-artwork PATH or explicitly use --no-artwork; game artwork must not be silently omitted')
+    if args.screenshot_tour and (args.kind != 'game' or args.candidate_profile != 'consolidated-original-hd'):
+        parser.error('The private screenshot tour requires the Original HD game profile')
     modules=startup_modules(json.loads((ROOT/'upstream.lock.json').read_text()))
     if not re.fullmatch(r'\d{2}\.\d{2}', args.version):
         parser.error('--version must use NN.NN')
@@ -144,14 +156,23 @@ def main():
         consolidated=args.candidate_profile in ('consolidated','consolidated-original-hd')
         if args.kind!='game' or (not consolidated and args.version!=version) or (consolidated and tuple(map(int,args.version.split('.')))<(0,25)):
             parser.error('Candidate profile requires its matching game package version '+version)
+        if consolidated:
+            title_id, title, label = game_release_identity(args.version)
     private_assets=None
     menu_files, menu_receipt = {}, None
+    font_file, font_receipt = None, None
     if args.private_menu_movies:
         folder = args.private_menu_movies.resolve()
         if args.kind != 'game' or args.candidate_profile != 'consolidated-original-hd' or \
            not folder.is_relative_to(ROOT/'private'):
             parser.error('Bundled menu movies require the Original HD game profile and private input folder')
         menu_files, menu_receipt = verify_menu_movies(folder)
+    if args.private_hd_font:
+        font_file = args.private_hd_font.resolve()
+        if args.kind != 'game' or args.candidate_profile != 'consolidated-original-hd' or \
+           not font_file.is_relative_to(ROOT/'private'):
+            parser.error('The matching HD font requires the Original HD game profile and private input')
+        font_receipt = verify_hd_font(font_file)
     if args.private_assets:
         private_assets=args.private_assets.resolve()
         if args.candidate_profile!='consolidated' or not private_assets.is_relative_to(ROOT/'private'):
@@ -188,6 +209,15 @@ def main():
     previous_receipt = json.loads((out/'receipt.json').read_text()) if args.verify_existing and (out/'receipt.json').is_file() else None
     inputs = out / 'inputs'
     inputs.mkdir(exist_ok=args.verify_existing)
+    screenshot_request = None
+    if args.screenshot_tour:
+        screenshot_request = inputs/'prime-screenshot-tour.cfg'
+        expected_request = b'PROJECT_PRIME_SCREENSHOT_TOUR_V1\n'
+        if args.verify_existing:
+            if screenshot_request.read_bytes() != expected_request:
+                raise RuntimeError('Existing screenshot request differs from its pinned marker')
+        else:
+            screenshot_request.write_bytes(expected_request)
     # Preserve the actual manifests with each package. A later workspace pin
     # update must not turn an old receipt into an unresolved hash reference.
     for original in (ROOT/'upstream.lock.json',ROOT/'evidence/sdk-inputs.json'):
@@ -236,6 +266,10 @@ def main():
         command += ['--extra', str(path)+':sce_module/'+name]
     for name,path in sorted(menu_files.items()):
         command += ['--extra', str(path)+':'+name]
+    if font_file:
+        command += ['--extra', str(font_file)+':'+FONT_TARGET]
+    if screenshot_request:
+        command += ['--extra', str(screenshot_request)+':prime-screenshot-tour.cfg']
     if descriptor:
         command += ['--extra',str(descriptor)+':prime-profile.txt']
     if private_assets:
@@ -317,6 +351,14 @@ def main():
         allowed.add(name)
         if sha(extracted/name) != sha(original):
             raise RuntimeError('Extracted menu movie differs from validated input: '+name)
+    if font_file:
+        allowed.add(FONT_TARGET)
+        if sha(extracted/FONT_TARGET) != font_receipt['sha256']:
+            raise RuntimeError('Extracted HD font differs from validated input')
+    if screenshot_request:
+        allowed.add('prime-screenshot-tour.cfg')
+        if (extracted/'prime-screenshot-tour.cfg').read_bytes() != screenshot_request.read_bytes():
+            raise RuntimeError('Extracted screenshot opt-in differs from pinned input')
     files = {str(p.relative_to(extracted)): sha(p) for p in extracted.rglob('*') if p.is_file()}
     if files.keys() - allowed:
         raise RuntimeError('Unexpected files in package: ' + str(files.keys() - allowed))
@@ -350,9 +392,12 @@ def main():
         'packaging_inputs': {str(p): sha(p) for p in [helper, pkgtool, sdk / 'bin/linux/create-gp4', ROOT/'tools/package_assets.py']},
         'extraction_inputs':extractor_inputs,
         'private_artwork_included': bool(artwork), 'private_artwork_provenance': provenance,
-        'commercial_game_data_included': bool(private_assets or private_dir or menu_files),
-        'private_testing_only': bool(private_assets or private_dir or provenance or menu_files),
+        'commercial_game_data_included': bool(private_assets or private_dir or menu_files or font_file),
+        'private_testing_only': bool(private_assets or private_dir or provenance or menu_files or font_file or screenshot_request),
         'bundled_menu_movies': menu_receipt,
+        'bundled_hd_font': font_receipt,
+        'screenshot_tour_embedded': bool(screenshot_request),
+        'normal_play_on_launch': not bool(screenshot_request),
         'asset_install_layout': 'direct_app0_menu_movies' if menu_files else 'direct_app0_files' if private_dir else 'first_launch_bundle' if private_assets else 'external',
         'installed_asset_profile': private_manifest,
         'remastered_bundle_sha256': sha(private_assets) if private_assets else None,

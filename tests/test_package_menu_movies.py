@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'tools'))
-from package_menu_movies import NAMES, TARGETS, verify_menu_movies
+from package_menu_movies import NAMES, TARGETS, verify_menu_movies, verify_hd_font
 
 
 class MenuPackagingTests(unittest.TestCase):
@@ -46,6 +46,31 @@ class MenuPackagingTests(unittest.TestCase):
         self.assertEqual(set(files), TARGETS)
         self.assertEqual((receipt['bytes'], receipt['frames']), (720, 9))
         self.assertFalse(receipt['first_launch_extraction'])
+
+    def test_selected_three_times_resolution_preserves_extent(self):
+        self.receipt.update(scale=3, width=1920, height=1440)
+        for row in self.receipt['clips']:
+            path = self.root/row['output']
+            data = bytearray(path.read_bytes())
+            struct.pack_into('>II', data, 68, 1920, 1440)
+            path.write_bytes(data)
+            row['output_sha256'] = hashlib.sha256(data).hexdigest()
+        self.write_receipt()
+        _, receipt = verify_menu_movies(self.root)
+        self.assertEqual((receipt['scale'], receipt['width'], receipt['height']), (3, 1920, 1440))
+
+    def test_hd_font_header_and_metrics_are_bounded(self):
+        data = struct.pack('<4sIIIffI', b'SDFT', 1, 4, 4, 1., .2, 1)
+        data += struct.pack('<I9f', ord('H'), 0., 1., 1., 1., 0., 1., 1., 0., 1.) + bytes(16)
+        path = self.root/'deface.sdfont'
+        path.write_bytes(data)
+        self.assertEqual(verify_hd_font(path)['glyphs'], 1)
+        path.write_bytes(data[:-1])
+        with self.assertRaises(ValueError): verify_hd_font(path)
+        bad = bytearray(data)
+        struct.pack_into('<f', bad, 32, float('nan'))
+        path.write_bytes(bad)
+        with self.assertRaises(ValueError): verify_hd_font(path)
 
     def test_missing_extra_linked_and_changed_payload(self):
         extra = self.root/'hd-menu/Video/extra.thp'

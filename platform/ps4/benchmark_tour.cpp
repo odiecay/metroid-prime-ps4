@@ -2,6 +2,9 @@
 #include "benchmark_tour.hpp"
 #include <aurora/gfx.h>
 #include <array>
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -22,6 +25,8 @@ namespace fs = std::filesystem;
 constexpr std::string_view Request = "PROJECT_PRIME_BENCHMARK_TOUR_V1\n";
 constexpr std::string_view PlayRequest = "PROJECT_PRIME_BENCHMARK_PLAY_V2\n";
 constexpr std::string_view CoverageRequest = "PROJECT_PRIME_BENCHMARK_COVERAGE_V3\n";
+constexpr std::string_view ScreenshotRequest = "PROJECT_PRIME_SCREENSHOT_TOUR_V1\n";
+constexpr std::string_view ScreenshotConsumed = "PROJECT_PRIME_SCREENSHOT_TOUR_V1_CONSUMED\n";
 constexpr uint64_t Second = 1000000000ull;
 constexpr unsigned WarmTicks = 180, ViewSettleTicks = 60, Passes = 2;
 constexpr uint64_t MeasureNs = 12 * Second, RoomTimeoutNs = 120 * Second;
@@ -69,7 +74,7 @@ constexpr std::array<Scene, 24> CoverageScenes{{
 }};
 enum class Phase { Waiting, ViewSettle, Rehearsing, ShaderWait, Measuring, Finished };
 struct State {
-    bool enabled{}, started{}, inventory{}, play{}, coverage{}, placementReady{}, jumpSafe{}, havePosition{}, rehearsed{};
+    bool enabled{}, started{}, inventory{}, play{}, coverage{}, screenshot{}, placementReady{}, jumpSafe{}, havePosition{}, rehearsed{};
     unsigned shaderRetries{}, shaderStableFrames{};
     uint64_t lastShaderFrame{};
     AuroraPipelineReadiness shaders{}, measuredShaders{};
@@ -117,6 +122,7 @@ bool marker(const char* event, const char* status, uint64_t ns, uint64_t tick,
         scene.name, state.pass + 1, state.view, state.view * 90, scene.world, scene.area,
         actualWorld, actualArea, status, static_cast<unsigned long long>(state.frames), state.errors,
         state.play ? "scripted_native_input_v2" : "stationary_authored_spawn_four_yaws");
+    std::fprintf(state.log, ",\"screenshot_tour\":%s", state.screenshot ? "true" : "false");
     static constexpr const char* kinds[] = {"running_aim", "beam_jump", "missile_aim", "morph_roll_bombs"};
     std::fprintf(state.log, ",\"input_source\":\"%s\",\"tour_version\":%u,\"view_kind\":\"%s\",\"dawn_call_profile\":%s,"
         "\"movement_distance_m\":%.6f,\"aim_degrees\":%.4f,\"power_projectiles\":%u,\"charged_projectiles\":%u,"
@@ -178,6 +184,32 @@ void directory(const fs::path& path) {
         throw std::runtime_error("Benchmark path is not a directory");
     fs::create_directory(path);
 }
+void validate_request(const fs::path& path, std::string_view expected) {
+    if (fs::is_symlink(path) || !fs::is_regular_file(path) || fs::file_size(path) > 128)
+        throw std::runtime_error("Invalid benchmark tour request");
+    std::ifstream input(path, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(input)), {});
+    if (!input.eof() && input.fail()) throw std::runtime_error("Could not read benchmark request");
+    if (text != expected) throw std::runtime_error("Invalid benchmark request marker");
+}
+void consume_screenshot_request(const fs::path& path) {
+    // Only this newly created file is writable. Never alter the app0 source or
+    // a previous consumption record, and never follow a preexisting link.
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) throw std::runtime_error("Could not record one-time screenshot tour");
+    size_t done = 0;
+    while (done < ScreenshotConsumed.size()) {
+        const auto n = ::write(fd, ScreenshotConsumed.data() + done, ScreenshotConsumed.size() - done);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { ::close(fd); ::unlink(path.c_str());
+            throw std::runtime_error("Could not write one-time screenshot tour record"); }
+        done += static_cast<size_t>(n);
+    }
+    if (::close(fd) != 0) {
+        ::unlink(path.c_str());
+        throw std::runtime_error("Could not close one-time screenshot tour record");
+    }
+}
 void environment(const char* key, const std::string& value) {
     if (setenv(key, value.c_str(), 1)) throw std::runtime_error("Could not set benchmark environment");
 }
@@ -192,7 +224,7 @@ void next_scene(uint64_t ns, uint64_t tick, uint64_t frame) {
     if (state.phase == Phase::Finished) return;
     if (++state.scene == scene_count()) {
         state.scene = 0;
-        const unsigned passes = state.play ? 1u : Passes;
+        const unsigned passes = (state.play || state.screenshot) ? 1u : Passes;
         if (++state.pass == passes) {
             // Keep the final marker's visit/scene identity within the actual tour.
             state.pass = passes - 1; state.scene = scene_count() - 1;
@@ -343,25 +375,36 @@ void tick_at(uint32_t world, uint32_t area, uint64_t tick, uint64_t frame, bool 
 }
 } // namespace
 
-bool prepare_benchmark_tour(const fs::path& root) {
+bool prepare_benchmark_tour(const fs::path& root, const fs::path& bundledScreenshotRequest) {
     const fs::path coverageRequest = root / "benchmark-coverage.cfg";
     const bool coverage = fs::exists(coverageRequest) || fs::is_symlink(coverageRequest);
     const fs::path playRequest = root / "benchmark-play.cfg";
     const bool play = coverage || fs::exists(playRequest) || fs::is_symlink(playRequest);
-    const fs::path request = coverage ? coverageRequest : play ? playRequest : root / "benchmark-tour.cfg";
-    if (!fs::exists(request) && !fs::is_symlink(request)) return false;
+    const fs::path tourRequest = root / "benchmark-tour.cfg";
+    const bool manual = play || fs::exists(tourRequest) || fs::is_symlink(tourRequest);
+    const bool screenshot = !manual && !bundledScreenshotRequest.empty() &&
+        (fs::exists(bundledScreenshotRequest) || fs::is_symlink(bundledScreenshotRequest));
+    const fs::path request = coverage ? coverageRequest : play ? playRequest : screenshot ? bundledScreenshotRequest : tourRequest;
+    if (!manual && !screenshot) return false;
     if (state.enabled) throw std::runtime_error("Benchmark tour was already configured");
-    if (fs::is_symlink(request) || !fs::is_regular_file(request) || fs::file_size(request) > 128)
-        throw std::runtime_error("Invalid benchmark tour request");
-    std::ifstream input(request, std::ios::binary);
-    const std::string text((std::istreambuf_iterator<char>(input)), {});
-    if (!input.eof() && input.fail()) throw std::runtime_error("Could not read benchmark request");
-    if (text != (coverage ? CoverageRequest : play ? PlayRequest : Request)) throw std::runtime_error("Invalid benchmark request marker");
+    validate_request(request, screenshot ? ScreenshotRequest : coverage ? CoverageRequest : play ? PlayRequest : Request);
+    const auto screenshotBase = root / "benchmarks" / "screenshots-v1";
+    const auto consumed = screenshotBase / "consumed.cfg";
+    if (screenshot) {
+        for (const auto& parent : {root / "benchmarks", screenshotBase}) {
+            if (fs::is_symlink(parent) || (fs::exists(parent) && !fs::is_directory(parent)))
+                throw std::runtime_error("Invalid screenshot tour namespace");
+        }
+        if (fs::exists(consumed) || fs::is_symlink(consumed)) {
+            validate_request(consumed, ScreenshotConsumed);
+            return false;
+        }
+    }
     const char* user = std::getenv("MP_USER_PATH");
     const fs::path settings = user ? fs::path(user) / "port_settings.ini" : fs::path{};
     if (settings.empty() || fs::is_symlink(settings) || !fs::is_regular_file(settings) || fs::file_size(settings) > 1024 * 1024)
         throw std::runtime_error("Benchmark requires the current port_settings.ini for identical graphics settings");
-    directory(root / "benchmarks"); const auto base = root / "benchmarks" / (coverage ? "coverage-v3" : play ? "play-v2" : "tour-v1");
+    directory(root / "benchmarks"); const auto base = root / "benchmarks" / (coverage ? "coverage-v3" : play ? "play-v2" : screenshot ? "screenshots-v1" : "tour-v1");
     directory(base); directory(base / "user"); directory(base / "cache"); directory(base / "logs");
     directory(base / "cache" / "mesa");
     for (const auto& item : fs::recursive_directory_iterator(base))
@@ -396,6 +439,7 @@ bool prepare_benchmark_tour(const fs::path& root) {
     if (!state.log) throw std::runtime_error("Could not open benchmark tour log");
     state.play = play;
     state.coverage = coverage;
+    state.screenshot = screenshot;
     state.session = prime_ps4_trace_session_id();
     state.runId = state.session + (play ? "-play-" : "-tour-") + std::to_string(now_ns());
     environment("MP_USER_PATH", (base / "user").string());
@@ -409,6 +453,7 @@ bool prepare_benchmark_tour(const fs::path& root) {
     // No network console; the in-process queue is available without MP_CONSOLE.
     unsetenv("MP_CONSOLE");
     if (play) environment("MP_DAWN_CALL_PROFILE", "1");
+    if (screenshot) consume_screenshot_request(consumed);
     state.enabled = true;
     return true;
 }

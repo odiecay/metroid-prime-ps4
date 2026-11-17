@@ -27,6 +27,7 @@ foundation to PS4, from graphics and audio to controls, storage and packaging.
 - **PlayStation button prompts** throughout the game.
 - **Fullscreen menus**, with smoother sampling and bundled 1.5× upscaled movie backgrounds.
 - **Asynchronous menu-music loading**, with playback gated until every audio chunk is ready.
+- **Sharper distance-field lettering**, preserving the original font layout.
 - **A 3D PS4 in the Options screen**, with the menu's existing lighting and animation.
 - **Persistent saves and settings** that stay in place when updating the application.
 - **Renderer and loading improvements**, with shader caching, less CPU draw setup
@@ -45,8 +46,9 @@ PS4 GPU. Audio and controller input use native PS4 services too.
 Aurora, Dawn and RADV are upstream projects, each with their own contributors.
 The PS4 work connects and adapts them to Orbis, with extensive optimisation for
 the Jaguar CPU and GCN GPU. The aim is to make Metroid Prime feel at home on PS4
-while keeping the original game's look. **Original HD** uses the GameCube game
-and its assets; it doesn't use Nintendo's Switch Remastered assets.
+while keeping the original game's look. **Original HD** gameplay uses the
+GameCube models, textures, worlds and effects. Sharper lettering uses a Deface
+distance-field font converted from user-supplied Remastered data.
 
 ## How it runs
 

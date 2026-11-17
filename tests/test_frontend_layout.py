@@ -57,18 +57,22 @@ class FrontEndLayoutTests(unittest.TestCase):
                          function(baseline, "static void MyTHPGXYuv2RgbSetup(").split('  GXVtxDescList attr[3]', 1)[1])
         (out / "frontend_video_filter.inc").write_text(
             function(source, "static void MyTHPYuv2RgbTextureSetup("))
+        (out / "linear_menu_selector.inc").write_text(function(source, "bool CMoviePlayer::PortUsesLinearMenuPlanes("))
         compiler = shutil.which("clang++") or shutil.which("g++")
         flags = ["-std=c++20", "-O2", "-g", "-I", str(out)]
         if os.environ.get("PRIME_FRONTEND_SANITIZE") == "1":
             compiler = shutil.which("g++")
             flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
-        built = subprocess.run([compiler, *flags, str(ROOT / "tests/frontend_video_filter.cpp"),
-                                "-o", str(out / "run")], capture_output=True, text=True, timeout=60)
-        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-        run = subprocess.run([out / "run"], capture_output=True, text=True, timeout=30)
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertIn("texture_ownership_unchanged=1", run.stdout)
-        print(run.stdout, end="")
+        for native in (False, True):
+            binary = out / ("native" if native else "run")
+            built = subprocess.run([compiler, *flags, *(["-D__ORBIS__"] if native else []),
+                                    str(ROOT / "tests/frontend_video_filter.cpp"), "-o", str(binary)],
+                                   capture_output=True, text=True, timeout=60)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            run = subprocess.run([binary], capture_output=True, text=True, timeout=30)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertIn("texture_ownership_unchanged=1", run.stdout)
+            print(run.stdout, end="")
 
     def test_native_movie_conversion_omits_only_output_field_mask(self):
         out = ROOT / 'build/frontend-hd/host-progressive'

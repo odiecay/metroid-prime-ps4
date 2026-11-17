@@ -13,7 +13,7 @@ import shutil
 import stat
 import tempfile
 import zipfile
-from package_menu_movies import TARGETS
+from package_menu_movies import TARGETS, FONT_TARGET
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_URL = "https://github.com/odiecay/metroid-prime-ps4"
@@ -43,16 +43,23 @@ def verified_package(folder, version):
     if not receipt_path.is_file():
         receipt_path = folder / "build-receipt.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if receipt.get("screenshot_tour_embedded"):
+        raise ValueError("The private screenshot-tour package cannot be used for the public download")
     menu = receipt.get("bundled_menu_movies")
+    scale = menu.get("scale") if menu else None
+    font = receipt.get("bundled_hd_font")
+    font_valid = font is None or (font.get("file") == FONT_TARGET and
+                    receipt.get("extracted_files", {}).get(FONT_TARGET) == font.get("sha256"))
     menu_only = bool(menu and receipt.get("asset_install_layout") == "direct_app0_menu_movies" and
                      not receipt.get("installed_asset_profile") and not receipt.get("remastered_bundle_sha256") and
-                     menu.get("scale") == 1.5 and (menu.get("width"), menu.get("height")) == (960, 720) and
+                     scale in (1.5, 2, 3, 4) and
+                     (menu.get("width"), menu.get("height")) == (640*scale, 480*scale) and font_valid and
                      set(menu.get("files", {})) == TARGETS and all(
                          receipt.get("extracted_files", {}).get(name) == digest
                          for name, digest in menu["files"].items()))
     if receipt.get("stage") != "packaged_and_host_verified" or \
        receipt.get("metadata", {}).get("APP_VER") != version or \
-       receipt["metadata"].get("TITLE_ID") != "PRME00013" or \
+       receipt["metadata"].get("TITLE_ID") not in ("PRME00013", "MPRM00001") or \
        not (receipt.get("commercial_game_data_included") is False or
             receipt.get("commercial_game_data_included") is True and menu_only):
         raise ValueError("Expected a verified matching game package with only its validated menu payload")

@@ -3,24 +3,17 @@
   "version": "01.00",
   "stage": "packaged_and_host_verified",
   "package_file": "Metroid-Prime-PS4-1.0.pkg",
-  "package_bytes": 213581824,
-  "package_sha256": "3ce034ac0f89dbe456c97a8baa0786985b90e7117c9b7e18aac21fd9ca271449",
+  "package_bytes": 213843968,
+  "package_sha256": "d298b38fc913e3b9e341325f78187cf1dbba15ebd97ba9128665da9bbce38012",
   "source_tag": null,
   "upstream_commit": "c872da704adde9a7838492aaa56dac73a32053e4",
-  "runtime_source_files_verified": 182,
+  "runtime_source_files_verified": 184,
   "runtime_source_sha256": {
-    "tests/aram_preload_trace.cpp": "f90269dd18e495c7a14b708f804fe5abe6b3f7071e63b867bd528ab5b211a5b3",
-    "tests/builtin_menu_mod.cpp": "13739cf046c44e88eecc8297ea64d51921d2058cbb6ecb87b288d278587d397a",
-    "tests/frontend_movie_progressive.cpp": "e653d1f33ad9dfca4392f68ee12b9d067635455d9225cc0bd2a2e2087dfbc8c0",
-    "tests/loader_trace.cpp": "c27d65f2a9e3341debd568d342b2a44fde0bd21acc16c9ad6c089c7c36872ecd",
-    "tests/ps4_map_controls.cpp": "eace6d9dc263b7e6c9da8248d7c0140aab8491109da4c526509f4f13a98c4285",
-    "tests/startup_feedback.cpp": "12941ab0bae55e3fa270dbef078b237f89935d20b87ee0110ac04c80c457a64c",
-    "tests/startup_trace.c": "c140022e2c7c503267869c08e2b670ca47ad8cead10822bdfcfbafc33208a720",
-    "tests/static_audio_preload.cpp": "519d36dec69ef2af7efeee6568996e54438d9d13593c3f087f389b5dbc347e5d",
-    "tools/prepare_menu_movie.cpp": "408817546d7701f76d092067c5ecced1c1a6f37ad1e220e45739170c1c9d8200",
+    "tests/hd_font_render.cpp": "5e444d5663b2cd90dda7119f615ad4b197246e04bda31dab7827fe27a611a910",
+    "tests/loader_deep_trace.cpp": "cc321ecee6f9a51ecab281e521fd66da0cb69b8a8e0eef936328c6dafecbb20a",
     "CMakeLists.txt": "06dffc9a3ad185ef0a2c4aa271ea120e2c0b221ea41026da51bea0eacd0e5438",
     "game/CMakeLists.txt": "58ba3ddd6d24d27b2c28bf6201d1b7889f093f58cfe71c07126cf876a24455ef",
-    "patches/MetroidPrimePort.patch": "011f806c2a80b4e8dfd71f6feeec984b2f82c7ce3b76ca36037b1024a93c3d33",
+    "patches/MetroidPrimePort.patch": "a1fe3cd1556f1070494a92b4b77f1b974a21235d3e941ce26cf4dafcbd6268f6",
     "patches/SDL-release-3.4.10.patch": "94d8f9fe3e2e8e33f5c56d2cf0739c7a4a89c2a12f1f351a6e825bc6fbb689a8",
     "patches/aurora-abseil-orbis.patch": "5b0901a55ec19f1f1eda00c3a2ad01ed0fe24cf7d6e8f56435b838670ed5c879",
     "patches/aurora-tracy-orbis.patch": "a84da2482dfac21d4cd6b13ed351ce73f487b877767976ca1c6ea04151400fc6",
@@ -34,8 +27,8 @@
     "platform/ps4/aurora_bridge.cpp": "b9168d755d005794c7250ca4c85a4c996d408f80d6cd0f6f4e360e12366d9084",
     "platform/ps4/benchmark_game.cpp": "5878080a9a253c9aa4589cb0e098451cb0a78b14ebf8f7b11dfff3b21c5fb437",
     "platform/ps4/benchmark_play_logic.hpp": "89fdaafb3664602a6bc1107e9ebdebdf9a353902229c8c1fa5228b975a0d4b92",
-    "platform/ps4/benchmark_tour.cpp": "bd9025b622e7f62e8523dc5c4d278fce1bab2f50e8f6f452fc1045f204dcacb0",
-    "platform/ps4/benchmark_tour.hpp": "85e50aa446d16a0aa17a7a5982d8722dc29ef9b158f46a9a68af2ab06d6599f8",
+    "platform/ps4/benchmark_tour.cpp": "a01debf3e5b2270226c0689e366f061dc4b8548abc5d7222f314f417888480e9",
+    "platform/ps4/benchmark_tour.hpp": "71699fac5c107846a67292bb97864fc96a2140bfc2f190c90f57fdc06fafe68c",
     "platform/ps4/candidate_profile.cpp": "3f5f35bda729c048cb619c86a16a425e17a02ffa079379e5f51c19ba9bc971b3",
     "platform/ps4/candidate_profile.hpp": "a8fbb697bae4978e7888bcaf0d60714b513013fb4f2a1ce6c3277ed34599157b",
     "platform/ps4/compat/prime_atomic_wait.h": "adad41d7f9658ed130d37425e8fa3354050bbcf390008251884e0742a5cd4efc",
@@ -46,7 +39,7 @@
     "platform/ps4/crash.cpp": "8c92728a66d628815b88e8c8fc4b766723b754bfbc31b75d8af7ee78dc96a92b",
     "platform/ps4/disc/gc_iso.cpp": "ecf6249cdc0f67586554bf4647c3eb11cc5994b503e66e38db97bc3e02c98c07",
     "platform/ps4/disc/gc_iso_cache.h": "513adf286c1f9ec200385276a279dfc599378b1903cb5424df2f07bc7a185439",
-    "platform/ps4/entry.cpp": "84d2d86be778b9331ed56d74cbd793aeec8a2c659e4851f5d0c9a05d0010ae8a",
+    "platform/ps4/entry.cpp": "723eeb93dc8089fa124cae337fe2a391635ab2e9f286328dd869201e4fa67f59",
     "platform/ps4/frame_metrics.cpp": "452e8dfe892c5f09e9858f4fdd4cb8f61b19fc18eb9b11891c5e2c4c3ac17e7b",
     "platform/ps4/frame_metrics.hpp": "64b1575b3dbe2304c047bdb24e9ab93b80c4040292c6f50cf4fee8f54a07fa42",
     "platform/ps4/frame_trace_writer.cpp": "6d0414f73de50049eb22222896197dd86a2e5d1b5226f9e34f37578049b0e15d",
@@ -106,11 +99,13 @@
     "renderer/orbis/submit_watchdog.h": "d12fc1d7b0abb70d7dd36cc4fc01972b7bde056fbd42c9d851616b3986e518e4",
     "renderer/orbis/timestamp_capabilities.h": "4e219d93cbd221ff4911c5e30121256e9eb2ecbfaa25ab7499bebe3921242073",
     "renderer/orbis/va_statistics.h": "39fe2a806ea83d0f4c8172944d4c61a5753ea72d8523bac699a559ec579a3560",
+    "tests/aram_preload_trace.cpp": "f90269dd18e495c7a14b708f804fe5abe6b3f7071e63b867bd528ab5b211a5b3",
     "tests/atomic_wait_channels.cpp": "74a6240daa437d75b555c3c0673eeb1a5bf1ab74f8247e3471639b02530c9c3b",
     "tests/benchmark_input.cpp": "6c9996b01c0c124d93a84c2b8ef69adcf578075927d4b882c415b95710a310f6",
     "tests/benchmark_play_logic.cpp": "cabb8c2b83252891383a2fac1750cbbaa9927664d370e4f079bec4a8a33c11b0",
-    "tests/benchmark_tour.cpp": "78c9b375b8e8e37c19efa71da1244d6add9ce40ee6ee73e8be37854f396db71a",
+    "tests/benchmark_tour.cpp": "93f71ad325663cf62de5d71db6714ad8045575bf1d1bc5514afb64aea737606d",
     "tests/boot_probe.c": "bac533d3bb95f1410d4f0b87366d29b6b25b60abf9ed28a3606271345814c13c",
+    "tests/builtin_menu_mod.cpp": "13739cf046c44e88eecc8297ea64d51921d2058cbb6ecb87b288d278587d397a",
     "tests/cached_sun_pipeline.cpp": "942d673a6125b74c414c0c29b8f271aa7fa92f9ef59f9a1d55e4f9417d3008dc",
     "tests/candidate_profile.cpp": "e2f94ef9a26f8e690b730f3278a3f15c1b71e96a9d156a426c777433ff73e17e",
     "tests/command_pool.cpp": "8e14089bed70d273297a82da6b6daf3aa5c0c8bc3fca1ba2d1b39ed0707e5075",
@@ -137,8 +132,9 @@
     "tests/frame_trace_tls_registration.cpp": "4539d53fc1c64fbaed9c3cf5b749da011784c77d7410e7b5ad720475b7a8fc55",
     "tests/frame_trace_window_reset.cpp": "aa96ef20b5929d8a5ed8caac45fecda7ca7b8d5ce137d400e6d8fbb23102c61e",
     "tests/frame_trace_writer.cpp": "679e2005d99fce51ce5d9c1ebee60b3f269d5a4ff3d0743f2c30abb806461e12",
-    "tests/frontend_layout.cpp": "9373472c02021526289f3e7af392c0da4b85ddc77abf42b86420796ab15e1a44",
-    "tests/frontend_video_filter.cpp": "a04adbb3be5c208a568441e536e6dfeee5b8dcec31917c996faa16a067c4e34e",
+    "tests/frontend_layout.cpp": "cefb31aff841899e8d27b0a28b2480b81d4ed002616d4a59753eb0fbc192b06a",
+    "tests/frontend_movie_progressive.cpp": "e653d1f33ad9dfca4392f68ee12b9d067635455d9225cc0bd2a2e2087dfbc8c0",
+    "tests/frontend_video_filter.cpp": "2c329e4a0f3ddedb671d6b0935823cee268088d6a2f9e013ad9fe9715d4456a7",
     "tests/gameplay_policy.c": "dff51869f10ad7b1b8104d5543d5ce9210aa7684026f970e515e8cd54f73ee74",
     "tests/gfx_pass_lookup.cpp": "e9fb9a677b622f9b78516f5f61515ee40eb7784b659d0ca6d5a8c15627c41646",
     "tests/gpu_ownership_faults.c": "50c87a8f124c0f304b55262020d3c9e53211529e04e821a72d0ae0145eb20a8f",
@@ -159,6 +155,7 @@
     "tests/lifecycle.cpp": "b914791b6e0c75fd4667fb28ff98d7c4618e0537246701b1b92d6179430e2440",
     "tests/lifecycle_signals.cpp": "6f2d80c76f8af6605a32bdbbd2249cce54a8c74026a7590f53ee366e71ac93e9",
     "tests/lift_checkpoint.cpp": "93e7eed98b7fd5677950ebeddc3e2207d1b8fd79d41137bf6bbb65e2d93c37d3",
+    "tests/loader_trace.cpp": "c27d65f2a9e3341debd568d342b2a44fde0bd21acc16c9ad6c089c7c36872ecd",
     "tests/menu_console_model.cpp": "f4c6c807b0d8ba2b722d0c2967da698a2aeeda650ca5d1e553b76e6cc425f7e6",
     "tests/mod_inventory.cpp": "d8446513c2631bf31ec8983fd80a8b0f334952171da46cbb4bb9875399dc3126",
     "tests/native_framebuffer_fit.cpp": "b1ffff998676d7283c52772656cb5e092808b20856a620ba534cb49cb128da5d",
@@ -167,6 +164,7 @@
     "tests/particle_fog_scope.cpp": "460f00227f9b4395882f803bda89c27261edcfcc48d9be10abe46948c74745b1",
     "tests/port_menu_shortcut.cpp": "00a26cf5748524dcbb91674d11b13becf9e4b6346cf8019668d75b22121988fe",
     "tests/present_prewait.cpp": "91d0672e34fed4e6a1355eb8d84062ca7a9c91a3b7beaf27373fa7e3d39acd28",
+    "tests/ps4_map_controls.cpp": "eace6d9dc263b7e6c9da8248d7c0140aab8491109da4c526509f4f13a98c4285",
     "tests/resume_cookie.cpp": "5a6cf2232b06a424ffb7c40070ed525552cc3a3488883c10ca3063e4ccdb2731",
     "tests/retirement_policy.cpp": "530dc3a99dac68b2fa432fa6c2dae1b2f13f128161940c32964d24da339d6edf",
     "tests/runtime_modern_probe.cpp": "fb1624fd867446b99a94edded650da191de5d8c8619e9578e6616faace620537",
@@ -175,6 +173,9 @@
     "tests/signal_probe.cpp": "602b00f89e622e0a4deea84ccdd3c12d3f2f1b2e64255ed6bf6b2eb1444f9316",
     "tests/sqlite_cache_recovery.cpp": "36085d69024281f9341518c897237b69c44f4ad2d187058f7c1cd0d6d5b5d57f",
     "tests/sqlite_identity.c": "75c02910cfa4c46b15c0f11d00e2c3881fd5f0b2d09bdaebe64d7ba7d402c189",
+    "tests/startup_feedback.cpp": "12941ab0bae55e3fa270dbef078b237f89935d20b87ee0110ac04c80c457a64c",
+    "tests/startup_trace.c": "c140022e2c7c503267869c08e2b670ca47ad8cead10822bdfcfbafc33208a720",
+    "tests/static_audio_preload.cpp": "519d36dec69ef2af7efeee6568996e54438d9d13593c3f087f389b5dbc347e5d",
     "tests/static_guard.cpp": "ffb67006c73166ca52ffdad166454b58514520240f7cac48dd0f37324e591465",
     "tests/stdio_redirect.c": "bdba6150920cf725bd3e831c464aaf199436fbc6a0baaedd6b7f95cd0f3a6dcc",
     "tests/storage_probe.c": "e05b8c084ae07aa9a335abca20617765eb1359a11c262a8b907f6a553639b11b",
@@ -189,13 +190,14 @@
     "tools/benchmark_frame_slots.cpp": "b389ab735fd5dbe0b69ed09f39a5b6d9594d7e2126408d2b966c72f6692637f6",
     "tools/native_profile_preflight.cpp": "4379d65e0597de0b7be1e35b6f629f73719a75b720930000470df512dc067345",
     "tools/prepare_lift_checkpoint.cpp": "21f3fe13594c93c6b0ec18428819d13488bb556596bd4ace1e2b26bbf0834b6c",
+    "tools/prepare_menu_movie.cpp": "408817546d7701f76d092067c5ecced1c1a6f37ad1e220e45739170c1c9d8200",
     "tools/remastered_probe.cpp": "9729287dfa88500e394f4888e79926c0acec51fa6c3d45c6b327cb5dc1d0000f",
     "tools/room_asset_manifest.cpp": "186cab8b9e47b9ace7eeecb7a74ed181032205f96c64967ab98efa198bc4660a"
   },
   "portable_build_tool_adaptations": {
     ".gitignore": {
       "package_archive_sha256": "a8357cf0109b21f97a5ba56f31045bc2da0d1f4cddeff2155ffc1f78619a5901",
-      "export_sha256": "924c546f8394ee51a57dccb98ed636a91f478c3e9f7d4d199d338cacbc653822"
+      "export_sha256": "cd0eef6cd32e7d0d137c3b98ab11f02f906267d38e7185688171f1662a676a7d"
     },
     "tests/test_gpu_ownership.py": {
       "package_archive_sha256": "f8d2a467685ef1d10be0de071fafa535d3a42938a072078bd868c15d23e76969",
@@ -238,8 +240,8 @@
       "export_sha256": "b0c46fb29a8f7e4817bd40c97f3e316c443b4289b0550e6d5fc3ace96482ffc4"
     },
     "tools/package.py": {
-      "package_archive_sha256": "53af08d2978e2a1e3b1a84a70f2028a5beecee941c76564a2c09aedd338e3b62",
-      "export_sha256": "8b40fcb412c34ac58527a2b7f5d35f1ed409214eea2f4793db7f40b9fbbc41a9"
+      "package_archive_sha256": "0d126ad308546df1d75412421f5f225ba49aad9cd06acfd1d798d4ea9b05a1b3",
+      "export_sha256": "242f166f0824057cd619229fdae402a3651fa24e7dfaa212a1d7b4d58716c366"
     },
     "tools/snapshot_sources.py": {
       "package_archive_sha256": "4d00d94f3dae1532a6aca7710fe5ae8b1e07ec1566e73ad55507e83cba0f87fc",
@@ -265,7 +267,7 @@
       "package_archive_sha256": "2b56d2c823fee16b58eb2c8f4f273fcd2b0bd76761fc2134e837ad5e71c951e6",
       "export_sha256": "df50c6fa232c0b37cf6ca69b05929b772543458c0ec77b801ba882ca73b3f7ab",
       "diff_hunks_unchanged": true,
-      "scope": "Author display header only; actual patch hunks are identical."
+      "scope": "Author display header only; compiled patch hunks unchanged."
     }
   },
   "original_menu_model": {
@@ -283,17 +285,19 @@
       "tests/test_menu_console_model.py": "bef67e9b2331326a84c4245a211ae0649faaadfadcc80bed42cd8811e8dcbd4f"
     }
   },
-  "game_source_provenance": "Exact frozen source inputs of native Orbis package 01.00. Native compilation, focused host tests and package extraction/hash verification passed. Final 1.0 hardware acceptance and performance remain pending; prior measured performance documentation is retained unchanged. No locked 60 FPS or complete-playthrough claim.",
+  "game_source_provenance": "Exact frozen inputs of native Orbis 1.0 final package, Native99. Native build/link and package extraction/hash verification passed. Original HD with 1.5x menus and distance-field font. Latest complete six-room hardware comparison remains v54. No final-version FPS, locked60, no-stutter or complete-playthrough claim.",
   "hardware_tested": false,
   "release_accepted": false,
   "source_ref": "main",
   "baseline_source_tag": "v0.1.0-rc1",
   "source_snapshot_commit": null,
-  "source_snapshot_base_commit": "f2a7f00f08341bc7be0b28447e2d1f268b6aedf8",
+  "source_snapshot_base_commit": "fbabd517a5b75bcb0933a02f98ac3d709423d2a4",
   "source_lock_sha256": "fd1265449ef787b0d749bbfdaf83f54c92fba745dff78f5df615dc81a018acaf",
   "hardware_coverage": {
-    "status": "1.0_hardware_test_pending",
-    "automatic_tour": false
+    "status": "Final Native99 package awaiting hardware acceptance; prior Native98 visual configuration user accepted",
+    "automatic_tour": false,
+    "latest_complete_benchmark": "v54 RC11",
+    "known_loading_pause": "~1.22s opening-area script construction; predominantly waiting/descheduled; not claimed fixed"
   },
   "source_only_dependency_note": "Pinned upstream dependencies are reconstructed by bootstrap from upstream.lock.json plus the exact frozen patches. Commercial movies, game images, keys, artwork, SDK binaries and generated packages are excluded from this source export.",
   "radv_command_overlay": {
@@ -313,5 +317,30 @@
     ],
     "source_assets_in_export": false,
     "extra_player_PC_step": false
+  },
+  "title_id": "MPRM00001",
+  "bundled_hd_font": {
+    "distance_field": true,
+    "original_layout_preserved": true,
+    "atlas": [
+      416,
+      400
+    ],
+    "glyphs": 195,
+    "source_asset_in_export": false,
+    "provenance": "Deface distance-field font converted from user-supplied Metroid Prime Remastered data; asset excluded from source"
+  },
+  "menu_video_upload": {
+    "format": "R8Unorm",
+    "bytes_per_texel": 1,
+    "previous_bytes_per_texel": 4,
+    "upload_byte_reduction_percent": 75,
+    "native_fps_gain_measured": false
+  },
+  "screenshot_tour": {
+    "public_on_launch": false,
+    "optional_private_baked_marker": true,
+    "same_executable": true,
+    "automatic_png_or_readback": false
   }
 }

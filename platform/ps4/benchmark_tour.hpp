@@ -7,7 +7,8 @@ class CStateManager;
 namespace prime {
 // Call after applying the candidate paths, before settings or cache startup.
 // Missing opt-in file performs no writes. Invalid explicit requests throw.
-bool prepare_benchmark_tour(const std::filesystem::path& profileRoot);
+bool prepare_benchmark_tour(const std::filesystem::path& profileRoot,
+                            const std::filesystem::path& bundledScreenshotRequest = {});
 bool benchmark_tour_enabled() noexcept;
 bool benchmark_play_enabled() noexcept;
 bool benchmark_coverage_enabled() noexcept;

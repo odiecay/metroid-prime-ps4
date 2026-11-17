@@ -15,11 +15,12 @@ class BenchmarkTourTests(unittest.TestCase):
         cls.build=Path(os.environ.get('PRIME_BENCHMARK_BUILD_DIR',str(ROOT/'build/benchmark-tour-tests')))
         cls.build.mkdir(parents=True,exist_ok=True)
         cls.exe=cls.build/'tour'
+        source=Path(os.environ.get('PRIME_BENCHMARK_SOURCE_DIR',str(ROOT/'platform/ps4')))
         cmd=[os.environ.get('CXX','/usr/lib/llvm-19/bin/clang++'),'-std=c++20','-O2',
              '-DPRIME_BENCHMARK_TEST','-Wall','-Wextra','-Werror',
-             '-I'+str(ROOT/'platform/ps4'),str(ROOT/'tests/benchmark_tour.cpp'),
+             '-I'+str(source),'-I'+str(ROOT/'platform/ps4'),str(ROOT/'tests/benchmark_tour.cpp'),
              '-I'+str(ROOT/'game/MetroidPrimePort/extern/aurora/include'),
-             str(ROOT/'platform/ps4/benchmark_tour.cpp'),'-o',str(cls.exe)]
+             str(source/'benchmark_tour.cpp'),'-o',str(cls.exe)]
         cls.sanitized=os.environ.get('PRIME_BENCHMARK_SANITIZE')=='1'
         if cls.sanitized:
             headers=cls.build/'headers';headers.mkdir(exist_ok=True)
@@ -37,7 +38,7 @@ class BenchmarkTourTests(unittest.TestCase):
                            ASAN_OPTIONS='detect_leaks=1:halt_on_error=1',
                            UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
             result=subprocess.run([str(self.exe),mode,tmp],env=env,capture_output=True,text=True,check=True)
-            p=Path(tmp)/'benchmarks'/('coverage-v3' if mode.startswith('coverage_') else 'play-v2' if mode.startswith('play_') else 'tour-v1')/'logs/benchmark-tour.jsonl'
+            p=Path(tmp)/'benchmarks'/('coverage-v3' if mode.startswith('coverage_') else 'play-v2' if mode.startswith('play_') or mode=='baked_manual_play' else 'screenshots-v1' if mode.startswith('baked_') else 'tour-v1')/'logs/benchmark-tour.jsonl'
             rows=[json.loads(l) for l in p.read_text().splitlines()] if p.is_file() else []
             return rows,result.stderr
     def test_missing_request_has_no_effect(self):self.assertEqual(self.run_mode('absent')[0],[])
@@ -177,5 +178,30 @@ class BenchmarkTourTests(unittest.TestCase):
         rows,err=self.run_mode('log_failure')
         self.assertFalse(any(r['event']=='complete' for r in rows))
         self.assertIn('marker write failed',err)
+
+    def test_baked_missing_and_consumed_leave_normal_paths_untouched(self):
+        for mode in ('baked_absent','baked_consumed'):
+            with self.subTest(mode=mode):self.assertEqual(self.run_mode(mode)[0],[])
+    def test_baked_invalid_partial_and_symlink_markers_fail_before_live_changes(self):
+        for mode in ('baked_invalid','baked_source_symlink','baked_consumed_invalid','baked_consumed_symlink'):
+            with self.subTest(mode=mode):self.assertEqual(self.run_mode(mode)[0],[])
+    def test_baked_once_uses_existing_v1_one_pass_and_relaunch_stays_normal(self):
+        rows,_=self.run_mode('baked_complete')
+        self.assertEqual(rows[-1]['event'],'complete')
+        self.assertEqual(sum(r['event']=='measure_end' for r in rows),24)
+        self.assertTrue(all(r['screenshot_tour'] and r['pass']==1 and r['tour_version']==1 for r in rows))
+        self.assertTrue(all(not r['dawn_call_profile'] for r in rows))
+        self.assertEqual(len({r['visit'] for r in rows}),6)
+    def test_baked_still_waits_for_actual_shader_gate(self):
+        rows,_=self.run_mode('baked_shader_busy')
+        begins=[r for r in rows if r['event']=='measure_begin']
+        self.assertEqual(len(begins),24)
+        self.assertGreaterEqual(begins[0]['monotonic_ns'],11_000_000_000)
+        self.assertTrue(all(r['shader_gate_required'] and r['shader_stable_frames']>=8 for r in begins))
+    def test_explicit_manual_v2_request_keeps_precedence_over_baked_marker(self):
+        rows,_=self.run_mode('baked_manual_play')
+        self.assertEqual(rows[-1]['event'],'complete')
+        self.assertTrue(all(r['tour_version']==2 and not r['screenshot_tour'] for r in rows))
+        self.assertEqual(sum(r['event']=='measure_end' for r in rows),24)
 
 if __name__=='__main__':unittest.main()

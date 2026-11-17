@@ -78,7 +78,8 @@ int main() {
   assert(EmbeddedPicture(960, 720));
   assert(EmbeddedPicture(1280, 960));
   assert(EmbeddedPicture(1920, 1440));
-  const unsigned scaledMovies[][2] = {{960, 720}, {1280, 960}, {1920, 1440}};
+  assert(EmbeddedPicture(2560, 1920));
+  const unsigned scaledMovies[][2] = {{960, 720}, {1280, 960}, {1920, 1440}, {2560, 1920}};
   for (const auto& scaled : scaledMovies) {
     assert(FillPicture(true, true, true, scaled[0], scaled[1]));
     assert(!FillPicture(true, true, false, scaled[0], scaled[1]));
@@ -89,6 +90,7 @@ int main() {
   assert(!EmbeddedPicture(960, 720));
   assert(!EmbeddedPicture(1280, 960));
   assert(!EmbeddedPicture(1920, 1440));
+  assert(!EmbeddedPicture(2560, 1920));
 #endif
   assert(!EmbeddedPicture(1280, 959));
   assert(!EmbeddedPicture(1920, 1441));

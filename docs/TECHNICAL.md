@@ -124,10 +124,15 @@ aim and remapping, with PlayStation button prompts and DualShock 4 vibration.
 Options pauses the game; holding the touchpad opens the settings panel.
 Everything needed for ordinary play is accessible from the controller.
 
-Fullscreen menus keep the original movie backgrounds, with sampling work to
-make them fit the presentation. The Options screen includes a 3D PS4 model
+Fullscreen menus use the original movie backgrounds, prepared at 1.5×
+(960×720). The distance-field font preserves original glyph layout while
+sharpening lettering. Its Deface font is converted from user-supplied
+Metroid Prime Remastered data; gameplay retains the original GameCube models,
+textures and worlds. Linear R8 menu-video planes upload one byte per texel
+instead of four, reducing those upload bytes by 75%; this is a data-size
+reduction, not a measured PS4 frame-rate gain. The Options screen includes a 3D PS4 model
 using the menu's lighting and animation. These are part of the PS4 adaptation;
-the Original HD game continues to use the original GameCube assets.
+Original HD gameplay retains the GameCube models, textures, worlds and effects.
 
 MusyX provides the game audio mixer. SDL's Orbis audio backend passes the mixed
 audio to the native output service as 48 kHz stereo blocks. Graphics timing,

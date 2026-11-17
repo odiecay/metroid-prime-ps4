@@ -75,7 +75,9 @@ substitute for saving your progress.
 - Diagnostic logs: `/data/project-prime/release/logs/`.
 
 Back up `user/` before changing builds. Keep that folder when updating or
-clearing a cache. Updates use the same application identity, `PRME00013`.
+clearing a cache. The release application identity is `MPRM00001`. Earlier
+development builds used `PRME00013`; the existing save/settings folder above is
+retained when moving to this release.
 FTP is only needed for copying files and collecting logs, not for playing.
 
 For a picture of how the game runs, see [Performance Benchmarks](PERFORMANCE.md).
@@ -89,7 +91,7 @@ It targets 60 FPS, with demanding scenes falling below that target.
 | PAL — `GM8P01` | Revision 0 | Not yet accepted |
 
 Disc number must be zero. Japanese, Wii/Trilogy and Switch images are not supported.
-This build does not use Switch keys or Remastered assets.
+Gameplay uses GameCube data; players do not need a Switch image or keys.
 
 ## If setup does not work
 
