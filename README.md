@@ -25,19 +25,18 @@ roughly **80 MB**; you add your own game image separately.
 
 ![DualShock 4 quick guide: original-style buttons with twin-stick aim](docs/images/ps4-controls.svg)
 
-## Download — Release Candidate 6
+## Download — Release Candidate 7
 
-**One MediaFire ZIP**, `Project-Prime-PS4-00.49-RC6.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
+**One MediaFire ZIP**, `Project-Prime-PS4-00.50-RC7.zip`, includes the PS4 PKG, ready-to-run Windows GamePrep helper,
 controls and short setup instructions. The download link is coming with the upload.
 
-RC6 moves native presentation waiting outside Dawn’s device lock, while
-retaining the existing image/fence checks and two-frame limit. It also fixes
-render-worker sync accounting and benchmark route control, with more detailed
-wait diagnostics. It retains the earlier model, renderer and startup fixes.
-In v48 tests, lighter scenes ran near 60 FPS; the heavy open view of Main Plaza
-ran around 43 FPS. RC6 has passed the native build and host checks; its PS4
-performance comparison is pending. A locked 1080p60 and a complete playthrough
-have not been verified.
+RC7 adds collision reuse to Dawn’s bounded bind-group usage cache, retaining
+the same 64-reference limit and resource tracking. It keeps the earlier
+presentation, model, control and startup fixes. Host and native checks pass;
+the new cache’s PS4 performance comparison is pending.
+In matched v49 console tests, the presentation change reduced Fiery Shores’
+p95 frame time from 28.8 to 18.6 ms. Heavy Main Plaza views still ran around
+40–42 FPS. A locked 1080p60 and a complete playthrough have not been verified.
 Please include the room and what you were doing when reporting a problem.
 
 ## Getting it running

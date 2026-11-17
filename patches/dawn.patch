@@ -60,7 +60,7 @@ index 65fe897947..fcc0974c9b 100644
              {"value": 0, "name": "emscripten surface source canvas HTML selector", "tags": ["emscripten"]},
  
 diff --git a/src/dawn/native/PassResourceUsageTracker.cpp b/src/dawn/native/PassResourceUsageTracker.cpp
-index 8cf807e179..a5eb5dba89 100644
+index 8cf807e179..83ce7718bf 100644
 --- a/src/dawn/native/PassResourceUsageTracker.cpp
 +++ b/src/dawn/native/PassResourceUsageTracker.cpp
 @@ -27,6 +27,8 @@
@@ -123,7 +123,7 @@ index 8cf807e179..a5eb5dba89 100644
  
  void SyncScopeUsageTracker::BufferUsedAs(BufferBase* buffer,
                                           wgpu::BufferUsage usage,
-@@ -124,6 +159,14 @@ void SyncScopeUsageTracker::MergeResourceUsages(const SyncScopeResourceUsage& us
+@@ -124,6 +159,35 @@ void SyncScopeUsageTracker::MergeResourceUsages(const SyncScopeResourceUsage& us
  }
  
  void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
@@ -134,17 +134,50 @@ index 8cf807e179..a5eb5dba89 100644
 +        ++mBindGroupUsageHits;
 +        return;
 +    }
++    if (reuse) {
++        const size_t alternate = ((identity >> 6) ^ (identity >> 17)) % kBindGroupUsageCacheSize;
++        if (mTrackedBindGroups[alternate].Get() == group) {
++            std::swap(mTrackedBindGroups[cacheSlot], mTrackedBindGroups[alternate]);
++            if (mTrackedBindGroups[alternate]) {
++                const uintptr_t displaced =
++                    reinterpret_cast<uintptr_t>(mTrackedBindGroups[alternate].Get());
++                const size_t primary =
++                    ((displaced >> 4) ^ (displaced >> 11)) % kBindGroupUsageCacheSize;
++                const size_t secondary =
++                    ((displaced >> 6) ^ (displaced >> 17)) % kBindGroupUsageCacheSize;
++                // A promoted conflict must not leave an unreachable identity
++                // occupying a spare slot. Never clear a real primary entry.
++                if (alternate != primary && alternate != secondary) {
++                    mTrackedBindGroups[alternate] = nullptr;
++                }
++            }
++            ++mBindGroupUsageHits;
++            return;
++        }
++    }
 +    ++mBindGroupUsageMisses;
      const auto* layout = group->GetLayout();
  
      for (BindingIndex i : layout->GetBufferIndices()) {
-@@ -226,6 +269,15 @@ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
+@@ -226,6 +290,27 @@ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
              mExternalTextureUsages.insert(externalTexture.Get());
          }
      }
 +    if (reuse) {
 +        // Only a fully tracked group can become a hit. Dynamic offsets do not
 +        // affect this usage union: buffers are already tracked as whole objects.
++        // Preserve the original direct-map replacement. A displaced identity
++        // may occupy its own secondary slot only while that slot is empty;
++        // another primary entry is never evicted to make room for a conflict.
++        if (mTrackedBindGroups[cacheSlot]) {
++            const uintptr_t displaced =
++                reinterpret_cast<uintptr_t>(mTrackedBindGroups[cacheSlot].Get());
++            const size_t alternate =
++                ((displaced >> 6) ^ (displaced >> 17)) % kBindGroupUsageCacheSize;
++            if (!mTrackedBindGroups[alternate]) {
++                mTrackedBindGroups[alternate] = std::move(mTrackedBindGroups[cacheSlot]);
++            }
++        }
 +        mTrackedBindGroups[cacheSlot] = group;
 +    }
 +}
@@ -154,7 +187,7 @@ index 8cf807e179..a5eb5dba89 100644
  }
  
  void SyncScopeUsageTracker::AddResourceTableUsage(ResourceTableBase* table) {
-@@ -261,6 +313,21 @@ SyncScopeResourceUsage SyncScopeUsageTracker::AcquireSyncScopeUsage() {
+@@ -261,6 +346,21 @@ SyncScopeResourceUsage SyncScopeUsageTracker::AcquireSyncScopeUsage() {
      }
      mUsedResourceTables.clear();
  

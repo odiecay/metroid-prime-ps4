@@ -1,4 +1,9 @@
 #include <webgpu/webgpu_cpp.h>
+#include "src/dawn/native/CommandBuffer.h"
+#include "src/dawn/native/Commands.h"
+#include <set>
+static uint64_t probeHits=0,probeMisses=0;
+extern "C" void prime_ps4_bind_group_usage_counts(uint64_t hits,uint64_t misses) {probeHits+=hits;probeMisses+=misses;}
 #include "src/dawn/native/BindGroup.h"
 #include "src/dawn/native/Buffer.h"
 #include "src/dawn/native/PassResourceUsageTracker.h"
@@ -15,6 +20,19 @@
 #include <random>
 #include <string>
 #include <vector>
+
+// The proof build overrides only the cache-enable selector in the actual
+// production tracker object. Ordinary builds keep the existing environment flag.
+#ifdef PRIME_USAGE_POLICY_PROOF
+extern "C" { bool prime_usage_test_reuse = true; }
+#endif
+static void SetUsageReuseForTesting(bool enabled) {
+#ifdef PRIME_USAGE_POLICY_PROOF
+    prime_usage_test_reuse = enabled;
+#else
+    assert(enabled);
+#endif
+}
 
 namespace native = dawn::native;
 using native::SyncScopeUsageTracker;
@@ -233,7 +251,7 @@ void correctness(Device& d) {
                 (unsigned long long)counts[1], int(reuse));
 }
 
-void benchmark(Device& d) {
+void benchmark(Device& d, bool verify = false) {
     auto uniform = makeBuffer(d, wgpu::BufferUsage::Uniform);
     wgpu::BindGroupLayoutEntry ue{};
     ue.binding = 0; ue.visibility = wgpu::ShaderStage::Fragment;
@@ -257,7 +275,7 @@ void benchmark(Device& d) {
     auto texture = makeTexture(d);
     auto sampler = d.device.CreateSampler();
     std::vector<wgpu::BindGroup> materials;
-    for (unsigned m = 0; m < 16; ++m) {
+    for (unsigned m = 0; m < 256; ++m) {
         std::array<wgpu::BindGroupEntry, 9> bindings{};
         for (unsigned i = 0; i < 8; ++i) {
             wgpu::TextureViewDescriptor view{};
@@ -301,33 +319,148 @@ void benchmark(Device& d) {
     attachment.storeOp = wgpu::StoreOp::Store;
     wgpu::RenderPassDescriptor passDesc{};
     passDesc.colorAttachmentCount = 1; passDesc.colorAttachments = &attachment;
-    std::vector<double> times;
-    constexpr unsigned draws = 1800;
-    for (unsigned frame = 0; frame < 90; ++frame) {
-        const auto start = std::chrono::steady_clock::now();
-        auto encoder = d.device.CreateCommandEncoder();
-        auto pass = encoder.BeginRenderPass(&passDesc);
-        pass.SetPipeline(pipeline);
-        for (unsigned i = 0; i < draws; ++i) {
-            const uint32_t offset = (i % 8) * 256;
-            pass.SetBindGroup(0, uniformGroup, 1, &offset);
-            pass.SetBindGroup(1, materials[i % materials.size()]);
-            pass.Draw(3);
+    const char* workload = std::getenv("PRIME_USAGE_WORKLOAD");
+    const std::string pattern = workload ? workload : "reuse16";
+    const unsigned draws = pattern == "empty" ? 0 : pattern == "cold" ? 256 : 2445;
+    const unsigned count = pattern == "reuse48" ? 48 : pattern == "reuse96" ? 96 : pattern == "cold" ? 256 : 16;
+    std::set<uintptr_t> identities;
+    for (const auto& group : materials) identities.insert(reinterpret_cast<uintptr_t>(group.Get()));
+    std::vector<unsigned> sequence;
+    std::mt19937 rng(0x108060);
+    for(unsigned i=0;i<draws;++i)
+        sequence.push_back(pattern=="skew" && rng()%10==0 ? 16+rng()%240 : i%count);
+    std::array<std::vector<double>,2> times;
+    std::array<uint64_t,2> totalHits{},totalMisses{};
+    using Commands = std::vector<std::array<uint64_t,6>>;
+    const auto commandsOf = [](const wgpu::CommandBuffer& buffer) {
+        Commands commands;
+        auto* iter=native::FromAPI(buffer.Get())->GetCommandIteratorForTesting();iter->Reset();
+        native::Command type;
+        while(iter->NextCommandId(&type)) {
+            if(type==native::Command::SetRenderPipeline) {
+                auto* c=iter->NextCommand<native::SetRenderPipelineCmd>();
+                commands.push_back({uint64_t(type),uintptr_t(c->pipeline.Get())});
+            } else if(type==native::Command::SetBindGroup) {
+                auto* c=iter->NextCommand<native::SetBindGroupCmd>();
+                auto dynamic=c->dynamicOffsetCount==native::BindingIndex{} ? dawn::ityp::span<native::BindingIndex,const uint32_t>{} : iter->NextData<uint32_t>(c->dynamicOffsetCount);
+                commands.push_back({uint64_t(type),uint64_t(c->index),uintptr_t(c->group.Get()),uint64_t(c->dynamicOffsetCount),dynamic.empty()?0u:dynamic[native::BindingIndex{}]});
+            } else if(type==native::Command::Draw) {
+                auto* c=iter->NextCommand<native::DrawCmd>();
+                commands.push_back({uint64_t(type),c->vertexCount,c->instanceCount,c->firstVertex,c->firstInstance});
+            } else native::SkipCommand(iter,type);
         }
-        pass.End();
-        auto commands = encoder.Finish();
-        const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
-        if (frame >= 10) times.push_back(us);
-        d.device.GetQueue().Submit(1, &commands);
+        iter->Reset();return commands;
+    };
+    for (unsigned frame = 0; frame < 64; ++frame) {
+        std::array<Commands,2> recorded;
+        std::array<Normalized,2> usage;
+        for(unsigned ordered=0;ordered<(verify ? 2u : 1u);++ordered) {
+            const unsigned mode=verify ? (ordered ^ (frame&1u)) : 1u;
+            SetUsageReuseForTesting(mode == 1);
+            probeHits=probeMisses=0;
+            const auto start = std::chrono::steady_clock::now();
+            auto encoder = d.device.CreateCommandEncoder();
+            auto pass = encoder.BeginRenderPass(&passDesc);
+            pass.SetPipeline(pipeline);
+            for (unsigned i = 0; i < draws; ++i) {
+                const uint32_t offset = (i % 8) * 256;
+                pass.SetBindGroup(0, uniformGroup, 1, &offset);
+                pass.SetBindGroup(1, materials[sequence[i]]);
+                pass.Draw(3);
+            }
+            pass.End();
+            auto commands = encoder.Finish();
+            const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+            if (frame >= 8) {
+                times[mode].push_back(us);totalHits[mode]+=probeHits;totalMisses[mode]+=probeMisses;
+            }
+            // Compare actual finished command streams and the complete resource
+            // usage union outside the recording measurement; submit both.
+            recorded[mode]=commandsOf(commands);
+            usage[mode]=normalize(native::FromAPI(commands.Get())->GetResourceUsages().renderPasses[native::PassIndex{}]);
+            d.device.GetQueue().Submit(1, &commands);
+        }
+        if (verify) { assert(recorded[0]==recorded[1]);assert(usage[0]==usage[1]); }
     }
-    std::sort(times.begin(), times.end());
-    std::printf("{\"benchmark\":\"real_dawn_null_record_finish\",\"draws_per_frame\":%u,\"binds_per_frame\":%u,\"frames\":%zu,\"median_us\":%.3f,\"p95_us\":%.3f,\"max_us\":%.3f}\n",
-                draws, draws * 2, times.size(), times[times.size() / 2],
-                times[times.size() * 95 / 100], times.back());
+    for(unsigned mode=0;mode<2;++mode) {
+        if (!verify && mode == 0) continue;
+        auto& t=times[mode];std::sort(t.begin(),t.end());
+        std::printf("{\"workload\":\"%s\",\"mode\":%u,\"draws\":%u,\"frames\":%zu,\"unique_group_identities\":%zu,\"median_us\":%.3f,\"p95_us\":%.3f,\"hits\":%llu,\"misses\":%llu,\"same_commands_and_usage\":%s}\n",
+            pattern.c_str(),mode,draws,t.size(),identities.size(),t[t.size()/2],t[t.size()*95/100],
+            (unsigned long long)totalHits[mode],(unsigned long long)totalMisses[mode],verify ? "true" : "null");
+    }
 }
+
+#ifdef PRIME_USAGE_POLICY_PROOF
+void cache_invariants(Device& d) {
+    auto uniform=makeBuffer(d,wgpu::BufferUsage::Uniform);
+    wgpu::BindGroupLayoutEntry ue{};
+    ue.binding=0;ue.visibility=wgpu::ShaderStage::Vertex;
+    ue.buffer.type=wgpu::BufferBindingType::Uniform;ue.buffer.minBindingSize=16;
+    wgpu::BindGroupLayoutDescriptor ld{};ld.entryCount=1;ld.entries=&ue;
+    auto layout=d.device.CreateBindGroupLayout(&ld);
+    wgpu::BindGroupEntry be{};be.binding=0;be.buffer=uniform;be.size=16;
+    wgpu::BindGroupDescriptor gd{};gd.layout=layout;gd.entryCount=1;gd.entries=&be;
+    std::vector<wgpu::BindGroup> groups;
+    for(unsigned i=0;i<512;++i) groups.push_back(d.device.CreateBindGroup(&gd));
+    SyncScopeUsageTracker reference,extra;
+    std::array<native::BindGroupBase*,64> direct{};
+    std::array<native::BindGroupBase*,64> model{};
+    auto primary=[](auto* p){auto id=reinterpret_cast<uintptr_t>(p);return((id>>4)^(id>>11))%64;};
+    auto alternate=[](auto* p){auto id=reinterpret_cast<uintptr_t>(p);return((id>>6)^(id>>17))%64;};
+    std::mt19937 rng(0x49641080);
+    uint64_t hits=0,referenceHits=0;
+    for(unsigned step=0;step<250000;++step) {
+        const unsigned phase=(step/1000)%4;
+        const unsigned index=phase==0?rng()%16:phase==1?rng()%96:phase==2?rng()%512:step%48;
+        auto* group=native::FromAPI(groups[index].Get());
+        const size_t p=primary(group),a=alternate(group);
+        const bool baseHit=direct[p]==group;
+        const bool modelHit=model[p]==group||model[a]==group;
+        assert(!baseHit||modelHit);
+        direct[p]=group;
+        if(model[p]!=group) {
+            if(model[a]==group) {
+                std::swap(model[p],model[a]);
+                if(model[a]&&a!=primary(model[a])&&a!=alternate(model[a]))model[a]=nullptr;
+            }
+            else {
+                if(model[p]&&!model[alternate(model[p])])model[alternate(model[p])]=model[p];
+                model[p]=group;
+            }
+        }
+        // Every occupied baseline primary must remain at exactly that slot.
+        for(unsigned i=0;i<64;++i)assert(!direct[i]||direct[i]==model[i]);
+        const auto beforeBase=reference.GetBindGroupUsageCountsForTesting();
+        const auto beforeExtra=extra.GetBindGroupUsageCountsForTesting();
+        SetUsageReuseForTesting(false);reference.AddBindGroup(group);
+        SetUsageReuseForTesting(true);extra.AddBindGroup(group);
+        const auto afterBase=reference.GetBindGroupUsageCountsForTesting();
+        const auto afterExtra=extra.GetBindGroupUsageCountsForTesting();
+        assert(afterBase[0]-beforeBase[0]==0);
+        assert(afterExtra[0]-beforeExtra[0]==unsigned(modelHit));
+        referenceHits+=baseHit;hits+=modelHit;
+        if(step%997==996) {
+            assert(normalize(reference.AcquireSyncScopeUsage())==normalize(extra.AcquireSyncScopeUsage()));
+            direct.fill(nullptr);model.fill(nullptr);
+            SyncScopeUsageTracker moved(std::move(extra));extra=std::move(moved);
+        }
+    }
+    assert(normalize(reference.AcquireSyncScopeUsage())==normalize(extra.AcquireSyncScopeUsage()));
+    std::printf("monotonic_cases=250000 baseline_hits_preserved=1 actual_hit_counts_equal_model=1 baseline_hits=%llu candidate_hits=%llu\n",(unsigned long long)referenceHits,(unsigned long long)hits);
+}
+
+#endif
 
 int main(int argc, char** argv) {
     const bool bench = argc > 1 && std::string(argv[1]) == "--bench";
-    Device device(bench);
-    if (bench) benchmark(device); else correctness(device);
+    const bool verify = argc > 1 && std::string(argv[1]) == "--verify";
+    Device device(bench || verify);
+    if (bench || verify) benchmark(device, verify);
+    else {
+        correctness(device);
+#ifdef PRIME_USAGE_POLICY_PROOF
+        cache_invariants(device);
+#endif
+    }
 }
